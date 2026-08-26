@@ -17,8 +17,12 @@ interface Filtros {
   uf: string;
   cargo: string;
   partido: string;
-  busca: string;
+  candidato: string;
+  fornecedor: string;
+  descricao: string;
 }
+
+const FILTROS_VAZIOS: Filtros = { uf: '', cargo: '', partido: '', candidato: '', fornecedor: '', descricao: '' };
 
 function montarWhere(f: Filtros): string {
   const partes = ['1=1'];
@@ -26,17 +30,25 @@ function montarWhere(f: Filtros): string {
   if (f.uf) partes.push(`SG_UF = '${esc(f.uf)}'`);
   if (f.cargo) partes.push(`DS_CARGO ILIKE '${esc(f.cargo)}'`);
   if (f.partido) partes.push(`SG_PARTIDO = '${esc(f.partido)}'`);
-  const b = f.busca.trim();
-  if (b) {
-    if (/^\d+$/.test(b)) {
-      // número de candidato (ou início de CNPJ)
-      partes.push(`(NR_CANDIDATO = '${b}' OR NR_CPF_CNPJ_FORNECEDOR LIKE '${b}%')`);
-    } else {
-      const e = esc(b);
-      partes.push(
-        `(NM_CANDIDATO ILIKE '%${e}%' OR NM_FORNECEDOR ILIKE '%${e}%' OR NM_FORNECEDOR_RFB ILIKE '%${e}%' OR DS_DESPESA ILIKE '%${e}%')`,
-      );
-    }
+  const cand = f.candidato.trim();
+  if (cand) {
+    partes.push(
+      /^\d+$/.test(cand)
+        ? `NR_CANDIDATO = '${cand}'`
+        : `NM_CANDIDATO ILIKE '%${esc(cand)}%'`,
+    );
+  }
+  const forn = f.fornecedor.trim();
+  if (forn) {
+    partes.push(
+      /^[\d./-]+$/.test(forn)
+        ? `NR_CPF_CNPJ_FORNECEDOR LIKE '${forn.replace(/\D/g, '')}%'`
+        : `(NM_FORNECEDOR ILIKE '%${esc(forn)}%' OR NM_FORNECEDOR_RFB ILIKE '%${esc(forn)}%')`,
+    );
+  }
+  const desc = f.descricao.trim();
+  if (desc) {
+    partes.push(`(DS_DESPESA ILIKE '%${esc(desc)}%' OR DS_ORIGEM_DESPESA ILIKE '%${esc(desc)}%')`);
   }
   return partes.join(' AND ');
 }
@@ -65,8 +77,8 @@ const seletor =
   'h-9 rounded-md border bg-card px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
 
 export function Explorar() {
-  const [filtros, setFiltros] = useState<Filtros>({ uf: '', cargo: '', partido: '', busca: '' });
-  const [buscaDigitada, setBuscaDigitada] = useState('');
+  const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS);
+  const [digitado, setDigitado] = useState({ candidato: '', fornecedor: '', descricao: '' });
   const [partidos, setPartidos] = useState<string[]>([]);
   const [pagina, setPagina] = useState(0);
   const [dados, setDados] = useState<Dados | null>(null);
@@ -84,17 +96,13 @@ export function Explorar() {
     setErro(null);
     try {
       const w = montarWhere(f);
-      const b = f.busca.trim();
-      const filtroCandidato = /^\d+$/.test(b)
-        ? `NR_CANDIDATO = '${b}'`
-        : `NM_CANDIDATO ILIKE '%${b.replaceAll("'", "''")}%'`;
-      const encontrados = b
+      const encontrados = f.candidato.trim()
         ? await executarSQL(`
             SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
                    ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF),
                    ROUND(SUM(valor), 2) AS total
             FROM despesas_atual
-            WHERE ${montarWhere({ ...f, busca: '' })} AND ${filtroCandidato}
+            WHERE ${w}
             GROUP BY 1 ORDER BY total DESC LIMIT 100`)
         : { linhas: [] as unknown[][] };
       const [kpis, categorias, candidatos, porDia, tabela] = await Promise.all([
@@ -162,8 +170,9 @@ export function Explorar() {
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Explorar</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Navegue pelos gastos</h1>
         <p className="mt-3 max-w-3xl leading-relaxed text-muted-foreground">
-          Filtre por estado, cargo, partido ou busque um nome — candidato, fornecedor ou descrição
-          do gasto. Tudo roda no seu navegador, sobre o estado atual das declarações.
+          Combine os filtros como quiser — cada campo filtra o que diz: candidato (nome ou número),
+          fornecedor (nome ou CNPJ), descrição do gasto. Tudo roda no seu navegador, sobre o estado
+          atual das declarações.
         </p>
       </div>
 
@@ -171,7 +180,7 @@ export function Explorar() {
         className="flex flex-wrap items-center gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          mudar({ busca: buscaDigitada });
+          mudar(digitado);
         }}
       >
         <select className={seletor} value={filtros.uf} onChange={(e) => mudar({ uf: e.target.value })} aria-label="UF">
@@ -186,18 +195,30 @@ export function Explorar() {
           <option value="">Todos os partidos</option>
           {partidos.map((p) => <option key={p}>{p}</option>)}
         </select>
-        <div className="flex items-center gap-2">
-          <input
-            className={`${seletor} w-64`}
-            placeholder="Candidato, fornecedor ou descrição…"
-            value={buscaDigitada}
-            onChange={(e) => setBuscaDigitada(e.target.value)}
-            aria-label="Busca"
-          />
-          <Button type="submit" variant="secondary" size="sm" className="gap-1.5">
-            <Search className="h-4 w-4" /> Buscar
-          </Button>
-        </div>
+        <input
+          className={`${seletor} w-52`}
+          placeholder="Candidato (nome ou nº)"
+          value={digitado.candidato}
+          onChange={(e) => setDigitado((d) => ({ ...d, candidato: e.target.value }))}
+          aria-label="Candidato"
+        />
+        <input
+          className={`${seletor} w-52`}
+          placeholder="Fornecedor (nome ou CNPJ)"
+          value={digitado.fornecedor}
+          onChange={(e) => setDigitado((d) => ({ ...d, fornecedor: e.target.value }))}
+          aria-label="Fornecedor"
+        />
+        <input
+          className={`${seletor} w-52`}
+          placeholder="Descrição do gasto"
+          value={digitado.descricao}
+          onChange={(e) => setDigitado((d) => ({ ...d, descricao: e.target.value }))}
+          aria-label="Descrição"
+        />
+        <Button type="submit" variant="secondary" size="sm" className="gap-1.5">
+          <Search className="h-4 w-4" /> Filtrar
+        </Button>
       </form>
 
       {erro && (
@@ -212,7 +233,7 @@ export function Explorar() {
         </div>
       ) : dados ? (
         <div className={carregando ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
-          {filtros.busca.trim() && (
+          {filtros.candidato.trim() && (
             <Card className="mb-6">
               <CardHeader>
                 <CardTitle className="text-base">
@@ -220,15 +241,14 @@ export function Explorar() {
                 </CardTitle>
                 <CardDescription>
                   Clique no nome para abrir a ficha completa, com gráficos e indícios do candidato.
-                  A tabela de despesas abaixo lista os itens do recorte (inclui fornecedores e
-                  descrições que casam com a busca).
+                  Os números e gráficos abaixo somam este recorte.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {dados.encontrados.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Nenhum candidato com esse {/^\d+$/.test(filtros.busca.trim()) ? 'número' : 'nome'} tem
-                    gastos declarados — a busca também cobre fornecedores e descrições, refletidos abaixo.
+                    Nenhum candidato com esse {/^\d+$/.test(filtros.candidato.trim()) ? 'número' : 'nome'} tem
+                    gastos declarados nesse recorte.
                   </p>
                 ) : (
                   <div className="max-h-72 overflow-y-auto">
@@ -259,8 +279,7 @@ export function Explorar() {
               </CardContent>
             </Card>
           )}
-          {!filtros.busca.trim() && (
-            <>
+          <>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {[
                   { rotulo: 'Despesas contratadas', valor: brl.format(dados.kpis.contratado) },
@@ -301,8 +320,7 @@ export function Explorar() {
                 </CardHeader>
                 <CardContent><LinhaTemporal pontos={dados.porDia} /></CardContent>
               </Card>
-            </>
-          )}
+          </>
 
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between">
