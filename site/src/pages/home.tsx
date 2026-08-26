@@ -1,12 +1,114 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { AlertTriangle, ArrowRight, CheckCircle2 } from 'lucide-react';
+import {
+  AlertTriangle, ArrowRight, Bot, Building2, CheckCircle2, EyeOff, Megaphone,
+  Scale, Search, Wallet, type LucideIcon,
+} from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { carregarResumo, type Resumo, type DespesaResumo } from '@/lib/resumo';
 import { brl, num, dataBR } from '@/lib/format';
+
+function BuscaHero() {
+  const navigate = useNavigate();
+  const [busca, setBusca] = useState('');
+  return (
+    <form
+      className="mt-6 flex max-w-xl items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        navigate(busca.trim() ? `/explorar?candidato=${encodeURIComponent(busca.trim())}` : '/explorar');
+      }}
+    >
+      <input
+        value={busca}
+        onChange={(e) => setBusca(e.target.value)}
+        placeholder="Busque um candidato pelo nome ou número…"
+        aria-label="Buscar candidato"
+        className="h-11 w-full rounded-lg border bg-card px-4 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+      <button
+        type="submit"
+        className="group inline-flex h-11 shrink-0 items-center gap-2 rounded-lg bg-gradient-to-r from-[#10244A] to-[#264E9B] px-5 text-sm font-semibold text-white shadow-lg shadow-[#10244A]/20 transition-all hover:shadow-xl hover:shadow-[#10244A]/30"
+      >
+        <Search className="h-4 w-4" /> Buscar
+      </button>
+    </form>
+  );
+}
+
+const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: string }[] = [
+  {
+    icone: Wallet,
+    pergunta: 'Quanto o seu candidato já declarou — e com o quê?',
+    detalhe: 'Busque pelo nome ou número e abra a ficha completa, com gráficos e indícios.',
+    href: '/explorar',
+  },
+  {
+    icone: Building2,
+    pergunta: 'Que empresas recebem de vários candidatos ao mesmo tempo?',
+    detalhe: 'Fornecedores compartilhados podem ser mercado consolidado — ou campanhas casadas.',
+    href: '#conexoes',
+  },
+  {
+    icone: Megaphone,
+    pergunta: 'Quanto se gasta com carro de som no seu estado?',
+    detalhe: 'Filtre qualquer tipo de gasto por UF, cargo ou partido.',
+    href: '/explorar?descricao=carro%20de%20som',
+  },
+  {
+    icone: Scale,
+    pergunta: 'Quem contrata acima do que declarou arrecadar?',
+    detalhe: 'A conta precisa fechar até a prestação final — acompanhe a tesoura.',
+    href: '#ranking',
+  },
+  {
+    icone: EyeOff,
+    pergunta: 'Alguém removeu declarações que já tinha feito?',
+    detalhe: 'O TSE não mostra o passado; o radar fotografa todo dia e guarda o rastro.',
+    href: '#mudancas',
+  },
+  {
+    icone: Bot,
+    pergunta: 'Quer perguntar do seu jeito?',
+    detalhe: 'Use a sua IA (ChatGPT, Claude, Gemini…) para gerar consultas e rode no console aberto.',
+    href: '/consultar',
+  },
+];
+
+function PerguntasSection() {
+  return (
+    <section className="mt-4">
+      <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
+        O que dá para descobrir
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {PERGUNTAS.map((p) => {
+          const interno = p.href.startsWith('/');
+          const conteudo = (
+            <>
+              <p.icone className="h-5 w-5 shrink-0 text-[#264E9B]" />
+              <span>
+                <span className="block font-semibold leading-snug">{p.pergunta}</span>
+                <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{p.detalhe}</span>
+              </span>
+              <ArrowRight className="ml-auto h-4 w-4 shrink-0 self-center text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            </>
+          );
+          const classes =
+            'group flex h-full items-start gap-3 rounded-xl border bg-card p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#264E9B]/40 hover:shadow-md';
+          return interno ? (
+            <Link key={p.pergunta} to={p.href} className={classes}>{conteudo}</Link>
+          ) : (
+            <a key={p.pergunta} href={p.href} className={classes}>{conteudo}</a>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 function Cartao({ rotulo, valor, indice }: { rotulo: string; valor: string; indice: number }) {
   return (
@@ -33,15 +135,17 @@ function Secao({
   eyebrow,
   titulo,
   descricao,
+  id,
   children,
 }: {
   eyebrow: string;
   titulo: string;
   descricao: string;
+  id?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-16">
+    <section className="mt-16 scroll-mt-20" id={id}>
       <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
         {eyebrow}
       </p>
@@ -128,16 +232,10 @@ export function Home() {
           declarações todos os dias e mostra o que foi declarado, alterado e{' '}
           <strong className="text-foreground">removido</strong>.
         </p>
-        <div className="mt-6">
-          <Link
-            to="/consultar"
-            className="group inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-[#10244A] to-[#264E9B] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[#10244A]/20 transition-all hover:shadow-xl hover:shadow-[#10244A]/30"
-          >
-            Consultar com SQL ou com a sua IA
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-          </Link>
-        </div>
+        <BuscaHero />
       </section>
+
+      <PerguntasSection />
 
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Cartao indice={0} rotulo="Receitas declaradas" valor={brl.format(t.total_receitas)} />
@@ -147,6 +245,7 @@ export function Home() {
       </div>
 
       <Secao
+        id="mudancas"
         eyebrow="O diferencial"
         titulo="Declarações removidas ou alteradas"
         descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Aqui fica registrado o que estava declarado e deixou de estar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
@@ -223,6 +322,7 @@ export function Home() {
       </Secao>
 
       <Secao
+        id="conexoes"
         eyebrow="Conexões"
         titulo="Fornecedores de múltiplos candidatos"
         descricao="Empresas atendendo vários candidatos podem ser fornecedores consolidados do ramo — ou indicar campanhas casadas e rateios. O contexto decide."
@@ -251,6 +351,7 @@ export function Home() {
       </Secao>
 
       <Secao
+        id="ranking"
         eyebrow="Ranking"
         titulo="Quem mais contratou até agora"
         descricao="Despesa contratada × receita declarada. Contratar muito acima do que declarou arrecadar merece atenção — a conta precisa fechar até a prestação final."

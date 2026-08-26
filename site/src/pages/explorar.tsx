@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -77,8 +77,22 @@ const seletor =
   'h-9 rounded-md border bg-card px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
 
 export function Explorar() {
-  const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS);
-  const [digitado, setDigitado] = useState({ candidato: '', fornecedor: '', descricao: '' });
+  const [params] = useSearchParams();
+  const iniciais: Filtros = {
+    ...FILTROS_VAZIOS,
+    uf: params.get('uf') ?? '',
+    cargo: params.get('cargo') ?? '',
+    partido: params.get('partido') ?? '',
+    candidato: params.get('candidato') ?? '',
+    fornecedor: params.get('fornecedor') ?? '',
+    descricao: params.get('descricao') ?? '',
+  };
+  const [filtros, setFiltros] = useState<Filtros>(iniciais);
+  const [digitado, setDigitado] = useState({
+    candidato: iniciais.candidato,
+    fornecedor: iniciais.fornecedor,
+    descricao: iniciais.descricao,
+  });
   const [partidos, setPartidos] = useState<string[]>([]);
   const [pagina, setPagina] = useState(0);
   const [dados, setDados] = useState<Dados | null>(null);
