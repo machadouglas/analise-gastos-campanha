@@ -1,0 +1,15 @@
+# Copie para config/alvos.yaml (fica fora do git) e preencha com os candidatos
+# que você quer acompanhar. A IA lê este arquivo no início da sessão.
+eleicao:
+  ano: 2026
+  uf: XX
+  contexto: descreva aqui o recorte do seu estudo (cidade, região, motivação)
+
+candidatos:
+  - nome: Fulano da Silva
+    numero: "12345"
+    cargo: Deputado Estadual
+    partido: XYZ
+  - nome: Beltrano de Souza
+    numero: "678"
+    cargo: Deputado Federal

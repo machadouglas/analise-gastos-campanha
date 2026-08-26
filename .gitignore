@@ -1,0 +1,28 @@
+# dados baixados e banco local — nunca versionar
+data/
+
+# relatórios gerados localmente
+relatorios/
+
+# alvos do estudo do usuário — não versionar (o repo mantém só o exemplo)
+config/alvos.yaml
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# configuração local da IA / editor
+.claude/
+.vscode/
+
+# padrão visual interno — referência local, fora do repo público
+trianox-front-standards/
+
+# site (Vite)
+site/node_modules/
+site/dist/
+
+# copia local de dados para teste do site
+site/public/dados/
+site/tsconfig.tsbuildinfo

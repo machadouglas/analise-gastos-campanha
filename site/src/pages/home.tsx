@@ -1,0 +1,281 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { AlertTriangle, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Spinner } from '@/components/ui/spinner';
+import { Tabela, CelulaNum } from '@/components/app/tabela';
+import { carregarResumo, type Resumo, type DespesaResumo } from '@/lib/resumo';
+import { brl, num, dataBR } from '@/lib/format';
+
+function Cartao({ rotulo, valor, indice }: { rotulo: string; valor: string; indice: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, delay: indice * 0.06, ease: 'easeOut' }}
+    >
+      <Card>
+        <CardContent className="p-5">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            {rotulo}
+          </p>
+          <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">
+            {valor}
+          </p>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
+function Secao({
+  eyebrow,
+  titulo,
+  descricao,
+  children,
+}: {
+  eyebrow: string;
+  titulo: string;
+  descricao: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="mt-16">
+      <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
+        {eyebrow}
+      </p>
+      <h2 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">{titulo}</h2>
+      <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">{descricao}</p>
+      <div className="mt-6">{children}</div>
+    </section>
+  );
+}
+
+function TabelaRemovidas({ linhas, quem }: { linhas: DespesaResumo[]; quem: string }) {
+  return (
+    <Tabela
+      colunas={[
+        { titulo: 'Candidato' },
+        { titulo: quem },
+        { titulo: 'Descrição' },
+        { titulo: 'Valor', numerica: true },
+        { titulo: 'Visível de → até' },
+      ]}
+    >
+      {linhas.map((x, i) => (
+        <tr key={i}>
+          <td>
+            {x.NM_CANDIDATO}
+            <span className="text-muted-foreground"> · {x.SG_PARTIDO}/{x.SG_UF}</span>
+          </td>
+          <td>{x.fornecedor ?? x.NM_DOADOR}</td>
+          <td>{x.DS_DESPESA ?? x.DS_ORIGEM_RECEITA ?? ''}</td>
+          <CelulaNum>{brl.format(x.valor ?? 0)}</CelulaNum>
+          <td className="whitespace-nowrap text-muted-foreground">
+            {dataBR(x.dt_primeira_extracao)} → {dataBR(x.dt_ultima_extracao)}
+          </td>
+        </tr>
+      ))}
+    </Tabela>
+  );
+}
+
+export function Home() {
+  const [resumo, setResumo] = useState<Resumo | null | 'erro'>(null);
+
+  useEffect(() => {
+    carregarResumo().then((r) => setResumo(r ?? 'erro'));
+  }, []);
+
+  if (resumo === null) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center gap-3 text-muted-foreground">
+        <Spinner className="h-5 w-5" /> Carregando os dados mais recentes…
+      </div>
+    );
+  }
+  if (resumo === 'erro') {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center text-muted-foreground">
+        Não foi possível carregar os dados. Tente novamente em instantes.
+      </div>
+    );
+  }
+
+  const t = resumo.totais;
+  const removidas = resumo.despesas_removidas ?? [];
+  const removidasReceitas = resumo.receitas_removidas ?? [];
+
+  return (
+    <div className="mx-auto max-w-7xl px-6 pb-24">
+      <section className="pt-14 pb-4">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#264E9B]/20 bg-[#264E9B]/5 px-4 py-1.5 text-sm text-[#264E9B]">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#264E9B] opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-[#264E9B]" />
+          </span>
+          Extração do TSE de {dataBR(resumo.gerado_em)}
+        </div>
+        <h1 className="max-w-3xl text-4xl font-bold tracking-tight sm:text-5xl">
+          A prestação de contas,{' '}
+          <span className="bg-gradient-to-r from-[#10244A] to-[#264E9B] bg-clip-text text-transparent">
+            dia após dia.
+          </span>
+        </h1>
+        <p className="mt-4 max-w-2xl text-lg leading-relaxed text-muted-foreground">
+          O TSE publica apenas o estado atual das contas de campanha. Este radar fotografa as
+          declarações todos os dias e mostra o que foi declarado, alterado e{' '}
+          <strong className="text-foreground">removido</strong>.
+        </p>
+        <div className="mt-6">
+          <Link
+            to="/consultar"
+            className="group inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-[#10244A] to-[#264E9B] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[#10244A]/20 transition-all hover:shadow-xl hover:shadow-[#10244A]/30"
+          >
+            Consultar com SQL ou com a sua IA
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          </Link>
+        </div>
+      </section>
+
+      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Cartao indice={0} rotulo="Receitas declaradas" valor={brl.format(t.total_receitas)} />
+        <Cartao indice={1} rotulo="Despesas contratadas" valor={brl.format(t.total_contratado)} />
+        <Cartao indice={2} rotulo="Candidatos com gastos" valor={num.format(t.candidatos_com_gastos)} />
+        <Cartao indice={3} rotulo="Candidaturas registradas" valor={num.format(t.candidaturas_registradas)} />
+      </div>
+
+      <Secao
+        eyebrow="O diferencial"
+        titulo="Declarações removidas ou alteradas"
+        descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Aqui fica registrado o que estava declarado e deixou de estar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
+      >
+        {removidas.length === 0 && removidasReceitas.length === 0 ? (
+          <Card>
+            <CardContent className="flex items-center gap-3 p-5 text-sm text-muted-foreground">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-[#264E9B]" />
+              Nenhuma declaração removida detectada até a extração de {dataBR(resumo.gerado_em)}.
+              {resumo.primeira_extracao &&
+                ' (Primeira fotografia da série — as comparações começam na próxima extração.)'}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-6">
+            {removidas.length > 0 && (
+              <div>
+                <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
+                  <AlertTriangle className="h-4 w-4" /> Despesas que sumiram da declaração: {removidas.length}
+                </p>
+                <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
+              </div>
+            )}
+            {removidasReceitas.length > 0 && (
+              <div>
+                <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
+                  <AlertTriangle className="h-4 w-4" /> Receitas que sumiram da declaração: {removidasReceitas.length}
+                </p>
+                <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
+              </div>
+            )}
+          </div>
+        )}
+      </Secao>
+
+      <Secao
+        eyebrow="Movimentação"
+        titulo={
+          resumo.primeira_extracao
+            ? 'Maiores despesas declaradas até agora'
+            : `Maiores despesas novas em ${dataBR(resumo.gerado_em)}`
+        }
+        descricao={
+          resumo.primeira_extracao
+            ? 'Panorama nacional da primeira fotografia da série.'
+            : 'Despesas que apareceram na extração mais recente e não constavam na anterior.'
+        }
+      >
+        <Tabela
+          colunas={[
+            { titulo: 'Candidato' },
+            { titulo: 'Fornecedor' },
+            { titulo: 'O quê' },
+            { titulo: 'Valor', numerica: true },
+          ]}
+        >
+          {(resumo.novas_despesas ?? []).map((x, i) => (
+            <tr key={i}>
+              <td>
+                {x.NM_CANDIDATO}
+                <span className="text-muted-foreground">
+                  {' '}· {x.SG_PARTIDO}/{x.SG_UF} · {x.DS_CARGO}
+                </span>
+              </td>
+              <td>{x.fornecedor}</td>
+              <td>
+                {x.DS_ORIGEM_DESPESA}
+                <span className="text-muted-foreground"> — {x.DS_DESPESA}</span>
+              </td>
+              <CelulaNum>{brl.format(x.valor ?? 0)}</CelulaNum>
+            </tr>
+          ))}
+        </Tabela>
+      </Secao>
+
+      <Secao
+        eyebrow="Conexões"
+        titulo="Fornecedores de múltiplos candidatos"
+        descricao="Empresas atendendo vários candidatos podem ser fornecedores consolidados do ramo — ou indicar campanhas casadas e rateios. O contexto decide."
+      >
+        <Tabela
+          colunas={[
+            { titulo: 'Fornecedor' },
+            { titulo: 'CNPJ/CPF' },
+            { titulo: 'Candidatos', numerica: true },
+            { titulo: 'Partidos', numerica: true },
+            { titulo: 'UFs' },
+            { titulo: 'Total recebido', numerica: true },
+          ]}
+        >
+          {(resumo.fornecedores_compartilhados ?? []).map((x) => (
+            <tr key={x.cnpj}>
+              <td>{x.fornecedor}</td>
+              <td className="whitespace-nowrap text-muted-foreground">{x.cnpj}</td>
+              <CelulaNum>{num.format(x.candidatos)}</CelulaNum>
+              <CelulaNum>{num.format(x.partidos)}</CelulaNum>
+              <td className="text-muted-foreground">{x.ufs}</td>
+              <CelulaNum>{brl.format(x.total ?? 0)}</CelulaNum>
+            </tr>
+          ))}
+        </Tabela>
+      </Secao>
+
+      <Secao
+        eyebrow="Ranking"
+        titulo="Quem mais contratou até agora"
+        descricao="Despesa contratada × receita declarada. Contratar muito acima do que declarou arrecadar merece atenção — a conta precisa fechar até a prestação final."
+      >
+        <Tabela
+          colunas={[
+            { titulo: 'Candidato' },
+            { titulo: 'Cargo' },
+            { titulo: 'Contratado', numerica: true },
+            { titulo: 'Receita declarada', numerica: true },
+          ]}
+        >
+          {(resumo.top_candidatos ?? []).map((x, i) => (
+            <tr key={i}>
+              <td>
+                {x.NM_CANDIDATO}
+                <span className="text-muted-foreground"> · {x.SG_PARTIDO}/{x.SG_UF}</span>
+              </td>
+              <td className="text-muted-foreground">{x.DS_CARGO}</td>
+              <CelulaNum>{brl.format(x.contratado ?? 0)}</CelulaNum>
+              <CelulaNum>{x.receita == null ? '—' : brl.format(x.receita)}</CelulaNum>
+            </tr>
+          ))}
+        </Tabela>
+      </Secao>
+    </div>
+  );
+}
