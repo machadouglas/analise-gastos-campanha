@@ -7,7 +7,15 @@ export const TABELAS = [
   'despesas_pagas',
   'receitas_doador_originario',
   'candidatos',
+  'serie_diaria',
+  'benchmark_precos',
+  'indicadores',
+  'rede',
+  'fornecedores',
 ] as const;
+
+/** Tabelas que de fato conseguiram registrar (um parquet pode ainda não existir no release). */
+export const tabelasDisponiveis = new Set<string>();
 
 let conexao: Promise<duckdb.AsyncDuckDBConnection> | null = null;
 
@@ -25,9 +33,14 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
 
   const origem = window.location.origin;
   for (const t of TABELAS) {
-    await con.query(
-      `CREATE VIEW ${t} AS SELECT * FROM read_parquet('${origem}/dados/${t}.parquet')`,
-    );
+    try {
+      await con.query(
+        `CREATE VIEW ${t} AS SELECT * FROM read_parquet('${origem}/dados/${t}.parquet')`,
+      );
+      tabelasDisponiveis.add(t);
+    } catch {
+      // parquet ainda não publicado — a página degrada sem essa visão
+    }
   }
   // Atalhos com o estado atual das declarações e valor numérico pronto
   await con.query(`

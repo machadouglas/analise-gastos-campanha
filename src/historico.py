@@ -83,12 +83,39 @@ def versionar(con) -> None:
         """, [dt]).fetchone()[0]
         print(f"[historico] {hist} @ {dt}: {novas} conteúdos novos, {removidas} sem correspondência atual")
 
+    _registrar_extracao(con)
     _criar_views_mudancas(con)
+
+
+def _registrar_extracao(con) -> None:
+    """Registro de todos os dias de extração já vistos (a série diária precisa
+    deles: dias sem mudança não deixam rastro próprio nas tabelas hist_*)."""
+    con.execute("CREATE TABLE IF NOT EXISTS extracoes (dt_extracao DATE)")
+    existentes = [
+        f"hist_{t}" for t in TABELAS
+        if con.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
+                       [f"hist_{t}"]).fetchone()[0]
+    ]
+    if not existentes:
+        return
+    uniao = " UNION ".join(
+        f"SELECT dt_primeira_extracao AS dt FROM {h} UNION SELECT dt_ultima_extracao FROM {h}"
+        for h in existentes
+    )
+    con.execute(f"""
+        INSERT INTO extracoes
+        SELECT dt FROM ({uniao})
+        WHERE dt IS NOT NULL AND dt NOT IN (SELECT dt_extracao FROM extracoes)
+    """)
 
 
 def _criar_views_mudancas(con) -> None:
     for tabela, sq in TABELAS.items():
         hist = f"hist_{tabela}"
+        if not con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [hist]
+        ).fetchone()[0]:
+            continue
         # conteúdo que estava declarado e não está mais (removido ou alterado)
         con.execute(f"""
             CREATE OR REPLACE VIEW v_removidas_{tabela} AS

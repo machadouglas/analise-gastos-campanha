@@ -4,6 +4,8 @@ import { Layout } from '@/components/app/layout';
 import { Home } from '@/pages/home';
 import { Consultar } from '@/pages/consultar';
 import { Explorar } from '@/pages/explorar';
+import { Candidato } from '@/pages/candidato';
+import { Partido } from '@/pages/partido';
 
 export function App() {
   return (
@@ -11,6 +13,8 @@ export function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/explorar" element={<Explorar />} />
+        <Route path="/candidato/:sq" element={<Candidato />} />
+        <Route path="/partido/:sigla" element={<Partido />} />
         <Route path="/consultar" element={<Consultar />} />
         <Route path="*" element={<Home />} />
       </Routes>

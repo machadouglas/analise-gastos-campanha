@@ -7,7 +7,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src import analises, carga, cnpj, exportar, historico, tse
+from src import agregados, analises, carga, cnpj, exportar, historico, tse, verificacao
 
 
 def cmd_baixar(args):
@@ -23,7 +23,16 @@ def cmd_carregar(args):
     carga.carregar(args.ano)
     con = carga.conectar()
     historico.versionar(con)
+    agregados.materializar(con)
     con.close()
+
+
+def cmd_verificar(args):
+    con = carga.conectar()
+    falhas = verificacao.verificar(con)
+    con.close()
+    if falhas:
+        sys.exit(1)
 
 
 def cmd_mudancas(args):
@@ -46,7 +55,7 @@ def cmd_exportar(args):
 
 
 def cmd_rotina(args):
-    """Pipeline diário completo: baixar -> carregar/versionar -> exportar/publicar."""
+    """Pipeline diário completo: baixar -> carregar/versionar -> verificar -> exportar/publicar."""
     for c in tse.CONJUNTOS:
         try:
             tse.baixar_conjunto(c, args.ano, forcar=True)
@@ -55,6 +64,13 @@ def cmd_rotina(args):
     carga.carregar(args.ano)
     con = carga.conectar()
     historico.versionar(con)
+    cnpj.enriquecer_em_massa(con, limite=args.limite_cnpj)
+    agregados.materializar(con)
+    falhas = verificacao.verificar(con)
+    if falhas:
+        con.close()
+        print("[abortado] verificação de dados falhou — nada foi publicado")
+        sys.exit(1)
     arquivos = exportar.exportar(con)
     for titulo, df in historico.resumo_mudancas(con):
         print(f"[mudancas] {titulo}: {len(df)} linhas")
@@ -158,10 +174,14 @@ def principal():
     x.add_argument("--publicar", action="store_true", help="sobe para o release 'dados' via gh CLI")
     x.set_defaults(func=cmd_exportar)
 
-    r = sub.add_parser("rotina", help="pipeline diário: baixar + carregar + exportar + publicar")
+    r = sub.add_parser("rotina", help="pipeline diário: baixar + carregar + verificar + exportar + publicar")
     r.add_argument("--ano", type=int, default=2026)
     r.add_argument("--sem-publicar", action="store_true")
+    r.add_argument("--limite-cnpj", type=int, default=250, help="máx. de CNPJs a enriquecer por execução")
     r.set_defaults(func=cmd_rotina)
+
+    v = sub.add_parser("verificar", help="checagens de integridade dos dados carregados")
+    v.set_defaults(func=cmd_verificar)
 
     s = sub.add_parser("sql", help="consulta SQL livre no banco")
     s.add_argument("consulta")

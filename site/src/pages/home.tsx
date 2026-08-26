@@ -266,8 +266,20 @@ export function Home() {
           {(resumo.top_candidatos ?? []).map((x, i) => (
             <tr key={i}>
               <td>
-                {x.NM_CANDIDATO}
-                <span className="text-muted-foreground"> · {x.SG_PARTIDO}/{x.SG_UF}</span>
+                {x.SQ_CANDIDATO ? (
+                  <Link to={`/candidato/${x.SQ_CANDIDATO}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                    {x.NM_CANDIDATO}
+                  </Link>
+                ) : (
+                  x.NM_CANDIDATO
+                )}
+                <span className="text-muted-foreground">
+                  {' '}·{' '}
+                  <Link to={`/partido/${encodeURIComponent(x.SG_PARTIDO)}`} className="hover:underline">
+                    {x.SG_PARTIDO}
+                  </Link>
+                  /{x.SG_UF}
+                </span>
               </td>
               <td className="text-muted-foreground">{x.DS_CARGO}</td>
               <CelulaNum>{brl.format(x.contratado ?? 0)}</CelulaNum>

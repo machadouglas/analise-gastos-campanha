@@ -55,6 +55,20 @@ Histórico de extrações (`src/historico.py`, alimentado automaticamente pelo `
 
 Valores originais usam vírgula decimal e datas `DD/MM/AAAA`; as views já convertem.
 
+Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas exportadas em Parquet):
+
+- `extracoes` — registro de cada dia de extração já visto (alimenta a série).
+- `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens (reconstruída das janelas do histórico — "como estava declarado naquele dia").
+- `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
+- `indicadores` — scorecard por candidato: totais, razao_gasto_receita, pct_maior_fornecedor, valor_sem_nota, valor_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos.
+- `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
+- `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário; completa aos poucos).
+
+## Testes e verificação
+
+- `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real. Rode após mudar `src/`.
+- `python gastos.py verificar` — checagens de integridade (conversão de valores, reconciliação agregados×fonte, janelas coerentes). A `rotina` roda isso automaticamente e **não publica** se falhar.
+
 ## Catálogo de red flags (implementadas em `src/analises.py`)
 
 | # | Análise | Sinal |
@@ -98,7 +112,9 @@ SPA Vite + React + Tailwind v4. Se existir uma pasta local `trianox-front-standa
 sem ela, siga o estilo do código existente (tema único papel/creme, acentos navy, lucide-react,
 componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release) e Consultar (DuckDB-WASM no
 navegador + prompt copiável para a IA pessoal do visitante gerar SQL — `site/src/lib/prompt.ts`;
-mantenha esse prompt sincronizado com o schema). Deploy: Cloudflare Pages
+mantenha esse prompt sincronizado com o schema). Fichas `/candidato/:sq` e `/partido/:sigla`
+consomem os Parquet agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores)
+com degradação graciosa se algum ainda não foi publicado. Deploy: Cloudflare Pages
 (`docs/deploy-cloudflare.md`). Os dados chegam ao site via Pages Function `/dados/*` que faz
 proxy do GitHub Releases (sem CORS lá).
 

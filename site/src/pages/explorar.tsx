@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -78,7 +79,7 @@ export function Explorar() {
                             MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
                      FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
                      GROUP BY 1 ORDER BY ord`),
-        executarSQL(`SELECT DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
+        executarSQL(`SELECT SQ_CANDIDATO AS "_sq", DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
                             SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
                             COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
                             DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
@@ -232,16 +233,23 @@ export function Explorar() {
                 </Button>
               </div>
             </div>
-            <Tabela colunas={dados.colunas.map((c) => ({ titulo: c, numerica: c === 'Valor' }))}>
+            <Tabela colunas={dados.colunas.filter((c) => c !== '_sq').map((c) => ({ titulo: c, numerica: c === 'Valor' }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
-                  {l.map((v, j) =>
-                    dados.colunas[j] === 'Valor' ? (
-                      <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>
-                    ) : (
-                      <td key={j}>{celula(v)}</td>
-                    ),
-                  )}
+                  {l.map((v, j) => {
+                    const col = dados.colunas[j];
+                    if (col === '_sq') return null;
+                    if (col === 'Valor') return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
+                    if (col === 'Candidato')
+                      return (
+                        <td key={j}>
+                          <Link to={`/candidato/${celula(l[0])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                            {celula(v)}
+                          </Link>
+                        </td>
+                      );
+                    return <td key={j}>{celula(v)}</td>;
+                  })}
                 </tr>
               ))}
             </Tabela>

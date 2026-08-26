@@ -22,6 +22,11 @@ EXPORTS = {
     "despesas_pagas.parquet": "v_despesas_pagas",
     "receitas_doador_originario.parquet": "receitas_doador_originario",
     "candidatos.parquet": "candidatos",
+    "serie_diaria.parquet": "serie_diaria",
+    "benchmark_precos.parquet": "benchmark_precos",
+    "indicadores.parquet": "indicadores",
+    "rede.parquet": "rede",
+    "fornecedores.parquet": "fornecedores",
 }
 
 

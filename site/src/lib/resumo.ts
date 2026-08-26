@@ -32,6 +32,7 @@ export interface FornecedorCompartilhado {
 }
 
 export interface TopCandidato {
+  SQ_CANDIDATO?: string;
   NM_CANDIDATO: string;
   SG_PARTIDO: string;
   DS_CARGO: string;

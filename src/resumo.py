@@ -74,7 +74,8 @@ def gerar(con) -> dict:
 
     top_candidatos = _registros(con, """
         WITH r AS (SELECT SQ_CANDIDATO, SUM(VR) AS receita FROM v_receitas GROUP BY 1)
-        SELECT ANY_VALUE(d.NM_CANDIDATO) AS NM_CANDIDATO, ANY_VALUE(d.SG_PARTIDO) AS SG_PARTIDO,
+        SELECT d.SQ_CANDIDATO,
+               ANY_VALUE(d.NM_CANDIDATO) AS NM_CANDIDATO, ANY_VALUE(d.SG_PARTIDO) AS SG_PARTIDO,
                ANY_VALUE(d.DS_CARGO) AS DS_CARGO, ANY_VALUE(d.SG_UF) AS SG_UF,
                ROUND(SUM(d.VR),2) AS contratado, ROUND(ANY_VALUE(r.receita),2) AS receita
         FROM v_despesas d LEFT JOIN r USING (SQ_CANDIDATO)
