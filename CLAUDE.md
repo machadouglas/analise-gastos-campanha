@@ -112,7 +112,8 @@ SPA Vite + React + Tailwind v4. Se existir uma pasta local `trianox-front-standa
 sem ela, siga o estilo do código existente (tema único papel/creme, acentos navy, lucide-react,
 componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release) e Consultar (DuckDB-WASM no
 navegador + prompt copiável para a IA pessoal do visitante gerar SQL — `site/src/lib/prompt.ts`;
-mantenha esse prompt sincronizado com o schema). Fichas `/candidato/:sq` e `/partido/:sigla`
+mantenha esse prompt sincronizado com o schema). Fichas `/candidato/:sq`, `/partido/:sigla` e
+`/fornecedor/:id` (id = NR_CPF_CNPJ_FORNECEDOR; linke só ids com `temFichaFornecedor`)
 consomem os Parquet agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores)
 com degradação graciosa se algum ainda não foi publicado. Deploy: Cloudflare Pages
 (`docs/deploy-cloudflare.md`). Os dados chegam ao site via Pages Function `/dados/*` que faz

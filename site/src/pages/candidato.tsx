@@ -13,7 +13,7 @@ import {
   type Serie,
 } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, dataBR } from '@/lib/format';
+import { brl, num, celula, dataBR, temFichaFornecedor } from '@/lib/format';
 
 interface Perfil {
   nome: string;
@@ -274,15 +274,23 @@ export function Candidato() {
         </Secao>
       </div>
 
-      <Secao titulo="Fornecedores" descricao="Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (via Receita Federal).">
+      <Secao titulo="Fornecedores" descricao="Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (via Receita Federal). Clique no nome para abrir a ficha do fornecedor.">
         <Tabela colunas={dados.colunasFornecedores.map((c) => ({ titulo: c, numerica: c === 'Total' || c === 'Itens' }))}>
           {dados.fornecedores.map((l, i) => (
-            <tr key={i}>
+            <tr key={i} className="hover:bg-muted/40">
               {l.map((v, j) => {
                 const col = dados.colunasFornecedores[j];
                 if (col === 'Total') return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                 if (col === 'Itens') return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                 if (col === 'Empresa aberta em') return <td key={j}>{dataBR(celula(v))}</td>;
+                if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
+                  return (
+                    <td key={j}>
+                      <Link to={`/fornecedor/${celula(l[1])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                        {celula(v)}
+                      </Link>
+                    </td>
+                  );
                 return <td key={j}>{celula(v)}</td>;
               })}
             </tr>

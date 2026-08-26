@@ -5,7 +5,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula } from '@/lib/format';
+import { brl, num, celula, temFichaFornecedor } from '@/lib/format';
 
 interface DadosPartido {
   nome: string;
@@ -176,13 +176,21 @@ export function Partido() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Fornecedores compartilhados no partido</CardTitle>
-          <CardDescription>Mesma empresa atendendo vários candidatos da sigla — campanhas casadas ou rateio.</CardDescription>
+          <CardDescription>Mesma empresa atendendo vários candidatos da sigla — campanhas casadas ou rateio. Clique no nome para abrir a ficha do fornecedor.</CardDescription>
         </CardHeader>
         <CardContent>
           <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'CNPJ/CPF' }, { titulo: 'Candidatos', numerica: true }, { titulo: 'Total', numerica: true }]}>
             {dados.compartilhados.map((l, i) => (
-              <tr key={i}>
-                <td>{celula(l[0])}</td>
+              <tr key={i} className="hover:bg-muted/40">
+                <td>
+                  {temFichaFornecedor(celula(l[1])) ? (
+                    <Link to={`/fornecedor/${celula(l[1])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                      {celula(l[0])}
+                    </Link>
+                  ) : (
+                    celula(l[0])
+                  )}
+                </td>
                 <td className="text-muted-foreground">{celula(l[1])}</td>
                 <CelulaNum>{num.format(Number(l[2] ?? 0))}</CelulaNum>
                 <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>

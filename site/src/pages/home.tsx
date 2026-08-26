@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { carregarResumo, type Resumo, type DespesaResumo } from '@/lib/resumo';
-import { brl, num, dataBR } from '@/lib/format';
+import { brl, num, cnpjCpf, dataBR, temFichaFornecedor } from '@/lib/format';
 
 function BuscaHero() {
   const navigate = useNavigate();
@@ -325,7 +325,7 @@ export function Home() {
         id="conexoes"
         eyebrow="Conexões"
         titulo="Fornecedores de múltiplos candidatos"
-        descricao="Empresas atendendo vários candidatos podem ser fornecedores consolidados do ramo — ou indicar campanhas casadas e rateios. O contexto decide."
+        descricao="Empresas atendendo vários candidatos podem ser fornecedores consolidados do ramo — ou indicar campanhas casadas e rateios. O contexto decide. Clique no nome para abrir a ficha do fornecedor."
       >
         <Tabela
           colunas={[
@@ -339,8 +339,16 @@ export function Home() {
         >
           {(resumo.fornecedores_compartilhados ?? []).map((x) => (
             <tr key={x.cnpj}>
-              <td>{x.fornecedor}</td>
-              <td className="whitespace-nowrap text-muted-foreground">{x.cnpj}</td>
+              <td>
+                {temFichaFornecedor(x.cnpj) ? (
+                  <Link to={`/fornecedor/${x.cnpj}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                    {x.fornecedor}
+                  </Link>
+                ) : (
+                  x.fornecedor
+                )}
+              </td>
+              <td className="whitespace-nowrap text-muted-foreground">{cnpjCpf(x.cnpj)}</td>
               <CelulaNum>{num.format(x.candidatos)}</CelulaNum>
               <CelulaNum>{num.format(x.partidos)}</CelulaNum>
               <td className="text-muted-foreground">{x.ufs}</td>

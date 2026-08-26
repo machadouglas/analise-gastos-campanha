@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { executarSQL } from '@/lib/duckdb';
-import { brl, num, celula } from '@/lib/format';
+import { brl, num, celula, temFichaFornecedor } from '@/lib/format';
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
@@ -131,7 +131,8 @@ export function Explorar() {
                             MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
                      FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
                      GROUP BY 1 ORDER BY ord`),
-        executarSQL(`SELECT SQ_CANDIDATO AS "_sq", DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
+        executarSQL(`SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
+                            DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
                             SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
                             COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
                             DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
@@ -355,17 +356,25 @@ export function Explorar() {
                 </Button>
               </div>
             </div>
-            <Tabela colunas={dados.colunas.filter((c) => c !== '_sq').map((c) => ({ titulo: c, numerica: c === 'Valor' }))}>
+            <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({ titulo: c, numerica: c === 'Valor' }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
                   {l.map((v, j) => {
                     const col = dados.colunas[j];
-                    if (col === '_sq') return null;
+                    if (col.startsWith('_')) return null;
                     if (col === 'Valor') return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Candidato')
                       return (
                         <td key={j}>
                           <Link to={`/candidato/${celula(l[0])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                            {celula(v)}
+                          </Link>
+                        </td>
+                      );
+                    if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
+                      return (
+                        <td key={j}>
+                          <Link to={`/fornecedor/${celula(l[1])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
                             {celula(v)}
                           </Link>
                         </td>

@@ -6,6 +6,7 @@ import { Consultar } from '@/pages/consultar';
 import { Explorar } from '@/pages/explorar';
 import { Candidato } from '@/pages/candidato';
 import { Partido } from '@/pages/partido';
+import { Fornecedor } from '@/pages/fornecedor';
 
 export function App() {
   return (
@@ -15,6 +16,7 @@ export function App() {
         <Route path="/explorar" element={<Explorar />} />
         <Route path="/candidato/:sq" element={<Candidato />} />
         <Route path="/partido/:sigla" element={<Partido />} />
+        <Route path="/fornecedor/:id" element={<Fornecedor />} />
         <Route path="/consultar" element={<Consultar />} />
         <Route path="*" element={<Home />} />
       </Routes>
