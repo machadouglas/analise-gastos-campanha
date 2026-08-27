@@ -49,6 +49,7 @@ def _colunas(con, tabela):
 
 def versionar(con) -> None:
     """Aplica a extração corrente (tabelas brutas) sobre as tabelas hist_*."""
+    con.execute("CREATE TABLE IF NOT EXISTS extracoes (dt_extracao DATE)")
     for tabela, sq in TABELAS.items():
         hist = f"hist_{tabela}"
         cols = _colunas(con, tabela)
@@ -81,6 +82,26 @@ def versionar(con) -> None:
             FROM stg s
             WHERE h.hash_linha = s.hash_linha AND h.qt_linhas = s.qt_linhas
         """, [dt])
+        # A última extração de um mesmo dia vence (o TSE regenera o arquivo ao
+        # longo do dia): conteúdo marcado como vivo em `dt` mas ausente do
+        # arquivo atual nasceu-e-sumiu dentro do dia (sai do histórico: não
+        # houve dia em que tenha ficado declarado) ou volta a morrer na
+        # extração anterior.
+        sem_par = ("h.dt_ultima_extracao = ? AND NOT EXISTS "
+                   "(SELECT 1 FROM stg s WHERE s.hash_linha = h.hash_linha "
+                   "AND s.qt_linhas = h.qt_linhas)")
+        con.execute(
+            f"DELETE FROM {hist} h WHERE h.dt_primeira_extracao = ? AND {sem_par}",
+            [dt, dt],
+        )
+        anterior = con.execute(
+            "SELECT MAX(dt_extracao) FROM extracoes WHERE dt_extracao < ?", [dt]
+        ).fetchone()[0]
+        if anterior is not None:
+            con.execute(
+                f"UPDATE {hist} h SET dt_ultima_extracao = ? WHERE {sem_par}",
+                [anterior, dt],
+            )
         # conteúdo novo (ou com quantidade alterada) vira linha nova no histórico
         novas = con.execute(f"""
             INSERT INTO {hist}

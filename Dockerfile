@@ -19,6 +19,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
+# imagem quebrada não sobe: o deploy falha aqui se algum teste falhar
+# (os testes de dados reais se auto-pulam — não há data/ no contexto de build)
+RUN python -m pytest tests/ -q
+
 # data/ deve ser um volume persistente (banco DuckDB + histórico + cache)
 VOLUME /app/data
 

@@ -141,6 +141,51 @@ def test_remocao_real_sobrevive_ao_filtro_de_essencia():
     assert [r[0] for r in removidas] == ["CARRO DE SOM"]
 
 
+def test_reextracao_no_mesmo_dia_a_ultima_vence():
+    """O TSE regenera o arquivo ao longo do dia: rodar a rotina duas vezes no
+    mesmo dia com conteúdo diferente não pode deixar 'vivo' o que sumiu
+    (cenário real que quebrou a verificação em 27/08/2026)."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1), ("2", "CARRO DE SOM", "5000,00", 1)])
+    dia(con, "21/08/2026", [("1", "BANDEIRA", "100,00", 1), ("2", "CARRO DE SOM", "5000,00", 1)])
+    # segunda rodada do dia 21: o carro de som sumiu do arquivo
+    dia(con, "21/08/2026", [("1", "BANDEIRA", "100,00", 1)])
+    vivos = contar(con, "SELECT COALESCE(SUM(qt_linhas), 0) FROM hist_despesas_contratadas "
+                        "WHERE dt_ultima_extracao = DATE '2026-08-21'")
+    assert vivos == 1  # invariante da verificação: vivo == retrato atual
+    removidas = con.execute(
+        "SELECT DS_DESPESA, dt_ultima_extracao FROM v_removidas_despesas_contratadas"
+    ).fetchall()
+    assert [r[0] for r in removidas] == ["CARRO DE SOM"]
+    assert str(removidas[0][1])[:10] == "2026-08-20"  # morre na extração anterior
+
+
+def test_conteudo_que_nasce_e_some_no_mesmo_dia_nao_deixa_rastro():
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1)])
+    dia(con, "21/08/2026", [("1", "BANDEIRA", "100,00", 1), ("9", "IMPULSO", "50,00", 1)])
+    dia(con, "21/08/2026", [("1", "BANDEIRA", "100,00", 1)])
+    # nunca fechou um dia declarado: não é remoção nem fica no histórico
+    assert contar(con, "SELECT COUNT(*) FROM hist_despesas_contratadas") == 1
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+
+
+def test_mudanca_de_quantidade_no_mesmo_dia_nao_duplica():
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "ADESIVO", "10,00", 3)])
+    dia(con, "20/08/2026", [("1", "ADESIVO", "10,00", 2)])
+    vivas = con.execute("SELECT qt_linhas FROM hist_despesas_contratadas").fetchall()
+    assert [v[0] for v in vivas] == [2]
+
+
+def test_rodada_repetida_identica_no_mesmo_dia_e_idempotente():
+    con = montar_banco()
+    despesas = [("1", "BANDEIRA", "100,00", 1)]
+    dia(con, "20/08/2026", despesas)
+    dia(con, "20/08/2026", despesas)
+    assert contar(con, "SELECT COUNT(*) FROM hist_despesas_contratadas") == 1
+
+
 def test_registro_de_extracoes_cobre_todos_os_dias():
     con = montar_banco()
     dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1)])

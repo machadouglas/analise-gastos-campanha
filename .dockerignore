@@ -1,8 +1,8 @@
+# dados locais nunca entram na imagem (o container usa o volume /app/data)
 data/
-relatorios/
-.git/
-.claude/
-.vscode/
-__pycache__/
-*.pyc
 config/alvos.yaml
+site/node_modules/
+site/dist/
+.git/
+.pytest_cache/
+__pycache__/
