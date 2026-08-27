@@ -11,10 +11,12 @@ export function dataBR(iso: string | null | undefined): string {
   return iso.split('-').reverse().join('/');
 }
 
-/** Formata CNPJ (14 dígitos) ou CPF (11 dígitos); qualquer outro valor volta como está. */
+/** Formata CNPJ (14 dígitos) completo; CPF (11 dígitos) sai MASCARADO.
+ *  O CPF é público nos arquivos do TSE, mas pessoa física não é figura pública:
+ *  minimização (LGPD) — exibimos só o miolo, suficiente para conferência. */
 export function cnpjCpf(id: string): string {
   if (/^\d{14}$/.test(id)) return id.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-  if (/^\d{11}$/.test(id)) return id.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+  if (/^\d{11}$/.test(id)) return id.replace(/^\d{3}(\d{3})(\d{3})\d{2}$/, '***.$1.$2-**');
   return id;
 }
 

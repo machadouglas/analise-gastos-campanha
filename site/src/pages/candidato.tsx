@@ -13,7 +13,7 @@ import {
   type Serie,
 } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, dataBR, temFichaFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor } from '@/lib/format';
 
 interface Perfil {
   nome: string;
@@ -283,6 +283,7 @@ export function Candidato() {
                 if (col === 'Total') return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                 if (col === 'Itens') return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                 if (col === 'Empresa aberta em') return <td key={j}>{dataBR(celula(v))}</td>;
+                if (col === 'CNPJ/CPF') return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
                 if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
                   return (
                     <td key={j}>

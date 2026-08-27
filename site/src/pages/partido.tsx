@@ -5,7 +5,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, temFichaFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, temFichaFornecedor } from '@/lib/format';
 
 interface DadosPartido {
   nome: string;
@@ -191,7 +191,7 @@ export function Partido() {
                     celula(l[0])
                   )}
                 </td>
-                <td className="text-muted-foreground">{celula(l[1])}</td>
+                <td className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(l[1]))}</td>
                 <CelulaNum>{num.format(Number(l[2] ?? 0))}</CelulaNum>
                 <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
               </tr>
