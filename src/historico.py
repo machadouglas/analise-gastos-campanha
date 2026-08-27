@@ -20,6 +20,20 @@ TABELAS = {
     "receitas": "SQ_RECEITA",
 }
 
+# "Essência" do fato declarado. Quando o candidato retransmite a prestação, o
+# SPCE regenera os SQ_* e metadados — o conteúdo "some" e renasce com id novo.
+# Uma remoção REAL é a que não reaparece com a mesma essência na extração atual.
+ESSENCIA = {
+    "despesas_contratadas": [
+        "SQ_CANDIDATO", "NR_CPF_CNPJ_FORNECEDOR", "DS_DESPESA",
+        "VR_DESPESA_CONTRATADA", "DT_DESPESA",
+    ],
+    "receitas": [
+        "SQ_CANDIDATO", "NR_CPF_CNPJ_DOADOR", "DS_ORIGEM_RECEITA",
+        "VR_RECEITA", "DT_RECEITA",
+    ],
+}
+
 # metadados do arquivo, não do fato declarado — ficam fora do histórico e do hash
 COLUNAS_VOLATEIS = {"DT_GERACAO", "HH_GERACAO"}
 
@@ -116,14 +130,21 @@ def _criar_views_mudancas(con) -> None:
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [hist]
         ).fetchone()[0]:
             continue
-        # conteúdo que estava declarado e não está mais (removido ou alterado)
+        essencia = " AND ".join(f"v.{c} = m.{c}" for c in ESSENCIA[tabela])
+        # conteúdo que estava declarado e não está mais, SEM correspondente de
+        # mesma essência na extração atual (filtra o re-registro em massa do SPCE)
         con.execute(f"""
             CREATE OR REPLACE VIEW v_removidas_{tabela} AS
-            WITH ultima AS (SELECT MAX(dt_ultima_extracao) AS dt FROM {hist})
-            SELECT h.* FROM {hist} h, ultima
-            QUALIFY MAX(h.dt_ultima_extracao) OVER (PARTITION BY h.hash_linha) < ultima.dt
+            WITH ultima AS (SELECT MAX(dt_ultima_extracao) AS dt FROM {hist}),
+            mortas AS (
+                SELECT h.* FROM {hist} h, ultima
+                QUALIFY MAX(h.dt_ultima_extracao) OVER (PARTITION BY h.hash_linha) < ultima.dt),
+            vivas AS (
+                SELECT h.* FROM {hist} h, ultima WHERE h.dt_ultima_extracao = ultima.dt)
+            SELECT m.* FROM mortas m
+            WHERE NOT EXISTS (SELECT 1 FROM vivas v WHERE {essencia})
         """)
-        # notas (SQ) com versões antes e depois: provável edição da declaração
+        # notas (SQ) com versão antiga sem essência atual + versão nova: provável edição
         con.execute(f"""
             CREATE OR REPLACE VIEW v_alteradas_{tabela} AS
             WITH ultima AS (SELECT MAX(dt_ultima_extracao) AS dt FROM {hist})

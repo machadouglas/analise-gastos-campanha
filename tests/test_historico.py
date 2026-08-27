@@ -14,7 +14,8 @@ from src import historico  # noqa: E402
 
 COLUNAS = (
     "DT_GERACAO, HH_GERACAO, SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, "
-    "DS_CARGO, SG_UF, SQ_DESPESA, NM_FORNECEDOR, DS_DESPESA, VR_DESPESA_CONTRATADA"
+    "DS_CARGO, SG_UF, SQ_DESPESA, NM_FORNECEDOR, NR_CPF_CNPJ_FORNECEDOR, "
+    "DS_DESPESA, VR_DESPESA_CONTRATADA, DT_DESPESA"
 )
 
 
@@ -24,7 +25,8 @@ def montar_banco():
         CREATE TABLE despesas_contratadas ({', '.join(c + ' VARCHAR' for c in COLUNAS.split(', '))});
         CREATE TABLE receitas (DT_GERACAO VARCHAR, HH_GERACAO VARCHAR, SQ_CANDIDATO VARCHAR,
             NM_CANDIDATO VARCHAR, NR_CANDIDATO VARCHAR, SG_PARTIDO VARCHAR, DS_CARGO VARCHAR,
-            SG_UF VARCHAR, SQ_RECEITA VARCHAR, NM_DOADOR VARCHAR, VR_RECEITA VARCHAR);
+            SG_UF VARCHAR, SQ_RECEITA VARCHAR, NM_DOADOR VARCHAR, NR_CPF_CNPJ_DOADOR VARCHAR,
+            DS_ORIGEM_RECEITA VARCHAR, VR_RECEITA VARCHAR, DT_RECEITA VARCHAR);
     """)
     return con
 
@@ -33,7 +35,8 @@ def inserir_despesa(con, dia, sq, descricao, valor, repeticoes=1):
     for _ in range(repeticoes):
         con.execute(
             "INSERT INTO despesas_contratadas VALUES (?, '04:00:00', '160001', 'FULANO', "
-            "'12345', 'XYZ', 'Deputado Estadual', 'XX', ?, 'FORNECEDOR LTDA', ?, ?)",
+            "'12345', 'XYZ', 'Deputado Estadual', 'XX', ?, 'FORNECEDOR LTDA', "
+            "'11222333000144', ?, ?, '15/08/2026')",
             [dia, sq, descricao, valor],
         )
 
@@ -117,6 +120,25 @@ def test_dias_sem_mudanca_sao_idempotentes():
     ).fetchone()
     assert str(janela[0])[:10] == "2026-08-20"
     assert str(janela[1])[:10] == "2026-08-22"
+
+
+def test_retransmissao_com_id_novo_nao_e_removida():
+    """Quando o candidato retransmite a prestação, o SPCE regenera os SQ_*.
+    A mesma despesa com id novo NÃO pode contar como remoção."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("100", "CARRO DE SOM", "5000,00", 1)])
+    dia(con, "21/08/2026", [("999", "CARRO DE SOM", "5000,00", 1)])  # mesmo fato, SQ novo
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+
+
+def test_remocao_real_sobrevive_ao_filtro_de_essencia():
+    con = montar_banco()
+    dia(con, "20/08/2026", [("100", "CARRO DE SOM", "5000,00", 1), ("101", "BANDEIRA", "100,00", 1)])
+    # retransmissão renumera a bandeira, mas o carro de som sumiu de verdade
+    dia(con, "21/08/2026", [("999", "BANDEIRA", "100,00", 1)])
+    removidas = con.execute(
+        "SELECT DS_DESPESA FROM v_removidas_despesas_contratadas").fetchall()
+    assert [r[0] for r in removidas] == ["CARRO DE SOM"]
 
 
 def test_registro_de_extracoes_cobre_todos_os_dias():
