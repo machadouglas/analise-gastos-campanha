@@ -4,6 +4,8 @@ preços, scorecard de indícios e rede de relações. Rodam após cada carga.
 Tudo é derivado; recriar é sempre seguro.
 """
 
+from src.analises import SQL_CATEGORIAS_SEM_NOTA_ESPERADA
+
 VALOR_DESPESA = "TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE)"
 VALOR_RECEITA = "TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE)"
 
@@ -115,16 +117,20 @@ def _indicadores(con) -> None:
                   FROM v_despesas GROUP BY 1, 2)
             GROUP BY 1),
         sem_nota AS (
+            -- transferências, tributos e tarifas não têm nota fiscal esperada
             SELECT SQ_CANDIDATO, ROUND(SUM(VR), 2) AS valor_sem_nota FROM v_despesas
-            WHERE DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO = '#NULO'
-               OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%'
+            WHERE (DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO = '#NULO'
+                   OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%')
+              AND DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
             GROUP BY 1),
         pf AS (
             SELECT SQ_CANDIDATO, ROUND(SUM(VR), 2) AS valor_pessoa_fisica FROM v_despesas
             WHERE DS_TIPO_FORNECEDOR ILIKE '%f_sica%' GROUP BY 1),
         rep AS (
+            -- itens repetidos da MESMA nota são legítimos: fracionamento exige notas distintas
             SELECT SQ_CANDIDATO, COUNT(*) AS grupos_valor_repetido
-            FROM (SELECT SQ_CANDIDATO, VR FROM v_despesas GROUP BY 1, 2 HAVING COUNT(*) >= 3)
+            FROM (SELECT SQ_CANDIDATO, VR FROM v_despesas GROUP BY 1, 2
+                  HAVING COUNT(DISTINCT SQ_DESPESA) >= 3)
             GROUP BY 1),
         removidas AS (
             SELECT SQ_CANDIDATO, ROUND(SUM({VALOR_DESPESA} * qt_linhas), 2) AS valor_removido

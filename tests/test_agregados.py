@@ -100,6 +100,42 @@ def test_indicadores_concentracao_sem_nota_e_pessoa_fisica(banco):
     assert ind["valor_pessoa_fisica"] == pytest.approx(700.0)
 
 
+def test_indicadores_valor_repetido_ignora_itens_da_mesma_nota(banco):
+    # 3 itens idênticos da MESMA nota (SQ_DESPESA igual): legítimo, não conta
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "10,00"},
+        {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "10,00"},
+        {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "10,00"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute("SELECT grupos_valor_repetido FROM indicadores").fetchone()[0] == 0
+
+
+def test_indicadores_valor_repetido_conta_notas_distintas(banco):
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": str(i), "DS_DESPESA": f"SERVICO {i}", "VR_DESPESA_CONTRATADA": "999,00"}
+        for i in (1, 2, 3)
+    ])
+    agregados.materializar(banco)
+    assert banco.execute("SELECT grupos_valor_repetido FROM indicadores").fetchone()[0] == 1
+
+
+def test_indicadores_sem_nota_ignora_categorias_sem_documento_esperado(banco):
+    extrair_dia(banco, "20/08/2026", despesas=[
+        # transferência a outro candidato: sem nota por natureza — não conta
+        {"SQ_DESPESA": "1", "DS_TIPO_DOCUMENTO": "#NULO", "VR_DESPESA_CONTRATADA": "500,00",
+         "DS_ORIGEM_DESPESA": "Doações financeiras a outros candidatos/partidos"},
+        {"SQ_DESPESA": "2", "DS_TIPO_DOCUMENTO": "#NULO", "VR_DESPESA_CONTRATADA": "80,00",
+         "DS_ORIGEM_DESPESA": "Impostos, contribuições e taxas"},
+        # publicidade com recibo: conta
+        {"SQ_DESPESA": "3", "DS_TIPO_DOCUMENTO": "Recibo", "VR_DESPESA_CONTRATADA": "100,00"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute(
+        "SELECT valor_sem_nota FROM indicadores"
+    ).fetchone()[0] == pytest.approx(100.0)
+
+
 def test_indicadores_valor_removido_aparece_apos_remocao(banco):
     extrair_dia(banco, "20/08/2026", despesas=[
         {"SQ_DESPESA": "1", "DS_DESPESA": "BANDEIRA", "VR_DESPESA_CONTRATADA": "100,00"},

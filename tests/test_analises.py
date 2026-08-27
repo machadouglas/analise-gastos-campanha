@@ -74,6 +74,29 @@ def test_fornecedor_compartilhado_exige_mais_de_um_candidato(banco):
     assert df.iloc[0]["candidatos_atendidos"] == 2
 
 
+def test_valores_repetidos_exige_notas_distintas(banco):
+    for _ in range(3):  # 3 itens da mesma nota: não é fracionamento
+        inserir_despesa(banco, SQ_DESPESA="1", VR_DESPESA_CONTRATADA="10,00")
+    df = _resultado(analises.executar_todas(banco), "Valores repetidos")
+    assert df.empty
+    for i in (2, 3, 4):  # mesmo valor em 3 notas distintas: entra
+        inserir_despesa(banco, SQ_DESPESA=str(i), DS_DESPESA=f"SERVICO {i}",
+                        VR_DESPESA_CONTRATADA="999,00")
+    df = _resultado(analises.executar_todas(banco), "Valores repetidos")
+    assert len(df) == 1
+    assert df.iloc[0]["notas_distintas"] == 3
+
+
+def test_sem_nota_ignora_categorias_sem_documento_esperado(banco):
+    inserir_despesa(banco, SQ_DESPESA="1", DS_TIPO_DOCUMENTO="#NULO",
+                    DS_ORIGEM_DESPESA="Doações financeiras a outros candidatos/partidos")
+    inserir_despesa(banco, SQ_DESPESA="2", DS_TIPO_DOCUMENTO="Recibo",
+                    VR_DESPESA_CONTRATADA="100,00")
+    df = _resultado(analises.executar_todas(banco), "Despesas sem nota fiscal")
+    assert len(df) == 1
+    assert df.iloc[0]["total"] == pytest.approx(100.0)
+
+
 def test_filtro_por_numero_e_uf_limita_o_recorte(banco):
     banco.execute(
         "INSERT INTO candidatos VALUES ('160001', '12345', 'FULANO', 'FULANO', "

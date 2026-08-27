@@ -6,6 +6,16 @@ indícios para investigação, nunca prova de irregularidade.
 
 import pandas as pd
 
+# Categorias em que documento fiscal não é esperado (transferências entre
+# campanhas, tributos e tarifas): ficam fora do indicador "sem nota fiscal".
+CATEGORIAS_SEM_NOTA_ESPERADA = (
+    "Doações financeiras a outros candidatos/partidos",
+    "Encargos financeiros, taxas bancárias e/ou op. cartão de crédito",
+    "Encargos sociais",
+    "Impostos, contribuições e taxas",
+)
+SQL_CATEGORIAS_SEM_NOTA_ESPERADA = ", ".join(f"'{c}'" for c in CATEGORIAS_SEM_NOTA_ESPERADA)
+
 
 def montar_filtro(numeros=None, uf=None, alias="") -> str:
     """WHERE parcial para limitar aos candidatos-alvo. Vazio = todos."""
@@ -118,12 +128,14 @@ def executar_todas(con, numeros=None, uf=None):
       """)
 
     q("Valores repetidos",
-      "Mesmo valor pago várias vezes pode indicar fracionamento.",
+      "Mesmo valor em 3+ notas distintas pode indicar fracionamento. Itens repetidos "
+      "de uma mesma nota (padrão dos arquivos do TSE) não contam.",
       f"""
       SELECT NM_CANDIDATO, VR AS valor, COUNT(*) AS ocorrencias,
+             COUNT(DISTINCT SQ_DESPESA) AS notas_distintas,
              COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR) AS fornecedores_distintos
       FROM v_despesas WHERE {f}
-      GROUP BY ALL HAVING ocorrencias >= 3 ORDER BY ocorrencias DESC, valor DESC
+      GROUP BY ALL HAVING notas_distintas >= 3 ORDER BY ocorrencias DESC, valor DESC
       """)
 
     q("Fornecedor que também é candidato",
@@ -136,12 +148,14 @@ def executar_todas(con, numeros=None, uf=None):
       """)
 
     q("Despesas sem nota fiscal",
-      "Documentos diferentes de nota fiscal (ou ausentes) têm menor rastreabilidade.",
+      "Documentos diferentes de nota fiscal (ou ausentes) têm menor rastreabilidade. "
+      "Categorias sem documento fiscal esperado (transferências, tributos, tarifas) ficam de fora.",
       f"""
       SELECT NM_CANDIDATO, DS_TIPO_DOCUMENTO, COUNT(*) AS notas, ROUND(SUM(VR),2) AS total
       FROM v_despesas WHERE {f}
         AND (DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO IN ('#NULO')
              OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%')
+        AND DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
       GROUP BY ALL ORDER BY total DESC
       """)
 
