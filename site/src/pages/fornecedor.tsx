@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, cnpjCpf, dataBR } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, dataBR, urlFornecedor } from '@/lib/format';
 
 interface CadastroRFB {
   razaoSocial: string | null;
@@ -232,12 +232,19 @@ function CampoRFB({ rotulo, valor }: { rotulo: string; valor: string | null }) {
 
 export function Fornecedor() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [dados, setDados] = useState<DadosFornecedor | null | 'carregando' | 'nao-encontrado'>('carregando');
   const [idReal, setIdReal] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id || !/^(\d{6,14}|pf-[0-9a-f]{16})$/.test(id)) {
       setDados('nao-encontrado');
+      return;
+    }
+    // URL antiga com CPF cru: segue funcionando, mas normaliza para a opaca
+    // (o número sai da barra de endereço, do histórico e de compartilhamentos)
+    if (/^\d{11}$/.test(id)) {
+      navigate(urlFornecedor(id), { replace: true });
       return;
     }
     setDados('carregando');
