@@ -1,3 +1,5 @@
+import { md5 } from './md5';
+
 export const brl = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
   currency: 'BRL',
@@ -23,6 +25,13 @@ export function cnpjCpf(id: string): string {
 /** Ids de fornecedor com ficha própria: CNPJ/CPF real (não '-1', '#NULO' ou anonimizado). */
 export function temFichaFornecedor(id: unknown): id is string {
   return typeof id === 'string' && (/^\d{11}$/.test(id) || /^\d{14}$/.test(id));
+}
+
+/** URL da ficha do fornecedor. Pessoa física usa identificador opaco (hash)
+ *  para o CPF não aparecer no endereço, no histórico nem em logs. */
+export function urlFornecedor(id: string): string {
+  if (/^\d{11}$/.test(id)) return `/fornecedor/pf-${md5(id).slice(0, 16)}`;
+  return `/fornecedor/${id}`;
 }
 
 /** Converte uma célula vinda do DuckDB (Arrow) para texto exibível. */

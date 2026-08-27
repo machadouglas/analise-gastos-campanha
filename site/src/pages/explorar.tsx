@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { executarSQL } from '@/lib/duckdb';
-import { brl, num, celula, temFichaFornecedor } from '@/lib/format';
+import { brl, num, celula, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
@@ -374,7 +374,7 @@ export function Explorar() {
                     if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
                       return (
                         <td key={j}>
-                          <Link to={`/fornecedor/${celula(l[1])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                          <Link to={urlFornecedor(celula(l[1]))} className="text-[#264E9B] underline-offset-4 hover:underline">
                             {celula(v)}
                           </Link>
                         </td>

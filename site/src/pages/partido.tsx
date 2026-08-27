@@ -5,7 +5,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, cnpjCpf, temFichaFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface DadosPartido {
   nome: string;
@@ -184,7 +184,7 @@ export function Partido() {
               <tr key={i} className="hover:bg-muted/40">
                 <td>
                   {temFichaFornecedor(celula(l[1])) ? (
-                    <Link to={`/fornecedor/${celula(l[1])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                    <Link to={urlFornecedor(celula(l[1]))} className="text-[#264E9B] underline-offset-4 hover:underline">
                       {celula(l[0])}
                     </Link>
                   ) : (

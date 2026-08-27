@@ -60,6 +60,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </p>
           <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-6">
+              <Link className="hover:text-foreground" to="/metodologia">Metodologia</Link>
               <a className="hover:text-foreground" href={REPO} rel="noopener">Código-fonte</a>
               <a className="hover:text-foreground" href={`${REPO}/releases/tag/dados`} rel="noopener">
                 Dados em Parquet

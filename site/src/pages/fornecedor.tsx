@@ -49,6 +49,19 @@ function esc(s: string) {
   return s.replaceAll("'", "''");
 }
 
+/** Resolve o identificador da URL para o CPF/CNPJ real: ids `pf-<hash>` são
+ *  opacos (o CPF não viaja na URL) e voltam ao valor via md5 no próprio banco. */
+async function resolverId(param: string): Promise<string | null> {
+  if (/^\d{6,14}$/.test(param)) return param;
+  const m = /^pf-([0-9a-f]{16})$/.exec(param);
+  if (!m) return null;
+  const r = await executarSQL(`
+      SELECT DISTINCT NR_CPF_CNPJ_FORNECEDOR FROM despesas_atual
+      WHERE LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 11
+        AND md5(NR_CPF_CNPJ_FORNECEDOR) LIKE '${m[1]}%' LIMIT 1`);
+  return r.total ? String(r.linhas[0][0]) : null;
+}
+
 async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
   const w = `NR_CPF_CNPJ_FORNECEDOR = '${esc(id)}'`;
 
@@ -220,17 +233,33 @@ function CampoRFB({ rotulo, valor }: { rotulo: string; valor: string | null }) {
 export function Fornecedor() {
   const { id } = useParams<{ id: string }>();
   const [dados, setDados] = useState<DadosFornecedor | null | 'carregando' | 'nao-encontrado'>('carregando');
+  const [idReal, setIdReal] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!id || !/^\d{6,14}$/.test(id)) {
+    if (!id || !/^(\d{6,14}|pf-[0-9a-f]{16})$/.test(id)) {
       setDados('nao-encontrado');
       return;
     }
     setDados('carregando');
-    carregarFornecedor(id)
-      .then((d) => setDados(d ?? 'nao-encontrado'))
+    resolverId(id)
+      .then(async (real) => {
+        if (!real) return 'nao-encontrado' as const;
+        setIdReal(real);
+        return (await carregarFornecedor(real)) ?? ('nao-encontrado' as const);
+      })
+      .then((d) => setDados(d))
       .catch(() => setDados('nao-encontrado'));
   }, [id]);
+
+  // Ficha de pessoa física fica fora dos buscadores (minimização de exposição)
+  useEffect(() => {
+    if (!idReal || idReal.length !== 11) return;
+    const meta = document.createElement('meta');
+    meta.name = 'robots';
+    meta.content = 'noindex';
+    document.head.appendChild(meta);
+    return () => meta.remove();
+  }, [idReal]);
 
   if (dados === 'carregando') {
     return (
@@ -255,7 +284,7 @@ export function Fornecedor() {
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do fornecedor</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{p.nome}</h1>
         <p className="mt-2 max-w-3xl text-muted-foreground">
-          {cnpjCpf(id!)}
+          {cnpjCpf(idReal ?? '')}
           {p.tipo && <> · {p.tipo.toLowerCase()}</>}
           {p.cnae && <> · {p.cnae.toLowerCase()}</>}
           {p.sqCandidato && (

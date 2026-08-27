@@ -13,7 +13,7 @@ import {
   type Serie,
 } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface Perfil {
   nome: string;
@@ -287,7 +287,7 @@ export function Candidato() {
                 if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
                   return (
                     <td key={j}>
-                      <Link to={`/fornecedor/${celula(l[1])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                      <Link to={urlFornecedor(celula(l[1]))} className="text-[#264E9B] underline-offset-4 hover:underline">
                         {celula(v)}
                       </Link>
                     </td>

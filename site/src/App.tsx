@@ -6,6 +6,7 @@ import { Consultar } from '@/pages/consultar';
 import { Explorar } from '@/pages/explorar';
 import { Candidato } from '@/pages/candidato';
 import { Partido } from '@/pages/partido';
+import { Metodologia } from '@/pages/metodologia';
 import { Fornecedor } from '@/pages/fornecedor';
 
 export function App() {
@@ -18,6 +19,7 @@ export function App() {
         <Route path="/partido/:sigla" element={<Partido />} />
         <Route path="/fornecedor/:id" element={<Fornecedor />} />
         <Route path="/consultar" element={<Consultar />} />
+        <Route path="/metodologia" element={<Metodologia />} />
         <Route path="*" element={<Home />} />
       </Routes>
       <Toaster richColors position="top-right" />

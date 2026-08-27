@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { carregarResumo, type Resumo, type DespesaResumo } from '@/lib/resumo';
-import { brl, num, cnpjCpf, dataBR, temFichaFornecedor } from '@/lib/format';
+import { brl, num, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 function BuscaHero() {
   const navigate = useNavigate();
@@ -341,7 +341,7 @@ export function Home() {
             <tr key={x.cnpj}>
               <td>
                 {temFichaFornecedor(x.cnpj) ? (
-                  <Link to={`/fornecedor/${x.cnpj}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                  <Link to={urlFornecedor(x.cnpj)} className="text-[#264E9B] underline-offset-4 hover:underline">
                     {x.fornecedor}
                   </Link>
                 ) : (
