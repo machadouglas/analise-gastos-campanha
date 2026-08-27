@@ -87,7 +87,7 @@ def executar_todas(con, numeros=None, uf=None):
       "Mesmo CPF/CNPJ doando e recebendo do mesmo candidato: dinheiro que 'volta'.",
       f"""
       SELECT r.NM_CANDIDATO, r.NM_DOADOR, r.NR_CPF_CNPJ_DOADOR AS cpf_cnpj,
-             ROUND(SUM(DISTINCT r.VR),2) AS doou,
+             ROUND(SUM(r.VR),2) AS doou, COUNT(*) AS doacoes,
              (SELECT ROUND(SUM(d.VR),2) FROM v_despesas d
               WHERE d.SQ_CANDIDATO = r.SQ_CANDIDATO
                 AND d.NR_CPF_CNPJ_FORNECEDOR = r.NR_CPF_CNPJ_DOADOR) AS recebeu_como_fornecedor

@@ -79,6 +79,12 @@ def carregar(ano: int) -> None:
         n = con.execute(f"SELECT count(*) FROM {tabela}").fetchone()[0]
         print(f"[carregado] {tabela}: {n} linhas")
 
+    criar_views(con)
+    con.close()
+
+
+def criar_views(con) -> None:
+    """(Re)cria as views tipadas sobre as tabelas brutas existentes."""
     for view, tabela, col_valor, col_data in VIEWS_VALOR:
         if not con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [tabela]
@@ -100,4 +106,3 @@ def carregar(ano: int) -> None:
             if sql.strip():
                 con.execute(sql)
         print("[view] v_prestadores, v_despesas_pagas")
-    con.close()

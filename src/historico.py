@@ -51,15 +51,10 @@ def versionar(con) -> None:
     """Aplica a extração corrente (tabelas brutas) sobre as tabelas hist_*."""
     for tabela, sq in TABELAS.items():
         hist = f"hist_{tabela}"
-        dt = con.execute(
-            f"SELECT MAX(TRY_CAST(STRPTIME(DT_GERACAO, '%d/%m/%Y') AS DATE)) FROM {tabela}"
-        ).fetchone()[0]
-        if dt is None:
-            print(f"[aviso] {tabela} vazia — nada a versionar")
-            continue
         cols = _colunas(con, tabela)
         lista = ", ".join(cols)
 
+        # o hist_* existe mesmo com a fonte vazia: os agregados dependem dele
         con.execute(f"""
             CREATE TABLE IF NOT EXISTS {hist} AS
             SELECT {lista}, CAST(NULL AS VARCHAR) AS hash_linha,
@@ -68,6 +63,12 @@ def versionar(con) -> None:
                    CAST(NULL AS DATE) AS dt_ultima_extracao
             FROM {tabela} WHERE 1=0
         """)
+        dt = con.execute(
+            f"SELECT MAX(TRY_CAST(STRPTIME(DT_GERACAO, '%d/%m/%Y') AS DATE)) FROM {tabela}"
+        ).fetchone()[0]
+        if dt is None:
+            print(f"[aviso] {tabela} vazia — nada a versionar")
+            continue
         con.execute(f"""
             CREATE OR REPLACE TEMP TABLE stg AS
             SELECT {lista}, md5(concat_ws('|', {lista})) AS hash_linha,
