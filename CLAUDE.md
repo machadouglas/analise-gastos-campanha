@@ -69,7 +69,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 
 ## Testes e verificação
 
-- `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real + **sincronia backend↔site** (`test_sincronia_site.py` lê `site/src/lib/consultas.ts`/`duckdb.ts` e falha se as regras espelhadas divergirem do Python). Rode após mudar `src/` OU as regras do site.
+- `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real + **sincronia backend↔site** (`test_sincronia_site.py` lê `site/src/lib/consultas.ts`/`duckdb.ts` e falha se as regras espelhadas divergirem do Python) + **consultas prontas do console** (`test_consultas_do_site.py` executa cada SQL de `site/src/lib/exemplos.ts` contra o banco real, com as views que o release publica; exige que devolvam linhas, salvo os monitores declarados). Rode após mudar `src/` OU as regras/consultas do site.
 - `npm test` (em `site/`) — vitest das funções puras do front: construtores de SQL (`lib/consultas.ts`), detecção de gráfico (`lib/grafico-auto.ts`) e formatação/mascaramento (`lib/format.ts`). Rode após mudar `site/src/lib/`.
 - `python gastos.py verificar` — checagens de integridade (conversão de valores, reconciliação agregados×fonte, janelas coerentes). A `rotina` roda isso automaticamente e **não publica** se falhar.
 

@@ -1,5 +1,6 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
 import { carregarResumo } from '@/lib/resumo';
+import { validarLeitura } from '@/lib/sql-gate';
 
 // Os Parquet são servidos pela mesma origem via Pages Function (/dados/*).
 // O boot registra só o que as páginas consomem; o restante (tabelas que só o
@@ -214,8 +215,6 @@ export function garantirTabelasCompletas(): Promise<void> {
   return completas;
 }
 
-const PERMITIDOS = /^\s*(select|with|describe|summarize|show|from|pivot|unpivot)\b/i;
-
 export interface ResultadoConsulta {
   colunas: string[];
   linhas: unknown[][];
@@ -224,15 +223,9 @@ export interface ResultadoConsulta {
 }
 
 export async function executarSQL(sql: string): Promise<ResultadoConsulta> {
-  const semComentarios = sql
-    .replace(/--[^\n]*/g, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .trim();
-  if (!PERMITIDOS.test(semComentarios)) {
-    throw new Error(
-      'Apenas consultas de leitura (SELECT/WITH/DESCRIBE/SUMMARIZE/SHOW/FROM/PIVOT/UNPIVOT) são permitidas.',
-    );
-  }
+  // o duckdb-wasm executa statements múltiplos — cada um precisa ser leitura
+  const proibido = validarLeitura(sql);
+  if (proibido) throw new Error(proibido);
   const con = await obterConexao();
   const inicio = performance.now();
   const tabela = await con.query(sql);
