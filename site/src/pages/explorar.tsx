@@ -89,13 +89,14 @@ const CATEGORIAS_SEM_NOTA_ESPERADA = [
 ];
 
 // espelha METRICAS_SINAL em src/resumo.py: sinal = métrica estritamente acima
-// do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe)
+// do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe).
+// razão gasto÷arrecadado só é sinal quando > 1 — mesma régua do backend.
 const SINAIS_CTE = `
   metricas AS (
     SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'total_contratado' AS metrica, total_contratado AS valor
     FROM indicadores WHERE total_contratado > 0
     UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'razao_gasto_receita', razao_gasto_receita
-    FROM indicadores WHERE razao_gasto_receita IS NOT NULL
+    FROM indicadores WHERE razao_gasto_receita > 1
     UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_maior_fornecedor', pct_maior_fornecedor
     FROM indicadores WHERE n_fornecedores > 1
     UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_sem_nota', pct_sem_nota

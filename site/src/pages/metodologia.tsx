@@ -82,7 +82,11 @@ export function Metodologia() {
           fatiadas não distorçam a régua; <strong>"sem nota fiscal"</strong> exclui categorias em
           que a nota não é o documento próprio (transferências, tributos, tarifas, aluguel de
           imóveis, pessoal); <strong>valores repetidos</strong> só contam quando aparecem em 3+
-          notas distintas <em>do mesmo fornecedor</em>; <strong>"dinheiro público"</strong> soma
+          notas distintas <em>do mesmo fornecedor</em>; a razão{' '}
+          <strong>gasto ÷ arrecadado</strong> só conta como sinal quando o candidato contratou
+          mais do que declarou arrecadar (razão acima de 1×) — no início da campanha o p95 de
+          muitos grupos é próximo de zero, e quem gastou menos do que arrecadou não merece
+          marca por isso; <strong>"dinheiro público"</strong> soma
           Fundo Especial e Fundo Partidário pela fonte oficial da receita; e o indicador de{' '}
           <strong>CNPJ recém-aberto</strong> (empresa criada a partir de outubro do ano anterior à
           eleição) sempre informa quantos dos fornecedores do candidato já foram verificados na

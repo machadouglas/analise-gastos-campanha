@@ -20,10 +20,12 @@ def _registros(con, sql) -> list[dict]:
 
 
 # métricas que contam como "sinal" no fora da curva: fatos em que estar muito
-# acima do grupo merece pergunta (arrecadar muito, por si, não é indício)
+# acima do grupo merece pergunta (arrecadar muito, por si, não é indício).
+# A razão gasto÷arrecadado só é sinal quando > 1: quem gastou MENOS do que
+# arrecadou não vira sinal só porque o p95 do grupo é ~0 no início da campanha.
 METRICAS_SINAL = [
     ("total_contratado", "total_contratado", "total_contratado > 0"),
-    ("razao_gasto_receita", "razao_gasto_receita", "razao_gasto_receita IS NOT NULL"),
+    ("razao_gasto_receita", "razao_gasto_receita", "razao_gasto_receita > 1"),
     ("pct_maior_fornecedor", "pct_maior_fornecedor", "n_fornecedores > 1"),
     ("pct_sem_nota", "pct_sem_nota", "total_contratado > 0"),
     ("pct_pessoa_fisica", "pct_pessoa_fisica", "total_contratado > 0"),

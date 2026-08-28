@@ -110,6 +110,29 @@ def test_fora_da_curva_aponta_quem_estoura_o_p95_do_grupo(banco):
     assert sinal["grupo_n"] == 20
 
 
+def test_razao_gasto_receita_so_e_sinal_acima_de_1x(banco):
+    """Gastar MENOS do que arrecadou nunca é sinal, mesmo acima do p95 do grupo
+    (no início da campanha o p95 da razão é ~0 e tudo 'estouraria')."""
+    linhas = [
+        {"SQ_RECEITA": "1", "SQ_CANDIDATO": f"16{i:04d}", "SQ_PRESTADOR_CONTAS": f"90{i:04d}",
+         "NM_CANDIDATO": f"CAND {i}", "NR_CANDIDATO": str(10000 + i), "VR_RECEITA": "1000,00"}
+        for i in range(20)
+    ]
+    # o candidato 0 gastou metade do que arrecadou: razão 0,5 — acima do p95 do
+    # grupo (todo mundo em 0), mas abaixo de 1× — não pode virar sinal
+    despesas = [{"SQ_DESPESA": "1", "SQ_CANDIDATO": "160000", "SQ_PRESTADOR_CONTAS": "900000",
+                 "NM_CANDIDATO": "CAND 0", "NR_CANDIDATO": "10000",
+                 "VR_DESPESA_CONTRATADA": "500,00"}]
+    extrair_dia(banco, "20/08/2026", despesas=despesas, receitas=linhas)
+    agregados.materializar(banco)
+    razao = banco.execute(
+        "SELECT razao_gasto_receita FROM indicadores WHERE SQ_CANDIDATO = '160000'"
+    ).fetchone()[0]
+    assert razao == pytest.approx(0.5)  # premissa do cenário
+    sinais = [s["metrica"] for c in resumo.gerar(banco)["fora_da_curva"] for s in c["sinais"]]
+    assert "razao_gasto_receita" not in sinais
+
+
 def test_fora_da_curva_nao_dispara_por_arrecadar_muito(banco):
     """Arrecadar acima do grupo não é indício — receita não entra nos sinais."""
     linhas = [
