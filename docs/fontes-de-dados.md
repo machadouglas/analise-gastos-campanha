@@ -12,7 +12,9 @@ Fonte primária. Arquivos CSV (latin-1, separador `;`) dentro de ZIPs no CDN `ht
 Contém, por UF e consolidado (`_BRASIL`):
 - `despesas_contratadas_candidatos_*` — cada gasto declarado: fornecedor (nome, CPF/CNPJ, nome na Receita, CNAE, município), descrição, valor, data, documento fiscal.
 - `despesas_pagas_candidatos_*` — pagamentos efetivados e fonte do recurso.
-- `receitas_candidatos_*` — doações: doador, CPF/CNPJ, origem (Fundo Especial de Financiamento de Campanha, Fundo Partidário, pessoa física, recursos próprios, financiamento coletivo), espécie (PIX etc.), valor, data.
+- `receitas_candidatos_*` — doações: doador, CPF/CNPJ, **fonte** (`DS_FONTE_RECEITA`: FUNDO ESPECIAL / FUNDO PARTIDARIO / OUTROS RECURSOS — é aqui que se mede dinheiro público; a origem declarada do repasse costuma ser "Recursos de partido político"), origem, espécie (PIX etc.), valor, data.
+
+> Pegadinha dos arquivos: o sistema do TSE emite **linhas-placeholder** (contraparte `-1`/`#NULO` com valor zero) para prestação sem movimento — não são declarações. E os arquivos são detalhados por **item de nota**: `SQ_DESPESA` se repete e linhas 100% idênticas são legítimas.
 - `receitas_candidatos_doador_originario_*` — origem real do recurso quando repassado por partido/candidato.
 - PDFs `leiame_*` — dicionário de dados oficial de cada arquivo.
 
@@ -20,7 +22,7 @@ Contém, por UF e consolidado (`_BRASIL`):
 `{CDN}/consulta_cand/consulta_cand_{ano}.zip` — registro de todas as candidaturas: nome, nome de urna, número, cargo, partido, coligação, situação do registro, SQ_CANDIDATO (chave que liga tudo).
 
 ### Bens declarados
-`{CDN}/bem_candidato/bem_candidato_{ano}.zip` — bens declarados por candidato (tipo, descrição, valor). Útil para comparar evolução patrimonial entre eleições.
+`{CDN}/bem_candidato/bem_candidato_{ano}.zip` — bens declarados por candidato (tipo, descrição, valor). Carregado na tabela `bens` (o indicador `total_bens` cruza patrimônio com recursos próprios injetados na campanha).
 
 ### CNPJ de campanha
 `{CDN}/prestacao_contas/CNPJ_campanha_{ano}.zip` — CNPJs de campanha abertos por candidatos/partidos.

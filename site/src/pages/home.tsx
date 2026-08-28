@@ -339,15 +339,16 @@ export function Home() {
                   {c.sinais.map((s) => {
                     const m = metrica(s.metrica);
                     return (
-                      <span
+                      <Link
                         key={s.metrica}
-                        title={`p95 do grupo (${s.grupo_n} candidatos${s.grupo_ambito === 'BR-TODAS' ? ', âmbito nacional' : ''}): ${m.formatar(s.p95)}`}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium text-[#7c3a06]"
+                        to={`/explorar?visao=fora-da-curva&sinal=${encodeURIComponent(s.metrica)}&uf=${encodeURIComponent(c.SG_UF)}&cargo=${encodeURIComponent(c.DS_CARGO)}`}
+                        title={`p95 do grupo (${s.grupo_n} candidatos${s.grupo_ambito === 'BR-TODAS' ? ', âmbito nacional' : ''}): ${m.formatar(s.p95)} — clique para ver todos fora da curva neste sinal`}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20"
                       >
                         <AlertTriangle className="h-3.5 w-3.5" />
                         {m.rotulo}: {m.formatar(s.valor)}
                         <span className="text-[#7c3a06]/70">· grupo: {m.formatar(s.mediana)}</span>
-                      </span>
+                      </Link>
                     );
                   })}
                 </div>

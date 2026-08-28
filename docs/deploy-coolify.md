@@ -49,7 +49,12 @@ resume quantos conteúdos foram removidos/alterados na extração do dia.
 
 ## Observações
 
-- A rotina é idempotente: rodar duas vezes no mesmo dia não duplica nada.
-- O volume cresce ao longo da campanha (~1 GB até novembro, com folga).
+- A rotina é idempotente: rodar duas vezes no mesmo dia não duplica nada (a
+  última extração do dia vence).
+- Volume projetado para o fim do período: ~5–8 GB no `/app/data` (CSVs
+  extraídos são a maior fatia). Um volume de 20 GB dá folga confortável.
 - Se a rotina falhar num dia (rede, TSE fora), a próxima execução continua de
   onde parou — mas o retrato daquele dia se perde; vale monitorar as falhas.
+- Execução manual longa pelo Terminal do painel: a sessão web expira e mata
+  processos em foreground — use `nohup python gastos.py rotina ... > /app/data/rotina.log 2>&1 &`
+  (retomável de qualquer forma: cada etapa persiste o que concluiu).

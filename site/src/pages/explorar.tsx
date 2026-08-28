@@ -11,6 +11,7 @@ import {
 } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { metrica } from '@/lib/metricas';
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
@@ -100,6 +101,17 @@ const SINAIS_CTE = `
       ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica
     WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND m.valor > COALESCE(buf.p95, bbr.p95))`;
 
+// filtro de segundo nível da visão fora-da-curva: EM QUAL sinal a pessoa
+// destoa ('' = qualquer). Ids espelham METRICAS_SINAL em src/resumo.py.
+const SINAIS_FILTRO = [
+  'total_contratado',
+  'razao_gasto_receita',
+  'pct_maior_fornecedor',
+  'pct_sem_nota',
+  'pct_pessoa_fisica',
+] as const;
+type SinalFiltro = (typeof SINAIS_FILTRO)[number] | '';
+
 const ROTULO_SINAL_SQL = `CASE s.metrica
   WHEN 'total_contratado' THEN 'gasto total'
   WHEN 'razao_gasto_receita' THEN 'gasto ÷ arrecadado'
@@ -124,17 +136,18 @@ function whereIndicadores(f: Filtros): string {
   return partes.join(' AND ');
 }
 
-function whereDaVisao(visao: Visao, f: Filtros): { base: string; where: string } {
+function whereDaVisao(visao: Visao, f: Filtros, sinal: SinalFiltro): { base: string; where: string } {
   const w = montarWhere(f);
   if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
   if (visao === 'fora-da-curva') {
     // gráficos e KPIs mostram os gastos DOS candidatos fora da curva do recorte
+    const porSinal = sinal ? ` AND s.metrica = '${sinal}'` : '';
     return {
       base: 'despesas_atual',
       where:
         `${w} AND SQ_CANDIDATO IN (WITH ${SINAIS_CTE} ` +
         `SELECT DISTINCT s.SQ_CANDIDATO FROM sinais s ` +
-        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)})`,
+        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)}${porSinal})`,
     };
   }
   if (visao === 'sem-nota') {
@@ -257,6 +270,10 @@ export function Explorar() {
   const [visao, setVisao] = useState<Visao>(
     VISOES.some((v) => v.id === visaoParam) ? (visaoParam as Visao) : 'atual',
   );
+  const sinalParam = params.get('sinal');
+  const [sinal, setSinal] = useState<SinalFiltro>(
+    SINAIS_FILTRO.some((s) => s === sinalParam) ? (sinalParam as SinalFiltro) : '',
+  );
   const [filtros, setFiltros] = useState<Filtros>(iniciais);
   const [digitado, setDigitado] = useState({
     candidato: iniciais.candidato,
@@ -275,11 +292,11 @@ export function Explorar() {
       .catch(() => {});
   }, []);
 
-  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao) => {
+  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao, s: SinalFiltro) => {
     setCarregando(true);
     setErro(null);
     try {
-      const { base, where: w } = whereDaVisao(v, f);
+      const { base, where: w } = whereDaVisao(v, f, s);
       const encontrados = v === 'atual' && f.candidato.trim()
         ? await executarSQL(`
             SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
@@ -304,11 +321,14 @@ export function Explorar() {
                     i.DS_CARGO AS "Cargo",
                     ROUND(i.total_contratado, 2) AS "Contratado",
                     ROUND(i.total_receitas, 2) AS "Arrecadado",
+                    ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 2) AS "Neste sinal",
+                    ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.p95 END), 2) AS "p95 do grupo",` : ''}
                     COUNT(*) AS "Sinais",
                     STRING_AGG(${ROTULO_SINAL_SQL}, ' · ' ORDER BY s.metrica) AS "Acima do típico do grupo em"
              FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
              WHERE ${whereIndicadores(f)}
-             GROUP BY ALL ORDER BY "Sinais" DESC, "Contratado" DESC
+             GROUP BY ALL
+             ${s ? 'HAVING "Neste sinal" IS NOT NULL ORDER BY "Neste sinal" DESC' : 'ORDER BY "Sinais" DESC, "Contratado" DESC'}
              LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
           : v === 'compartilhados'
           ? `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
@@ -376,8 +396,8 @@ export function Explorar() {
   }, []);
 
   useEffect(() => {
-    void consultar(filtros, pagina, visao);
-  }, [filtros, pagina, visao, consultar]);
+    void consultar(filtros, pagina, visao, visao === 'fora-da-curva' ? sinal : '');
+  }, [filtros, pagina, visao, sinal, consultar]);
 
   function mudar(parcial: Partial<Filtros>) {
     setPagina(0);
@@ -419,6 +439,31 @@ export function Explorar() {
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {VISOES.find((v) => v.id === visao)?.descricao}
         </p>
+        {visao === 'fora-da-curva' && (
+          <div className="mt-3 flex flex-wrap items-center gap-2" role="tablist" aria-label="Fora da curva em">
+            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              Fora da curva em:
+            </span>
+            {(['', ...SINAIS_FILTRO] as SinalFiltro[]).map((s) => (
+              <button
+                key={s || 'qualquer'}
+                role="tab"
+                aria-selected={sinal === s}
+                onClick={() => {
+                  setPagina(0);
+                  setSinal(s);
+                }}
+                className={
+                  sinal === s
+                    ? 'rounded-full bg-[#B45309] px-3 py-1 text-xs font-semibold text-white shadow-sm'
+                    : 'rounded-full border border-[#B45309]/30 bg-card px-3 py-1 text-xs text-muted-foreground shadow-sm transition-colors hover:border-[#B45309]/60 hover:text-foreground'
+                }
+              >
+                {s ? metrica(s).rotulo : 'Qualquer sinal'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <form
@@ -616,7 +661,7 @@ export function Explorar() {
             </div>
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
-              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais'].includes(c),
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'p95 do grupo'].includes(c),
             }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
@@ -627,6 +672,12 @@ export function Explorar() {
                       return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Arrecadado')
                       return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
+                    if (col === 'Neste sinal' || col === 'p95 do grupo')
+                      return (
+                        <CelulaNum key={j}>
+                          {v == null || !sinal ? '—' : metrica(sinal).formatar(Number(v))}
+                        </CelulaNum>
+                      );
                     if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais')
                       return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'CNPJ/CPF')

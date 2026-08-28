@@ -43,15 +43,38 @@ LIMIT 30`,
   },
   {
     rotulo: 'Declarações removidas',
-    sql: `SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF,
+    sql: `-- a view já filtra retransmissões renumeradas e linhas-placeholder
+SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF,
        COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS fornecedor,
-       DS_DESPESA,
-       TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas AS valor,
+       DS_DESPESA, ROUND(valor, 2) AS valor,
        dt_primeira_extracao, dt_ultima_extracao
-FROM despesas
-WHERE dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
+FROM despesas_removidas
 ORDER BY valor DESC
 LIMIT 50`,
+  },
+  {
+    rotulo: 'Dinheiro público por partido',
+    sql: `SELECT SG_PARTIDO,
+       ROUND(SUM(fundos_publicos), 2) AS fundos_publicos,
+       ROUND(SUM(total_receitas), 2) AS arrecadado,
+       ROUND(100.0 * SUM(fundos_publicos) / SUM(total_receitas), 1) AS pct_publico
+FROM indicadores
+GROUP BY 1
+HAVING arrecadado > 0
+ORDER BY fundos_publicos DESC
+LIMIT 30`,
+  },
+  {
+    rotulo: 'Fora da curva do grupo',
+    sql: `-- candidatos acima do p95 do grupo (mesmo cargo e UF) em gasto ÷ arrecadado
+SELECT i.NM_CANDIDATO, i.SG_PARTIDO, i.SG_UF, i.DS_CARGO,
+       i.razao_gasto_receita, b.p95 AS p95_do_grupo, b.candidatos AS tamanho_do_grupo
+FROM indicadores i
+JOIN benchmark_indicadores b
+  ON b.DS_CARGO = i.DS_CARGO AND b.SG_UF = i.SG_UF AND b.metrica = 'razao_gasto_receita'
+WHERE i.razao_gasto_receita > b.p95
+ORDER BY i.razao_gasto_receita DESC
+LIMIT 30`,
   },
   {
     rotulo: 'Gasto com carro de som por UF',
@@ -244,10 +267,13 @@ export function Consultar() {
             Console SQL
           </CardTitle>
           <CardDescription>
-            Tabelas: <code>despesas_atual</code>, <code>receitas_atual</code> (estado atual, coluna{' '}
-            <code>valor</code> pronta) · <code>despesas</code>, <code>receitas</code> (histórico
-            completo) · <code>despesas_pagas</code>, <code>receitas_doador_originario</code>,{' '}
-            <code>candidatos</code>
+            Atalhos: <code>despesas_atual</code>, <code>receitas_atual</code> (estado atual, coluna{' '}
+            <code>valor</code> pronta), <code>despesas_removidas</code> · Histórico:{' '}
+            <code>despesas</code>, <code>receitas</code> · Agregados: <code>indicadores</code>,{' '}
+            <code>benchmark_indicadores</code>, <code>benchmark_precos</code>,{' '}
+            <code>serie_diaria</code>, <code>rede</code>, <code>fornecedores</code> · Brutas:{' '}
+            <code>despesas_pagas</code>, <code>receitas_doador_originario</code>,{' '}
+            <code>candidatos</code> — o prompt da IA acima descreve todas.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
