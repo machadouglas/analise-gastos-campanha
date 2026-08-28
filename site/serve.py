@@ -27,8 +27,9 @@ class HandlerSPA(http.server.SimpleHTTPRequestHandler):
 
 def main() -> None:
     porta = int(sys.argv[1]) if len(sys.argv) > 1 else 8778
+    # loopback: ferramenta de teste local não precisa aparecer para a rede toda
     servidor = http.server.ThreadingHTTPServer(
-        ("", porta), partial(HandlerSPA, directory=str(DIST))
+        ("127.0.0.1", porta), partial(HandlerSPA, directory=str(DIST))
     )
     print(f"servindo {DIST} em http://localhost:{porta} (com fallback de SPA)")
     servidor.serve_forever()

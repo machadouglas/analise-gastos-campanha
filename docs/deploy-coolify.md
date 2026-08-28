@@ -26,7 +26,16 @@ Nada além disso — se o token vazar, o estrago fica limitado a este repo.
    (marque como *Build Variable* = não; é só runtime). Se estiver rodando um
    **fork**, crie também `GH_REPO` com `seu-usuario/seu-fork` (o padrão da
    imagem aponta para o repositório original).
-4. Deploy. O container sobe e fica ocioso consumindo ~0 recursos.
+4. Crie também `RADAR_SAL_CPF`: o sal secreto da pseudonimização de CPFs nos
+   dados publicados. Gere um valor longo e aleatório (ex.: `openssl rand -hex 32`),
+   guarde-o com o mesmo cuidado do token e **nunca o troque** — mudar o sal
+   troca todos os códigos `pf-…` publicados e quebra links de fichas de
+   pessoa física já compartilhados.
+5. Deploy. O container sobe e fica ocioso consumindo ~0 recursos.
+6. A imagem roda como usuário sem privilégio (uid 10001). Se o volume
+   `/app/data` foi criado por uma versão antiga (como root), rode uma vez:
+   `docker exec -u root <container> chown -R 10001:10001 /app/data` —
+   sem isso a rotina falha ao escrever no banco.
 
 ## 3. Scheduled Task
 

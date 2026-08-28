@@ -11,6 +11,7 @@ config/alvos.yaml
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 
 # configuração local da IA / editor
 .claude/

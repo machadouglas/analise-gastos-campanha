@@ -61,6 +61,10 @@ def extrair_zips(ano: int) -> Path:
     destino.mkdir(parents=True, exist_ok=True)
     for zp in origem.glob("*.zip"):
         with zipfile.ZipFile(zp) as z:
+            # nunca extrair membro que resolva fora do destino (zip malicioso com ../)
+            for m in z.namelist():
+                if not (destino / m).resolve().is_relative_to(destino.resolve()):
+                    raise RuntimeError(f"{zp.name}: membro suspeito no zip: {m}")
             z.extractall(destino)
         print(f"[extraido] {zp.name}")
     return destino
