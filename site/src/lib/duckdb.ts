@@ -43,19 +43,48 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
       // parquet ainda não publicado — a página degrada sem essa visão
     }
   }
-  // Atalhos com o estado atual das declarações e valor numérico pronto
+  // Atalhos com o estado atual das declarações e valor numérico pronto.
+  // Linhas-placeholder do SPCE (contraparte '-1'/'#NULO' E valor zero = prestação
+  // sem movimento) ficam de fora — sincronia com filtro_placeholder em src/carga.py.
   await con.query(`
     CREATE VIEW despesas_atual AS
     SELECT *, TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas AS valor
     FROM despesas
     WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM despesas)
+      AND NOT (NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
+               AND COALESCE(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
   `);
   await con.query(`
     CREATE VIEW receitas_atual AS
     SELECT *, TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE) * qt_linhas AS valor
     FROM receitas
     WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM receitas)
+      AND NOT (NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
+               AND COALESCE(TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
   `);
+  try {
+    // Remoções com o MESMO critério do backend: retransmitir a prestação
+    // renumera as notas, então só é remoção o conteúdo sem correspondente de
+    // mesma essência no estado atual (sincronia com ESSENCIA em src/historico.py).
+    await con.query(`
+      CREATE VIEW despesas_removidas AS
+      SELECT d.*, TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * d.qt_linhas AS valor
+      FROM despesas d
+      WHERE d.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
+        AND NOT (d.NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
+                 AND COALESCE(TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
+        AND NOT EXISTS (
+          SELECT 1 FROM despesas_atual v
+          WHERE v.SQ_CANDIDATO = d.SQ_CANDIDATO
+            AND v.NR_CPF_CNPJ_FORNECEDOR = d.NR_CPF_CNPJ_FORNECEDOR
+            AND v.DS_DESPESA = d.DS_DESPESA
+            AND v.VR_DESPESA_CONTRATADA = d.VR_DESPESA_CONTRATADA
+            AND v.DT_DESPESA = d.DT_DESPESA)
+    `);
+    tabelasDisponiveis.add('despesas_removidas');
+  } catch {
+    // sem o parquet de despesas a visão não existe — as páginas degradam
+  }
   return con;
 }
 

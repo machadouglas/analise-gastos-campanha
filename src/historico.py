@@ -14,6 +14,8 @@ atualizada — é o rastro de uma declaração removida ou alterada, algo
 invisível no site do TSE. A data usada é a DT_GERACAO do próprio arquivo.
 """
 
+from src.carga import filtro_placeholder
+
 # tabelas versionadas -> coluna de pareamento p/ detectar alterações (id da nota)
 TABELAS = {
     "despesas_contratadas": "SQ_DESPESA",
@@ -36,6 +38,14 @@ ESSENCIA = {
 
 # metadados do arquivo, não do fato declarado — ficam fora do histórico e do hash
 COLUNAS_VOLATEIS = {"DT_GERACAO", "HH_GERACAO"}
+
+# (contraparte, valor) por tabela — para excluir linhas-placeholder das views de
+# mudanças (o SPCE troca o placeholder pela primeira declaração real; isso não é
+# uma remoção de fato declarado)
+CONTRAPARTE = {
+    "despesas_contratadas": ("NR_CPF_CNPJ_FORNECEDOR", "VR_DESPESA_CONTRATADA"),
+    "receitas": ("NR_CPF_CNPJ_DOADOR", "VR_RECEITA"),
+}
 
 
 def _colunas(con, tabela):
@@ -153,8 +163,10 @@ def _criar_views_mudancas(con) -> None:
         ).fetchone()[0]:
             continue
         essencia = " AND ".join(f"v.{c} = m.{c}" for c in ESSENCIA[tabela])
+        contraparte, valor = CONTRAPARTE[tabela]
         # conteúdo que estava declarado e não está mais, SEM correspondente de
-        # mesma essência na extração atual (filtra o re-registro em massa do SPCE)
+        # mesma essência na extração atual (filtra o re-registro em massa do
+        # SPCE) e SEM linhas-placeholder (prestação sem movimento)
         con.execute(f"""
             CREATE OR REPLACE VIEW v_removidas_{tabela} AS
             WITH ultima AS (SELECT MAX(dt_ultima_extracao) AS dt FROM {hist}),
@@ -164,7 +176,8 @@ def _criar_views_mudancas(con) -> None:
             vivas AS (
                 SELECT h.* FROM {hist} h, ultima WHERE h.dt_ultima_extracao = ultima.dt)
             SELECT m.* FROM mortas m
-            WHERE NOT EXISTS (SELECT 1 FROM vivas v WHERE {essencia})
+            WHERE {filtro_placeholder(f'm.{contraparte}', f'm.{valor}')}
+              AND NOT EXISTS (SELECT 1 FROM vivas v WHERE {essencia})
         """)
         # notas (SQ) com versão antiga sem essência atual + versão nova: provável edição
         con.execute(f"""

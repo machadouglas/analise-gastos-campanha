@@ -6,6 +6,7 @@ Tudo é derivado; recriar é sempre seguro.
 """
 
 from src.analises import SQL_CATEGORIAS_SEM_NOTA_ESPERADA
+from src.carga import filtro_placeholder
 
 VALOR_DESPESA = "TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE)"
 VALOR_RECEITA = "TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE)"
@@ -61,6 +62,7 @@ def _serie_diaria(con) -> None:
             JOIN hist_despesas_contratadas h
               ON h.dt_primeira_extracao <= d.dt_extracao
              AND h.dt_ultima_extracao >= d.dt_extracao
+            WHERE {filtro_placeholder('h.NR_CPF_CNPJ_FORNECEDOR', 'h.VR_DESPESA_CONTRATADA')}
             GROUP BY 1, 2),
         rec AS (
             SELECT d.dt_extracao, h.SQ_CANDIDATO,
@@ -74,6 +76,7 @@ def _serie_diaria(con) -> None:
             JOIN hist_receitas h
               ON h.dt_primeira_extracao <= d.dt_extracao
              AND h.dt_ultima_extracao >= d.dt_extracao
+            WHERE {filtro_placeholder('h.NR_CPF_CNPJ_DOADOR', 'h.VR_RECEITA')}
             GROUP BY 1, 2)
         SELECT COALESCE(desp.dt_extracao, rec.dt_extracao) AS dt_extracao,
                COALESCE(desp.SQ_CANDIDATO, rec.SQ_CANDIDATO) AS SQ_CANDIDATO,

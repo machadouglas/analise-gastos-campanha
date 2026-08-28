@@ -190,15 +190,18 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
              DS_ESPECIE_RECEITA AS "Espécie", ROUND(valor, 2) AS "Valor"
       FROM receitas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`);
 
-  const removidas = await executarSQL(`
-      SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS "Fornecedor",
-             DS_DESPESA AS "Descrição",
-             ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas, 2) AS "Valor",
-             STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
-             STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até"
-      FROM despesas
-      WHERE ${w} AND dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
-      ORDER BY 3 DESC LIMIT 30`);
+  // mesma régua do backend: sem retransmissões renumeradas, sem placeholders
+  const removidas = tabelasDisponiveis.has('despesas_removidas')
+    ? await executarSQL(`
+        SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS "Fornecedor",
+               DS_DESPESA AS "Descrição",
+               ROUND(valor, 2) AS "Valor",
+               STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
+               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até"
+        FROM despesas_removidas
+        WHERE ${w}
+        ORDER BY 3 DESC LIMIT 30`)
+    : { linhas: [] as unknown[][] };
 
   // marca na linha do tempo: último dia em que cada conteúdo removido esteve visível
   const serieRotulos = serie.linhas.map((l) => String(l[0]));

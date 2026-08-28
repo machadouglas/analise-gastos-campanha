@@ -7,6 +7,8 @@ import json
 
 import pandas as pd
 
+from src.carga import filtro_placeholder
+
 
 def _registros(con, sql) -> list[dict]:
     df = con.execute(sql).df()
@@ -110,6 +112,7 @@ def gerar(con) -> dict:
                DT_DESPESA
         FROM hist_despesas_contratadas
         WHERE dt_primeira_extracao = DATE '{dt_extracao}'
+          AND {filtro_placeholder('NR_CPF_CNPJ_FORNECEDOR', 'VR_DESPESA_CONTRATADA')}
         ORDER BY valor DESC LIMIT 15
     """)
 

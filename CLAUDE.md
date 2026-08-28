@@ -94,6 +94,7 @@ Para análises novas, prefira `gastos.py sql` — e se a consulta for útil de f
 - URLs e conteúdo de cada dataset: `docs/fontes-de-dados.md`.
 - O CDN do TSE bloqueia clientes HTTP comuns por fingerprint TLS (Akamai). `src/tse.py` usa `curl_cffi` com `impersonate="chrome"` — **não troque por requests/urllib, não funciona**.
 - CSVs do TSE: `latin-1`, separador `;`, aspas duplas. `#NULO`/`-1`/`-4` significam nulo/anonimizado.
+- O SPCE emite **linhas-placeholder** (contraparte `-1`/`#NULO` **e** valor zero = prestação sem movimento). Não são fatos: `carga.filtro_placeholder` as exclui das views tipadas, das `v_removidas_*`, da série e dos atalhos do site. Contraparte anônima **com** valor é fato (e indício) — nunca filtrar.
 - Os zips de prestação de contas têm arquivos por UF e um `_BRASIL.csv` consolidado; a carga usa o BRASIL.
 - `consulta_cand_{ano}.zip` é nacional com um CSV por UF (não existe zip por UF em 2026).
 
@@ -113,7 +114,11 @@ Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_
 SPA Vite + React + Tailwind v4. Se existir uma pasta local `trianox-front-standards/`
 (referência de padrão visual, fora do git), leia o `00-INDEX.md` dela antes de mexer no front;
 sem ela, siga o estilo do código existente (tema único papel/creme, acentos navy, lucide-react,
-componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release) e Consultar (DuckDB-WASM no
+componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release), Explorar
+(visões prontas via `?visao=` — removidas, compartilhados, sem-nota, pessoa-fisica — combináveis
+com os filtros; as views `despesas_atual`/`receitas_atual`/`despesas_removidas` e a lista de
+categorias sem NF vivem em `site/src/lib/duckdb.ts`/`explorar.tsx` e devem espelhar
+`src/carga.py`, `src/historico.py` e `src/analises.py`) e Consultar (DuckDB-WASM no
 navegador + prompt copiável para a IA pessoal do visitante gerar SQL — `site/src/lib/prompt.ts`;
 mantenha esse prompt sincronizado com o schema). Fichas `/candidato/:sq`, `/partido/:sigla` e
 `/fornecedor/:id` (id = NR_CPF_CNPJ_FORNECEDOR; linke só ids com `temFichaFornecedor`)

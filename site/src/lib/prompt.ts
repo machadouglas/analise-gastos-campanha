@@ -45,14 +45,15 @@ TABELAS DISPONÍVEIS:
 
 11. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios
 
-ATALHOS PRONTOS (prefira estes para perguntas sobre o estado atual):
+ATALHOS PRONTOS (prefira estes; já excluem linhas-placeholder do sistema do TSE — contraparte '-1'/'#NULO' com valor zero, que não são declarações):
 - despesas_atual e receitas_atual — já filtradas para a extração mais recente e com a coluna "valor" (DOUBLE, já multiplicada por qt_linhas).
+- despesas_removidas — declarações que saíram do ar, já sem os falsos positivos de retransmissão (o sistema do TSE renumera notas; só é remoção o conteúdo sem correspondente de mesma essência no estado atual). Também tem a coluna "valor".
 
 REGRAS OBRIGATÓRIAS:
 - Apenas SELECT/WITH (leitura). Sempre termine com LIMIT (máximo 200), exceto agregações pequenas.
 - Em despesas/receitas (históricas), converta valores assim: TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas
 - Datas declaradas: STRPTIME(DT_DESPESA, '%d/%m/%Y')
-- Declarações removidas/alteradas: WHERE dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
+- Declarações removidas: use a view despesas_removidas (o filtro cru por dt_ultima_extracao inclui retransmissões renumeradas e placeholders — evite).
 - Nulos do TSE: '#NULO' (vazio), '-1' (sem id), '-4' (CPF anonimizado) — filtre quando relevante.
 - Nomes estão em MAIÚSCULAS e sem padronização: busque com ILIKE '%TERMO%'.
 - Nome de fornecedor: COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)

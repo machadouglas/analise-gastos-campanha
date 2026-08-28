@@ -10,7 +10,7 @@ import {
   type ItemBarra, type PontoDispersao, type PontoLinha,
 } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
@@ -26,6 +26,77 @@ interface Filtros {
 }
 
 const FILTROS_VAZIOS: Filtros = { uf: '', cargo: '', partido: '', candidato: '', fornecedor: '', descricao: '' };
+
+/** Visões: recortes prontos que respondem uma pergunta e aceitam os demais filtros. */
+type Visao = 'atual' | 'removidas' | 'compartilhados' | 'sem-nota' | 'pessoa-fisica';
+
+const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
+  {
+    id: 'atual',
+    rotulo: 'Todos os gastos',
+    descricao: 'Estado atual das despesas declaradas ao TSE.',
+  },
+  {
+    id: 'removidas',
+    rotulo: 'Declarações removidas',
+    descricao:
+      'Despesas que estavam declaradas e deixaram de estar (retransmissões renumeradas pelo sistema do TSE não contam). Pode ser correção legítima — é indício, não acusação.',
+  },
+  {
+    id: 'compartilhados',
+    rotulo: 'Fornecedores compartilhados',
+    descricao:
+      'Só despesas com empresas que atendem mais de um candidato dentro do recorte filtrado — mercado consolidado ou campanhas casadas; o contexto decide.',
+  },
+  {
+    id: 'sem-nota',
+    rotulo: 'Sem nota fiscal',
+    descricao:
+      'Despesas documentadas sem nota fiscal, fora das categorias em que a nota não é o documento próprio (transferências, tributos, aluguel de imóvel, pessoal).',
+  },
+  {
+    id: 'pessoa-fisica',
+    rotulo: 'Pessoas físicas',
+    descricao: 'Despesas com fornecedores pessoa física — serviços relevantes merecem checagem de vínculo.',
+  },
+];
+
+// manter em sincronia com CATEGORIAS_SEM_NOTA_ESPERADA em src/analises.py
+const CATEGORIAS_SEM_NOTA_ESPERADA = [
+  'Doações financeiras a outros candidatos/partidos',
+  'Encargos financeiros, taxas bancárias e/ou op. cartão de crédito',
+  'Encargos sociais',
+  'Impostos, contribuições e taxas',
+  'Locação/cessão de bens imóveis',
+  'Despesas com pessoal',
+];
+
+function whereDaVisao(visao: Visao, w: string): { base: string; where: string } {
+  if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
+  if (visao === 'sem-nota') {
+    const categorias = CATEGORIAS_SEM_NOTA_ESPERADA.map((c) => `'${c.replaceAll("'", "''")}'`).join(', ');
+    return {
+      base: 'despesas_atual',
+      where:
+        `${w} AND (DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO = '#NULO'` +
+        ` OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%') AND DS_ORIGEM_DESPESA NOT IN (${categorias})`,
+    };
+  }
+  if (visao === 'pessoa-fisica') {
+    return { base: 'despesas_atual', where: `${w} AND DS_TIPO_FORNECEDOR ILIKE '%f_sica%'` };
+  }
+  if (visao === 'compartilhados') {
+    return {
+      base: 'despesas_atual',
+      where:
+        `${w} AND NR_CPF_CNPJ_FORNECEDOR IN (` +
+        `SELECT NR_CPF_CNPJ_FORNECEDOR FROM despesas_atual WHERE ${w}` +
+        ` AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')` +
+        ` GROUP BY 1 HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1)`,
+    };
+  }
+  return { base: 'despesas_atual', where: w };
+}
 
 function montarWhere(f: Filtros): string {
   const partes = ['1=1'];
@@ -118,6 +189,10 @@ export function Explorar() {
     fornecedor: params.get('fornecedor') ?? '',
     descricao: params.get('descricao') ?? '',
   };
+  const visaoParam = params.get('visao');
+  const [visao, setVisao] = useState<Visao>(
+    VISOES.some((v) => v.id === visaoParam) ? (visaoParam as Visao) : 'atual',
+  );
   const [filtros, setFiltros] = useState<Filtros>(iniciais);
   const [digitado, setDigitado] = useState({
     candidato: iniciais.candidato,
@@ -136,12 +211,12 @@ export function Explorar() {
       .catch(() => {});
   }, []);
 
-  const consultar = useCallback(async (f: Filtros, pag: number) => {
+  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao) => {
     setCarregando(true);
     setErro(null);
     try {
-      const w = montarWhere(f);
-      const encontrados = f.candidato.trim()
+      const { base, where: w } = whereDaVisao(v, montarWhere(f));
+      const encontrados = v === 'atual' && f.candidato.trim()
         ? await executarSQL(`
             SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
                    ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF),
@@ -150,27 +225,46 @@ export function Explorar() {
             WHERE ${w}
             GROUP BY 1 ORDER BY total DESC LIMIT 100`)
         : { linhas: [] as unknown[][] };
+      const colunaExtra =
+        v === 'sem-nota'
+          ? 'DS_TIPO_DOCUMENTO AS "Documento",'
+          : v === 'removidas'
+            ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
+            : '';
+      const tabelaSQL =
+        v === 'compartilhados'
+          ? `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
+                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
+                    NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
+                    COUNT(DISTINCT SQ_CANDIDATO) AS "Candidatos",
+                    COUNT(DISTINCT SG_PARTIDO) AS "Partidos",
+                    STRING_AGG(DISTINCT SG_UF, ', ') AS "UFs",
+                    ROUND(SUM(valor), 2) AS "Total"
+             FROM ${base} WHERE ${w}
+             GROUP BY ALL ORDER BY "Total" DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
+          : `SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
+                    DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
+                    SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
+                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
+                    DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
+                    ${colunaExtra}
+                    ROUND(valor, 2) AS "Valor"
+             FROM ${base} WHERE ${w}
+             ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`;
       const [kpis, categorias, candidatos, porDia, tabela, dispersao] = await Promise.all([
         executarSQL(`SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
                             COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR), COUNT(*)
-                     FROM despesas_atual WHERE ${w}`),
+                     FROM ${base} WHERE ${w}`),
         executarSQL(`SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor),2) AS total
-                     FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
+                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
         executarSQL(`SELECT NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
-                     FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
+                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
         executarSQL(`SELECT STRFTIME(STRPTIME(DT_DESPESA, '%d/%m/%Y'), '%d/%m') AS dia,
                             MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
-                     FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
+                     FROM ${base} WHERE ${w} AND DT_DESPESA <> '#NULO'
                      GROUP BY 1 ORDER BY ord`),
-        executarSQL(`SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
-                            DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
-                            SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
-                            COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
-                            DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
-                            ROUND(valor, 2) AS "Valor"
-                     FROM despesas_atual WHERE ${w}
-                     ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`),
-        consultarDispersao(f),
+        executarSQL(tabelaSQL),
+        v === 'atual' ? consultarDispersao(f) : Promise.resolve(null),
       ]);
       const [contratado, nCand, nForn, itens] = kpis.linhas[0] ?? [0, 0, 0, 0];
       setDados({
@@ -204,8 +298,8 @@ export function Explorar() {
   }, []);
 
   useEffect(() => {
-    void consultar(filtros, pagina);
-  }, [filtros, pagina, consultar]);
+    void consultar(filtros, pagina, visao);
+  }, [filtros, pagina, visao, consultar]);
 
   function mudar(parcial: Partial<Filtros>) {
     setPagina(0);
@@ -218,9 +312,34 @@ export function Explorar() {
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Explorar</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Navegue pelos gastos</h1>
         <p className="mt-3 max-w-3xl leading-relaxed text-muted-foreground">
-          Combine os filtros como quiser — cada campo filtra o que diz: candidato (nome ou número),
-          fornecedor (nome ou CNPJ), descrição do gasto. Tudo roda no seu navegador, sobre o estado
-          atual das declarações.
+          Escolha uma visão, combine com os filtros — candidato (nome ou número), fornecedor
+          (nome ou CNPJ), descrição do gasto — e tudo roda no seu navegador.
+        </p>
+      </div>
+
+      <div>
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Visão">
+          {VISOES.map((v) => (
+            <button
+              key={v.id}
+              role="tab"
+              aria-selected={visao === v.id}
+              onClick={() => {
+                setPagina(0);
+                setVisao(v.id);
+              }}
+              className={
+                visao === v.id
+                  ? 'rounded-full bg-gradient-to-r from-[#10244A] to-[#264E9B] px-4 py-1.5 text-sm font-semibold text-white shadow-sm'
+                  : 'rounded-full border bg-card px-4 py-1.5 text-sm text-muted-foreground shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-foreground'
+              }
+            >
+              {v.rotulo}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+          {VISOES.find((v) => v.id === visao)?.descricao}
         </p>
       </div>
 
@@ -395,7 +514,11 @@ export function Explorar() {
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Despesas do recorte, maiores primeiro — página {pagina + 1}
+                {visao === 'compartilhados'
+                  ? 'Fornecedores compartilhados do recorte, maiores primeiro'
+                  : visao === 'removidas'
+                    ? 'Declarações removidas do recorte, maiores primeiro'
+                    : 'Despesas do recorte, maiores primeiro'} — página {pagina + 1}
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" disabled={pagina === 0 || carregando} onClick={() => setPagina((p) => p - 1)}>
@@ -411,13 +534,21 @@ export function Explorar() {
                 </Button>
               </div>
             </div>
-            <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({ titulo: c, numerica: c === 'Valor' }))}>
+            <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
+              titulo: c,
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos'].includes(c),
+            }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
                   {l.map((v, j) => {
                     const col = dados.colunas[j];
                     if (col.startsWith('_')) return null;
-                    if (col === 'Valor') return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
+                    if (col === 'Valor' || col === 'Total')
+                      return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
+                    if (col === 'Candidatos' || col === 'Partidos')
+                      return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
+                    if (col === 'CNPJ/CPF')
+                      return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
                     if (col === 'Candidato')
                       return (
                         <td key={j}>

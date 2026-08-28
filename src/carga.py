@@ -18,12 +18,21 @@ TABELAS = {
     "bens": "bem_candidato_{ano}_BRASIL.csv",  # patrimônio declarado no registro
 }
 
-# views tipadas: (view, tabela, coluna de valor, coluna de data)
+# views tipadas: (view, tabela, coluna de valor, coluna de data, coluna da contraparte)
+# O SPCE emite linhas-placeholder (prestação sem movimento: contraparte '-1'/'#NULO'
+# E valor zero) — não são fatos declarados e ficam fora das views tipadas.
 VIEWS_VALOR = [
-    ("v_despesas", "despesas_contratadas", "VR_DESPESA_CONTRATADA", "DT_DESPESA"),
-    ("v_receitas", "receitas", "VR_RECEITA", "DT_RECEITA"),
-    ("v_bens", "bens", "VR_BEM_CANDIDATO", "DT_ULT_ATUAL_BEM_CANDIDATO"),
+    ("v_despesas", "despesas_contratadas", "VR_DESPESA_CONTRATADA", "DT_DESPESA", "NR_CPF_CNPJ_FORNECEDOR"),
+    ("v_receitas", "receitas", "VR_RECEITA", "DT_RECEITA", "NR_CPF_CNPJ_DOADOR"),
+    ("v_bens", "bens", "VR_BEM_CANDIDATO", "DT_ULT_ATUAL_BEM_CANDIDATO", None),
 ]
+
+
+def filtro_placeholder(col_contraparte: str, col_valor: str) -> str:
+    """Condição SQL que descarta a linha-placeholder (sem contraparte E sem valor).
+    Contraparte anônima com valor declarado NÃO é placeholder — é fato (e indício)."""
+    return (f"NOT ({col_contraparte} IN ('-1', '#NULO') AND "
+            f"COALESCE(TRY_CAST(REPLACE({col_valor}, ',', '.') AS DOUBLE), 0) = 0)")
 
 # despesas_pagas não traz colunas do candidato — liga pelo SQ_PRESTADOR_CONTAS
 SQL_VIEWS_PAGAS = """
@@ -87,17 +96,19 @@ def carregar(ano: int) -> None:
 
 def criar_views(con) -> None:
     """(Re)cria as views tipadas sobre as tabelas brutas existentes."""
-    for view, tabela, col_valor, col_data in VIEWS_VALOR:
+    for view, tabela, col_valor, col_data, col_contraparte in VIEWS_VALOR:
         if not con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [tabela]
         ).fetchone()[0]:
             continue
+        filtro = filtro_placeholder(col_contraparte, col_valor) if col_contraparte else "1=1"
         con.execute(f"""
             CREATE OR REPLACE VIEW {view} AS
             SELECT *,
                    TRY_CAST(REPLACE({col_valor}, ',', '.') AS DOUBLE) AS VR,
                    TRY_CAST(STRPTIME({col_data}, '%d/%m/%Y') AS DATE) AS DT
             FROM {tabela}
+            WHERE {filtro}
         """)
         print(f"[view] {view}")
 

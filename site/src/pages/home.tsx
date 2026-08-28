@@ -50,8 +50,8 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
   {
     icone: Building2,
     pergunta: 'Que empresas recebem de vários candidatos ao mesmo tempo?',
-    detalhe: 'Fornecedores compartilhados podem ser mercado consolidado — ou campanhas casadas.',
-    href: '#conexoes',
+    detalhe: 'Fornecedores compartilhados podem ser mercado consolidado — ou campanhas casadas. Filtre por UF, cargo ou partido.',
+    href: '/explorar?visao=compartilhados',
   },
   {
     icone: Megaphone,
@@ -68,8 +68,8 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
   {
     icone: EyeOff,
     pergunta: 'Alguém removeu declarações que já tinha feito?',
-    detalhe: 'O TSE não mostra o passado; o radar fotografa todo dia e guarda o rastro.',
-    href: '#mudancas',
+    detalhe: 'O TSE não mostra o passado; o radar fotografa todo dia e guarda o rastro. Explore todas as remoções, com filtros.',
+    href: '/explorar?visao=removidas',
   },
   {
     icone: Bot,
@@ -137,12 +137,15 @@ function Secao({
   titulo,
   descricao,
   id,
+  verTudo,
   children,
 }: {
   eyebrow: string;
   titulo: string;
   descricao: string;
   id?: string;
+  /** rota do Explorar com a visão/filtro desta seção já aplicados */
+  verTudo?: { href: string; rotulo: string };
   children: React.ReactNode;
 }) {
   return (
@@ -153,6 +156,14 @@ function Secao({
       <h2 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">{titulo}</h2>
       <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">{descricao}</p>
       <div className="mt-6">{children}</div>
+      {verTudo && (
+        <Link
+          to={verTudo.href}
+          className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+        >
+          {verTudo.rotulo} <ArrowRight className="h-4 w-4" />
+        </Link>
+      )}
     </section>
   );
 }
@@ -249,7 +260,8 @@ export function Home() {
         id="mudancas"
         eyebrow="O diferencial"
         titulo="Declarações removidas ou alteradas"
-        descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Aqui fica registrado o que estava declarado e deixou de estar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
+        descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Aqui ficam as maiores; a lista completa, com filtros por UF, cargo, partido ou candidato, está no Explorar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
+        verTudo={{ href: '/explorar?visao=removidas', rotulo: 'Ver todas as remoções no Explorar' }}
       >
         {removidas.length === 0 && removidasReceitas.length === 0 ? (
           <Card>
@@ -370,6 +382,7 @@ export function Home() {
         eyebrow="Conexões"
         titulo="Fornecedores de múltiplos candidatos"
         descricao="Empresas atendendo vários candidatos podem ser fornecedores consolidados do ramo — ou indicar campanhas casadas e rateios. O contexto decide. Clique no nome para abrir a ficha do fornecedor."
+        verTudo={{ href: '/explorar?visao=compartilhados', rotulo: 'Ver todos os compartilhados no Explorar' }}
       >
         <Tabela
           colunas={[
@@ -407,6 +420,7 @@ export function Home() {
         eyebrow="Ranking"
         titulo="Quem mais contratou até agora"
         descricao="Despesa contratada × receita declarada. Contratar muito acima do que declarou arrecadar merece atenção — a conta precisa fechar até a prestação final."
+        verTudo={{ href: '/explorar', rotulo: 'Explorar todos os gastos' }}
       >
         <Tabela
           colunas={[

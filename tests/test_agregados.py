@@ -310,6 +310,56 @@ def test_rede_reconcilia_com_despesas_e_receitas(banco):
     assert doacao == pytest.approx(1234.56)
 
 
+PLACEHOLDER_DESPESA = {
+    "SQ_DESPESA": "-1", "NR_CPF_CNPJ_FORNECEDOR": "-1", "NM_FORNECEDOR": "#NULO",
+    "DS_DESPESA": "#NULO", "DS_ORIGEM_DESPESA": "#NULO", "DS_TIPO_DOCUMENTO": "#NULO",
+    "DS_CNAE_FORNECEDOR": "#NULO", "DS_TIPO_FORNECEDOR": "#NULO",
+    "VR_DESPESA_CONTRATADA": "0", "DT_DESPESA": "#NULO",
+}
+
+
+def test_linha_placeholder_do_spce_nao_e_fato(banco):
+    """Prestação sem movimento (contraparte '-1' E valor zero) não pode virar
+    fornecedor, item nem categoria — não há fato declarado ali."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        dict(PLACEHOLDER_DESPESA),
+        {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "300,00"},
+    ], receitas=[
+        {"SQ_RECEITA": "-1", "NR_CPF_CNPJ_DOADOR": "-1", "NM_DOADOR": "#NULO",
+         "DS_ORIGEM_RECEITA": "#NULO", "VR_RECEITA": "0", "DT_RECEITA": "#NULO"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute("SELECT COUNT(*) FROM v_despesas").fetchone()[0] == 1
+    assert banco.execute("SELECT COUNT(*) FROM v_receitas").fetchone()[0] == 0
+    ind = banco.execute(
+        "SELECT itens, n_fornecedores, total_contratado FROM indicadores"
+    ).fetchone()
+    assert ind == (1, 1, pytest.approx(300.0))
+
+
+def test_contraparte_anonima_com_valor_e_fato_e_indicio(banco):
+    """Doação de origem não identificada COM valor não é placeholder — entra."""
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "1", "NR_CPF_CNPJ_DOADOR": "-1", "NM_DOADOR": "#NULO",
+         "DS_ORIGEM_RECEITA": "Recursos de origens não identificadas",
+         "VR_RECEITA": "500,00"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute("SELECT SUM(VR) FROM v_receitas").fetchone()[0] == pytest.approx(500.0)
+
+
+def test_placeholder_substituido_por_declaracao_real_nao_e_remocao(banco):
+    """A primeira declaração real substitui o placeholder no arquivo do TSE —
+    isso não pode aparecer como 'declaração removida'."""
+    extrair_dia(banco, "20/08/2026", despesas=[dict(PLACEHOLDER_DESPESA)])
+    extrair_dia(banco, "21/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "300,00"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute("SELECT COUNT(*) FROM v_removidas_despesas_contratadas").fetchone()[0] == 0
+    assert banco.execute("SELECT valor_removido FROM indicadores").fetchone()[0] == pytest.approx(0.0)
+
+
 def test_benchmark_conta_por_nota_e_nao_por_item(banco):
     """Nota fatiada em itens não pode entrar N vezes na distribuição de preços:
     3 itens de R$ 10 da mesma nota = UMA observação de R$ 30."""
