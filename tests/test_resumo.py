@@ -103,6 +103,10 @@ def test_fora_da_curva_aponta_quem_estoura_o_p95_do_grupo(banco):
     json.dumps(r)  # o site consome JSON — tipos numpy não podem vazar
     fora = r["fora_da_curva"]
     assert [c["NM_CANDIDATO"] for c in fora] == ["GASTADOR"]
+    # contrato da foto: as chaves existem sempre; sem CD_ELEICAO/SG_UE na tabela
+    # candidatos (caso deste banco de teste) vêm nulas e o site cai nas iniciais
+    assert fora[0]["cd_eleicao"] is None
+    assert fora[0]["sg_ue"] is None
     sinal = fora[0]["sinais"][0]
     assert sinal["metrica"] == "total_contratado"
     assert sinal["valor"] == pytest.approx(100000.0)

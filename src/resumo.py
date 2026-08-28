@@ -38,6 +38,17 @@ def _existe(con, tabela: str) -> bool:
     ).fetchone()[0])
 
 
+def _tem_metadados_foto(con) -> bool:
+    """A foto oficial do TSE precisa de CD_ELEICAO e SG_UE (registro de
+    candidaturas); bancos de teste/antigos podem não ter as colunas."""
+    if not _existe(con, "candidatos"):
+        return False
+    cols = {r[0] for r in con.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'candidatos'"
+    ).fetchall()}
+    return {"CD_ELEICAO", "SG_UE"} <= cols
+
+
 def _fora_da_curva(con, limite: int = 10) -> list[dict]:
     """Candidatos com mais métricas estritamente acima do p95 do próprio grupo
     de comparação (cargo×UF; nacional quando o grupo local é pequeno).
@@ -48,6 +59,14 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
         f"SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, '{nome}' AS metrica, {expr} AS valor "
         f"FROM indicadores WHERE {filtro}"
         for nome, expr, filtro in METRICAS_SINAL
+    )
+    # metadados da foto oficial (divulgacandcontas): o site usa como hotlink,
+    # com fallback para iniciais quando ausentes
+    foto = (
+        "LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd_eleicao, "
+        "ANY_VALUE(SG_UE) AS sg_ue FROM candidatos GROUP BY 1) c USING (SQ_CANDIDATO)"
+        if _tem_metadados_foto(con)
+        else "LEFT JOIN (SELECT NULL AS SQ_CANDIDATO, NULL AS cd_eleicao, NULL AS sg_ue) c USING (SQ_CANDIDATO)"
     )
     df = con.execute(f"""
         WITH m AS ({unioes}),
@@ -63,9 +82,10 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
             LEFT JOIN benchmark_indicadores bbr
               ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica)
         SELECT r.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO, i.DS_CARGO, i.SG_UF,
-               i.total_contratado, i.total_receitas,
+               i.total_contratado, i.total_receitas, c.cd_eleicao, c.sg_ue,
                r.metrica, ROUND(r.valor, 2) AS valor, r.mediana, r.p95, r.grupo_n, r.grupo_ambito
         FROM ref r JOIN indicadores i USING (SQ_CANDIDATO)
+        {foto}
         WHERE r.p95 IS NOT NULL AND r.valor > r.p95
         ORDER BY r.SQ_CANDIDATO
     """).df()
@@ -82,6 +102,8 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
             "SG_UF": primeiro["SG_UF"],
             "total_contratado": float(primeiro["total_contratado"] or 0),
             "total_receitas": None if pd.isna(primeiro["total_receitas"]) else float(primeiro["total_receitas"]),
+            "cd_eleicao": None if pd.isna(primeiro["cd_eleicao"]) else str(primeiro["cd_eleicao"]),
+            "sg_ue": None if pd.isna(primeiro["sg_ue"]) else str(primeiro["sg_ue"]),
             "sinais": [
                 {"metrica": s["metrica"], "valor": float(s["valor"]),
                  "mediana": float(s["mediana"]), "p95": float(s["p95"]),

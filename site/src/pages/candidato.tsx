@@ -16,6 +16,7 @@ import {
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
+import { FotoCandidato } from '@/components/app/foto';
 
 interface Perfil {
   nome: string;
@@ -23,6 +24,9 @@ interface Perfil {
   partido: string;
   cargo: string;
   uf: string;
+  /** metadados da foto oficial (registro de candidaturas); null se indisponíveis */
+  cdEleicao: string | null;
+  sgUe: string | null;
   contratado: number;
   receitas: number | null;
   pago: number | null;
@@ -84,12 +88,33 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       ` (${linha.fornecedores_consultados} de ${linha.fornecedores_cnpj} CNPJs verificados)`,
     );
 
+  // foto oficial: precisa de CD_ELEICAO/SG_UE do registro de candidaturas
+  // (parquet antigo pode não ter as colunas — a ficha degrada para iniciais)
+  let cdEleicao: string | null = null;
+  let sgUe: string | null = null;
+  if (tabelasDisponiveis.has('candidatos')) {
+    try {
+      const r = await executarSQL(
+        `SELECT ANY_VALUE(CD_ELEICAO), ANY_VALUE(SG_UE) FROM candidatos WHERE ${w}`,
+      );
+      const l = r.linhas[0];
+      if (l && l[0] != null && l[1] != null) {
+        cdEleicao = String(l[0]);
+        sgUe = String(l[1]);
+      }
+    } catch {
+      // sem as colunas no parquet publicado — segue sem foto
+    }
+  }
+
   const perfil: Perfil = {
     nome: String(linha.NM_CANDIDATO),
     numero: String(linha.NR_CANDIDATO),
     partido: String(linha.SG_PARTIDO),
     cargo: String(linha.DS_CARGO),
     uf: String(linha.SG_UF),
+    cdEleicao,
+    sgUe,
     contratado: Number(linha.total_contratado ?? 0),
     receitas: linha.total_receitas == null ? null : Number(linha.total_receitas),
     pago: linha.total_pago == null ? null : Number(linha.total_pago),
@@ -285,14 +310,25 @@ export function Candidato() {
     <div className="mx-auto max-w-7xl space-y-6 px-6 py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do candidato</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{p.nome}</h1>
-        <p className="mt-2 text-muted-foreground">
-          nº {p.numero} · {p.cargo} ·{' '}
-          <Link to={`/partido/${encodeURIComponent(p.partido)}`} className="text-[#264E9B] underline underline-offset-4">
-            {p.partido}
-          </Link>{' '}
-          · {p.uf}
-        </p>
+        <div className="mt-2 flex items-center gap-4">
+          <FotoCandidato
+            cdEleicao={p.cdEleicao}
+            sq={sq ?? null}
+            sgUe={p.sgUe}
+            nome={p.nome}
+            className="h-16 w-16 text-lg sm:h-20 sm:w-20"
+          />
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{p.nome}</h1>
+            <p className="mt-2 text-muted-foreground">
+              nº {p.numero} · {p.cargo} ·{' '}
+              <Link to={`/partido/${encodeURIComponent(p.partido)}`} className="text-[#264E9B] underline underline-offset-4">
+                {p.partido}
+              </Link>{' '}
+              · {p.uf}
+            </p>
+          </div>
+        </div>
         {p.flags.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-2">
             {p.flags.map((f) => (

@@ -32,7 +32,9 @@ export function Metodologia() {
           — a prestação de contas oficial das Eleições 2026 (despesas contratadas, despesas pagas,
           receitas, doadores originários) e o registro de candidaturas. O cadastro dos fornecedores
           (data de abertura, porte, sócios, sede) vem do cadastro público de CNPJ da Receita
-          Federal, consultado via BrasilAPI. Nenhum dado é coletado de fontes privadas.
+          Federal, consultado via BrasilAPI. As fotos dos candidatos são carregadas diretamente
+          do serviço oficial de divulgação de candidaturas do TSE (DivulgaCandContas), sem cópia
+          nem armazenamento nosso. Nenhum dado é coletado de fontes privadas.
         </p>
         <p>
           <strong>Os dados são declaratórios</strong>: refletem o que os próprios candidatos

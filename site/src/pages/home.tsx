@@ -8,6 +8,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
+import { FotoCandidato } from '@/components/app/foto';
 import { carregarResumo, type Resumo, type DespesaResumo, type CandidatoForaDaCurva } from '@/lib/resumo';
 import { brl, num, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
@@ -343,7 +344,17 @@ export function Home() {
         >
           <div className="space-y-3">
             {(resumo.fora_da_curva ?? []).slice(0, 5).map((c: CandidatoForaDaCurva) => (
-              <div key={c.SQ_CANDIDATO} className="rounded-xl border bg-card p-4 shadow-sm">
+              <div key={c.SQ_CANDIDATO} className="flex items-start gap-4 rounded-xl border bg-card p-4 shadow-sm">
+                <Link to={`/candidato/${c.SQ_CANDIDATO}`} tabIndex={-1} aria-hidden>
+                  <FotoCandidato
+                    cdEleicao={c.cd_eleicao}
+                    sq={c.SQ_CANDIDATO}
+                    sgUe={c.sg_ue}
+                    nome={c.NM_CANDIDATO}
+                    className="h-12 w-12 text-sm"
+                  />
+                </Link>
+                <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <Link
                     to={`/candidato/${c.SQ_CANDIDATO}`}
@@ -381,6 +392,7 @@ export function Home() {
                       </Link>
                     );
                   })}
+                </div>
                 </div>
               </div>
             ))}

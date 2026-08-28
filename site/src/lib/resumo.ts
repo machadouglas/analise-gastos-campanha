@@ -58,6 +58,9 @@ export interface CandidatoForaDaCurva {
   SG_UF: string;
   total_contratado: number;
   total_receitas: number | null;
+  /** metadados da foto oficial no TSE (resumos antigos podem não trazer) */
+  cd_eleicao?: string | null;
+  sg_ue?: string | null;
   sinais: SinalForaDaCurva[];
 }
 
