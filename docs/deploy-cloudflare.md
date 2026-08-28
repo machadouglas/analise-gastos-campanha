@@ -42,3 +42,27 @@ Obs.: navegação direta para /consultar num servidor estático simples dá 404 
 ## Fork
 
 Troque a constante `BASE` em `site/functions/dados/[arquivo].js` para o seu repositório.
+
+## Plano de escala: migrar `/dados` para R2 público (não implementado)
+
+Hoje os Parquet saem do GitHub Releases via Pages Function. Funciona e é grátis, mas tem
+dois limites que podem apertar no pico da campanha: cada request paga um salto extra de
+proxy (Function → GitHub) e o GitHub não é um CDN de dados (sem `Range` confiável em
+qualquer situação, sem controle de cache fino, rate limit compartilhado).
+
+Quando (se) o tráfego justificar, o caminho é:
+
+1. Criar um bucket **R2** com [domínio público](https://developers.cloudflare.com/r2/buckets/public-buckets/)
+   (ex.: `dados.<dominio>`), com CORS liberado para o domínio do site.
+2. Na rotina diária, trocar/complementar o `gh release upload` por upload ao R2
+   (`rclone` ou `aws s3api` com endpoint R2; credencial via variável de ambiente no
+   container — nunca em arquivo versionado).
+3. No site, apontar a origem dos dados para o domínio do bucket (hoje é
+   `window.location.origin` + `/dados/` em `site/src/lib/duckdb.ts` e a Pages Function);
+   com CORS correto a Function inteira deixa de ser necessária.
+4. Manter o release `dados` como espelho público consultável por URL (reprodutibilidade —
+   a metodologia promete os dados abertos lá).
+
+Benefícios: leituras `Range` de Parquet direto do CDN (DuckDB-WASM baixa só as colunas
+que usa), cache na borda, sem rate limit do GitHub. Custo: R2 cobra por armazenamento e
+operações — com os volumes atuais (poucos MB/dia) fica na faixa gratuita.
