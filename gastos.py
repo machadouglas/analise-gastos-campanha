@@ -4,7 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
+# line_buffering: logs saem em tempo real mesmo com stdout em pipe (Coolify)
+sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src import agregados, analises, carga, cnpj, exportar, historico, tse, verificacao
@@ -56,21 +57,32 @@ def cmd_exportar(args):
 
 def cmd_rotina(args):
     """Pipeline diário completo: baixar -> carregar/versionar -> verificar -> exportar/publicar."""
+    def etapa(nome):
+        from datetime import datetime
+        print(f"\n=== [{datetime.now():%H:%M:%S}] {nome} ===")
+
+    etapa("baixando dados do TSE")
     for c in tse.CONJUNTOS:
         try:
             tse.baixar_conjunto(c, args.ano, forcar=True)
         except RuntimeError as e:
             print(f"[erro] {c}: {e}")
+    etapa("carregando no banco")
     carga.carregar(args.ano)
     con = carga.conectar()
+    etapa("versionando extração")
     historico.versionar(con)
+    etapa("enriquecendo CNPJs")
     cnpj.enriquecer_em_massa(con, limite=args.limite_cnpj)
+    etapa("materializando agregados")
     agregados.materializar(con)
+    etapa("verificando integridade")
     falhas = verificacao.verificar(con)
     if falhas:
         con.close()
         print("[abortado] verificação de dados falhou — nada foi publicado")
         sys.exit(1)
+    etapa("exportando e publicando")
     arquivos = exportar.exportar(con)
     for titulo, df in historico.resumo_mudancas(con):
         print(f"[mudancas] {titulo}: {len(df)} linhas")

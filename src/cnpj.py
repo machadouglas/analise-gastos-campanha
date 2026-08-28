@@ -56,7 +56,9 @@ def enriquecer_em_massa(con, limite: int = 250) -> int:
         return 0
     print(f"[cnpj] enriquecendo {len(pendentes)} fornecedores (BrasilAPI, com cache)...")
     novos = 0
-    for numero, _ in pendentes:
+    for i, (numero, _) in enumerate(pendentes, 1):
+        if i % 25 == 0:
+            print(f"[cnpj] {i}/{len(pendentes)} consultados ({novos} novos até aqui)")
         dados = consultar(numero)
         if not dados:
             continue

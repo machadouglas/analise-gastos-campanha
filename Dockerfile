@@ -29,5 +29,7 @@ VOLUME /app/data
 # O container não tem git/.git, então o gh precisa saber o repo de destino dos
 # releases. Num fork, sobrescreva GH_REPO nas variáveis de ambiente do deploy.
 ENV GH_REPO=machadouglas/analise-gastos-campanha
+# logs em tempo real na Scheduled Task (sem buffer de bloco no pipe)
+ENV PYTHONUNBUFFERED=1
 
 CMD ["sleep", "infinity"]
