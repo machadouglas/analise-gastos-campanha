@@ -29,7 +29,11 @@ interface Filtros {
 const FILTROS_VAZIOS: Filtros = { uf: '', cargo: '', partido: '', candidato: '', fornecedor: '', descricao: '' };
 
 /** Visões: recortes prontos que respondem uma pergunta e aceitam os demais filtros. */
-type Visao = 'atual' | 'fora-da-curva' | 'removidas' | 'compartilhados' | 'sem-nota' | 'pessoa-fisica';
+type Visao = 'atual' | 'fora-da-curva' | 'removidas' | 'removidas-receitas' | 'compartilhados' | 'sem-nota' | 'pessoa-fisica';
+
+/** A visão de receitas removidas anda sobre a tabela de receitas — a contraparte
+ *  é o doador e a categoria é a origem da receita, não a do gasto. */
+const eVisaoReceitas = (v: Visao) => v === 'removidas-receitas';
 
 const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
   {
@@ -45,9 +49,15 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
   },
   {
     id: 'removidas',
-    rotulo: 'Declarações removidas',
+    rotulo: 'Despesas removidas',
     descricao:
       'Despesas que estavam declaradas e deixaram de estar (retransmissões renumeradas pelo sistema do TSE não contam). Pode ser correção legítima — é indício, não acusação.',
+  },
+  {
+    id: 'removidas-receitas',
+    rotulo: 'Receitas removidas',
+    descricao:
+      'Doações e repasses que estavam declarados e deixaram de estar (retransmissões renumeradas pelo sistema do TSE não contam). Pode ser correção legítima — é indício, não acusação.',
   },
   {
     id: 'compartilhados',
@@ -156,6 +166,7 @@ function cteCategoria(categoria: string): string {
 }
 
 function whereDaVisao(visao: Visao, f: Filtros, sinal: SinalFiltro, categoria: string): { base: string; where: string } {
+  if (visao === 'removidas-receitas') return { base: 'receitas_removidas', where: montarWhere(f, true) };
   const w = montarWhere(f);
   if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
   if (visao === 'fora-da-curva') {
@@ -203,7 +214,7 @@ function whereDaVisao(visao: Visao, f: Filtros, sinal: SinalFiltro, categoria: s
   return { base: 'despesas_atual', where: w };
 }
 
-function montarWhere(f: Filtros): string {
+function montarWhere(f: Filtros, receitas = false): string {
   const partes = ['1=1'];
   const esc = (s: string) => s.replaceAll("'", "''");
   if (f.uf) partes.push(`SG_UF = '${esc(f.uf)}'`);
@@ -219,15 +230,22 @@ function montarWhere(f: Filtros): string {
   }
   const forn = f.fornecedor.trim();
   if (forn) {
+    const [colId, colNome, colNomeRfb] = receitas
+      ? ['NR_CPF_CNPJ_DOADOR', 'NM_DOADOR', 'NM_DOADOR_RFB']
+      : ['NR_CPF_CNPJ_FORNECEDOR', 'NM_FORNECEDOR', 'NM_FORNECEDOR_RFB'];
     partes.push(
       /^[\d./-]+$/.test(forn)
-        ? `NR_CPF_CNPJ_FORNECEDOR LIKE '${forn.replace(/\D/g, '')}%'`
-        : `(NM_FORNECEDOR ILIKE '%${esc(forn)}%' OR NM_FORNECEDOR_RFB ILIKE '%${esc(forn)}%')`,
+        ? `${colId} LIKE '${forn.replace(/\D/g, '')}%'`
+        : `(${colNome} ILIKE '%${esc(forn)}%' OR ${colNomeRfb} ILIKE '%${esc(forn)}%')`,
     );
   }
   const desc = f.descricao.trim();
   if (desc) {
-    partes.push(`(DS_DESPESA ILIKE '%${esc(desc)}%' OR DS_ORIGEM_DESPESA ILIKE '%${esc(desc)}%')`);
+    partes.push(
+      receitas
+        ? `(DS_ORIGEM_RECEITA ILIKE '%${esc(desc)}%' OR DS_ESPECIE_RECEITA ILIKE '%${esc(desc)}%')`
+        : `(DS_DESPESA ILIKE '%${esc(desc)}%' OR DS_ORIGEM_DESPESA ILIKE '%${esc(desc)}%')`,
+    );
   }
   return partes.join(' AND ');
 }
@@ -354,7 +372,18 @@ export function Explorar() {
             ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
             : '';
       const tabelaSQL =
-        v === 'fora-da-curva' && cat
+        v === 'removidas-receitas'
+          ? `SELECT SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
+                    DT_RECEITA AS "Data", NM_CANDIDATO AS "Candidato",
+                    SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
+                    COALESCE(NULLIF(NM_DOADOR_RFB,'#NULO'), NULLIF(NM_DOADOR,'#NULO'),
+                             'Não identificado (declarado sem contraparte)') AS "Doador",
+                    DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
+                    STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Visível até",
+                    ROUND(valor, 2) AS "Valor"
+             FROM ${base} WHERE ${w}
+             ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
+          : v === 'fora-da-curva' && cat
           ? `WITH ${cteCategoria(cat)}
              SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
                     i.NM_CANDIDATO AS "Candidato",
@@ -405,17 +434,22 @@ export function Explorar() {
                     ROUND(valor, 2) AS "Valor"
              FROM ${base} WHERE ${w}
              ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`;
+      // a visão de receitas removidas anda sobre receitas: contraparte, categoria
+      // e data vêm das colunas de doação
+      const colContraparte = eVisaoReceitas(v) ? 'NR_CPF_CNPJ_DOADOR' : 'NR_CPF_CNPJ_FORNECEDOR';
+      const colCategoria = eVisaoReceitas(v) ? 'DS_ORIGEM_RECEITA' : 'DS_ORIGEM_DESPESA';
+      const colData = eVisaoReceitas(v) ? 'DT_RECEITA' : 'DT_DESPESA';
       const [kpis, categorias, candidatos, porDia, tabela, dispersao] = await Promise.all([
         executarSQL(`SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
-                            COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR), COUNT(*)
+                            COUNT(DISTINCT ${colContraparte}), COUNT(*)
                      FROM ${base} WHERE ${w}`),
-        executarSQL(`SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor),2) AS total
+        executarSQL(`SELECT ${colCategoria}, ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
         executarSQL(`SELECT NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
-        executarSQL(`SELECT STRFTIME(STRPTIME(DT_DESPESA, '%d/%m/%Y'), '%d/%m') AS dia,
-                            MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
-                     FROM ${base} WHERE ${w} AND DT_DESPESA <> '#NULO'
+        executarSQL(`SELECT STRFTIME(STRPTIME(${colData}, '%d/%m/%Y'), '%d/%m') AS dia,
+                            MIN(STRPTIME(${colData}, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
+                     FROM ${base} WHERE ${w} AND ${colData} <> '#NULO'
                      GROUP BY 1 ORDER BY ord`),
         executarSQL(tabelaSQL),
         v === 'atual' ? consultarDispersao(f) : Promise.resolve(null),
@@ -578,17 +612,17 @@ export function Explorar() {
         />
         <input
           className={`${seletor} w-52`}
-          placeholder="Fornecedor (nome ou CNPJ)"
+          placeholder={eVisaoReceitas(visao) ? 'Doador (nome ou CNPJ)' : 'Fornecedor (nome ou CNPJ)'}
           value={digitado.fornecedor}
           onChange={(e) => setDigitado((d) => ({ ...d, fornecedor: e.target.value }))}
-          aria-label="Fornecedor"
+          aria-label={eVisaoReceitas(visao) ? 'Doador' : 'Fornecedor'}
         />
         <input
           className={`${seletor} w-52`}
-          placeholder="Descrição do gasto"
+          placeholder={eVisaoReceitas(visao) ? 'Origem ou espécie da receita' : 'Descrição do gasto'}
           value={digitado.descricao}
           onChange={(e) => setDigitado((d) => ({ ...d, descricao: e.target.value }))}
-          aria-label="Descrição"
+          aria-label={eVisaoReceitas(visao) ? 'Origem da receita' : 'Descrição'}
         />
         <Button type="submit" variant="secondary" size="sm" className="gap-1.5">
           <Search className="h-4 w-4" /> Filtrar
@@ -659,13 +693,18 @@ export function Explorar() {
                   // os rótulos acompanham a visão: em "removidas" os números são
                   // o que SAIU da declaração, não o que está contratado hoje
                   {
-                    rotulo: visao === 'removidas' ? 'Valor removido' : 'Despesas contratadas',
+                    rotulo: visao === 'removidas' || visao === 'removidas-receitas'
+                      ? 'Valor removido' : 'Despesas contratadas',
                     valor: brl.format(dados.kpis.contratado),
                   },
                   { rotulo: 'Candidatos', valor: num.format(dados.kpis.candidatos) },
-                  { rotulo: 'Fornecedores', valor: num.format(dados.kpis.fornecedores) },
                   {
-                    rotulo: visao === 'removidas' ? 'Itens removidos' : 'Itens declarados',
+                    rotulo: eVisaoReceitas(visao) ? 'Doadores' : 'Fornecedores',
+                    valor: num.format(dados.kpis.fornecedores),
+                  },
+                  {
+                    rotulo: visao === 'removidas' || visao === 'removidas-receitas'
+                      ? 'Itens removidos' : 'Itens declarados',
                     valor: num.format(dados.kpis.itens),
                   },
                 ].map((k) => (
@@ -681,15 +720,29 @@ export function Explorar() {
               <div className="mt-6 grid gap-6 lg:grid-cols-2">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Para onde vai o dinheiro</CardTitle>
-                    <CardDescription>Categorias de gasto, pelo total contratado.</CardDescription>
+                    <CardTitle className="text-base">
+                      {eVisaoReceitas(visao) ? 'De onde vinha o dinheiro' : 'Para onde vai o dinheiro'}
+                    </CardTitle>
+                    <CardDescription>
+                      {eVisaoReceitas(visao)
+                        ? 'Origens das receitas removidas, pelo valor.'
+                        : 'Categorias de gasto, pelo total contratado.'}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent><BarrasHorizontais dados={dados.categorias} /></CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Quem mais contratou</CardTitle>
-                    <CardDescription>Os dez candidatos com maior despesa no recorte.</CardDescription>
+                    <CardTitle className="text-base">
+                      {visao === 'removidas' || visao === 'removidas-receitas'
+                        ? 'Candidatos com mais valor removido'
+                        : 'Quem mais contratou'}
+                    </CardTitle>
+                    <CardDescription>
+                      {visao === 'removidas' || visao === 'removidas-receitas'
+                        ? 'Os dez candidatos com mais valor removido no recorte.'
+                        : 'Os dez candidatos com maior despesa no recorte.'}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent><BarrasHorizontais dados={dados.candidatos} /></CardContent>
                 </Card>
@@ -697,8 +750,16 @@ export function Explorar() {
 
               <Card className="mt-6">
                 <CardHeader>
-                  <CardTitle className="text-base">Gasto declarado por dia da despesa</CardTitle>
-                  <CardDescription>Soma dos valores pela data em que a despesa foi realizada.</CardDescription>
+                  <CardTitle className="text-base">
+                    {eVisaoReceitas(visao)
+                      ? 'Receita declarada por dia da doação'
+                      : 'Gasto declarado por dia da despesa'}
+                  </CardTitle>
+                  <CardDescription>
+                    {eVisaoReceitas(visao)
+                      ? 'Soma dos valores pela data em que a doação foi recebida.'
+                      : 'Soma dos valores pela data em que a despesa foi realizada.'}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent><LinhaTemporal pontos={dados.porDia} /></CardContent>
               </Card>
@@ -732,7 +793,9 @@ export function Explorar() {
                 {visao === 'compartilhados'
                   ? 'Fornecedores compartilhados do recorte, maiores primeiro'
                   : visao === 'removidas'
-                    ? 'Declarações removidas do recorte, maiores primeiro'
+                    ? 'Despesas removidas do recorte, maiores primeiro'
+                    : visao === 'removidas-receitas'
+                    ? 'Receitas removidas do recorte, maiores primeiro'
                     : visao === 'fora-da-curva'
                       ? categoria
                         ? `Fora da curva em "${categoria}" — quem mais gasta acima do p95 do grupo primeiro`

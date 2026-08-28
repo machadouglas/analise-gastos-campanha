@@ -49,7 +49,7 @@ TABELAS DISPONÍVEIS:
 
 ATALHOS PRONTOS (prefira estes; já excluem linhas-placeholder do sistema do TSE — contraparte '-1'/'#NULO' com valor zero, que não são declarações):
 - despesas_atual e receitas_atual — já filtradas para a extração mais recente e com a coluna "valor" (DOUBLE, já multiplicada por qt_linhas).
-- despesas_removidas — declarações que saíram do ar, já sem os falsos positivos de retransmissão (o sistema do TSE renumera notas; só é remoção o conteúdo sem correspondente de mesma essência no estado atual). Também tem a coluna "valor".
+- despesas_removidas e receitas_removidas — declarações que saíram do ar, já sem os falsos positivos de retransmissão (o sistema do TSE renumera notas; só é remoção o conteúdo sem correspondente de mesma essência no estado atual). Também têm a coluna "valor".
 
 REGRAS OBRIGATÓRIAS:
 - Apenas SELECT/WITH (leitura). Sempre termine com LIMIT (máximo 200), exceto agregações pequenas.

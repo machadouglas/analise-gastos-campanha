@@ -116,8 +116,8 @@ SPA Vite + React + Tailwind v4. Se existir uma pasta local `trianox-front-standa
 (referência de padrão visual, fora do git), leia o `00-INDEX.md` dela antes de mexer no front;
 sem ela, siga o estilo do código existente (tema único papel/creme, acentos navy, lucide-react,
 componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release), Explorar
-(visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica), removidas, compartilhados, sem-nota, pessoa-fisica — combináveis
-com os filtros; as views `despesas_atual`/`receitas_atual`/`despesas_removidas` e a lista de
+(visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica), removidas, removidas-receitas, compartilhados, sem-nota, pessoa-fisica — combináveis
+com os filtros; as views `despesas_atual`/`receitas_atual`/`despesas_removidas`/`receitas_removidas` e a lista de
 categorias sem NF vivem em `site/src/lib/duckdb.ts`/`explorar.tsx` e devem espelhar
 `src/carga.py`, `src/historico.py` e `src/analises.py`) e Consultar (DuckDB-WASM no
 navegador + prompt copiável para a IA pessoal do visitante gerar SQL — `site/src/lib/prompt.ts`;

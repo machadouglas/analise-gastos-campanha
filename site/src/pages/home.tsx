@@ -266,7 +266,7 @@ export function Home() {
         verTudo={{
           href: '/explorar?visao=removidas',
           rotulo: m
-            ? `Explorar as ${num.format(m.despesas_removidas_qtd)} remoções com filtros`
+            ? `Explorar as ${num.format(m.despesas_removidas_qtd)} despesas removidas com filtros`
             : 'Explorar todas as remoções com filtros',
         }}
       >
@@ -301,6 +301,15 @@ export function Home() {
                     : <>Receitas removidas — as {removidasReceitas.length} maiores:</>}
                 </p>
                 <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
+                <Link
+                  to="/explorar?visao=removidas-receitas"
+                  className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+                >
+                  {m
+                    ? `Explorar as ${num.format(m.receitas_removidas_qtd)} receitas removidas com filtros`
+                    : 'Explorar todas as receitas removidas com filtros'}
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
               </div>
             )}
           </div>

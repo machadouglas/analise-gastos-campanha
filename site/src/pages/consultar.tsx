@@ -268,7 +268,7 @@ export function Consultar() {
           </CardTitle>
           <CardDescription>
             Atalhos: <code>despesas_atual</code>, <code>receitas_atual</code> (estado atual, coluna{' '}
-            <code>valor</code> pronta), <code>despesas_removidas</code> · Histórico:{' '}
+            <code>valor</code> pronta), <code>despesas_removidas</code>, <code>receitas_removidas</code> · Histórico:{' '}
             <code>despesas</code>, <code>receitas</code> · Agregados: <code>indicadores</code>,{' '}
             <code>benchmark_indicadores</code>, <code>benchmark_precos</code>,{' '}
             <code>serie_diaria</code>, <code>rede</code>, <code>fornecedores</code> · Brutas:{' '}

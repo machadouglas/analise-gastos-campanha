@@ -102,6 +102,27 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   } catch {
     // sem o parquet de despesas a visão não existe — as páginas degradam
   }
+  try {
+    // mesma régua para receitas: sincronia com ESSENCIA['receitas'] em src/historico.py
+    await con.query(`
+      CREATE VIEW receitas_removidas AS
+      SELECT r.*, TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE) * r.qt_linhas AS valor
+      FROM receitas r
+      WHERE r.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM receitas)
+        AND NOT (r.NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
+                 AND COALESCE(TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
+        AND NOT EXISTS (
+          SELECT 1 FROM receitas_atual v
+          WHERE v.SQ_CANDIDATO = r.SQ_CANDIDATO
+            AND v.NR_CPF_CNPJ_DOADOR = r.NR_CPF_CNPJ_DOADOR
+            AND v.DS_ORIGEM_RECEITA = r.DS_ORIGEM_RECEITA
+            AND v.VR_RECEITA = r.VR_RECEITA
+            AND v.DT_RECEITA = r.DT_RECEITA)
+    `);
+    tabelasDisponiveis.add('receitas_removidas');
+  } catch {
+    // sem o parquet de receitas a visão não existe — as páginas degradam
+  }
   return con;
 }
 
