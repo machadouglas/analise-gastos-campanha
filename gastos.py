@@ -50,9 +50,10 @@ def cmd_mudancas(args):
 def cmd_exportar(args):
     con = carga.conectar()
     arquivos = exportar.exportar(con)
-    con.close()
     if args.publicar:
         exportar.publicar(arquivos)
+        exportar.registrar_publicacao(con, exportar.fingerprint(con))
+    con.close()
 
 
 def cmd_rotina(args):
@@ -60,6 +61,14 @@ def cmd_rotina(args):
     def etapa(nome):
         from datetime import datetime
         print(f"\n=== [{datetime.now():%H:%M:%S}] {nome} ===")
+
+    def marco(*linhas):
+        """Mensagem-marco: o desfecho da rotina, impossível de passar batido no log."""
+        largura = max(60, *(len(li) for li in linhas))
+        print("\n" + "#" * largura)
+        for li in linhas:
+            print(li)
+        print("#" * largura)
 
     etapa("baixando dados do TSE")
     for c in tse.CONJUNTOS:
@@ -80,15 +89,31 @@ def cmd_rotina(args):
     falhas = verificacao.verificar(con)
     if falhas:
         con.close()
-        print("[abortado] verificação de dados falhou — nada foi publicado")
+        marco("ABORTADO: verificação de integridade falhou — NADA foi publicado")
         sys.exit(1)
+
+    dt_extracao = con.execute(
+        "SELECT MAX(dt_ultima_extracao) FROM hist_despesas_contratadas").fetchone()[0]
+    extracao = f"{dt_extracao:%d/%m/%Y}" if dt_extracao else "?"
+    fp = exportar.fingerprint(con)
+    if not args.sem_publicar and fp == exportar.ultima_publicacao(con):
+        con.close()
+        marco(f"NADA NOVO: o TSE ainda serve a extração de {extracao}, já publicada.",
+              "Nada foi exportado nem publicado — visitantes não rebaixam nada.")
+        return
+
     etapa("exportando e publicando")
     arquivos = exportar.exportar(con)
     for titulo, df in historico.resumo_mudancas(con):
         print(f"[mudancas] {titulo}: {len(df)} linhas")
+    if args.sem_publicar:
+        con.close()
+        marco(f"EXPORTADO SEM PUBLICAR (--sem-publicar) — extração do TSE de {extracao}")
+        return
+    exportar.publicar(arquivos)
+    exportar.registrar_publicacao(con, fp)
     con.close()
-    if not args.sem_publicar:
-        exportar.publicar(arquivos)
+    marco(f"PUBLICADO: extração do TSE de {extracao} no release 'dados'")
 
 
 def cmd_candidato(args):

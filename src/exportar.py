@@ -6,6 +6,7 @@ DuckDB, sem baixar o repositório:
     SELECT * FROM 'https://github.com/<repo>/releases/download/dados/despesas.parquet'
 """
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -87,6 +88,61 @@ def exportar(con) -> list[Path]:
     print(f"[exportado] {destino} ({destino.stat().st_size / 1e3:.0f} kB)")
     gerados.append(destino)
     return gerados
+
+
+# o que entra no "estado publicável": se nada disso mudou, republicar só
+# forçaria os visitantes a rebaixar parquet idênticos (o site usa o carimbo de
+# publicação como cache-buster). dt_consulta fica de fora de propósito: uma
+# reconsulta de CNPJ que não muda o cadastro não é mudança visível.
+CONSULTAS_FINGERPRINT = {
+    "hist_despesas_contratadas":
+        "SELECT MAX(dt_ultima_extracao), COUNT(*), SUM(qt_linhas) FROM hist_despesas_contratadas",
+    "hist_receitas":
+        "SELECT MAX(dt_ultima_extracao), COUNT(*), SUM(qt_linhas) FROM hist_receitas",
+    "candidatos": "SELECT COUNT(*) FROM candidatos",
+    "bens": "SELECT COUNT(*) FROM bens",
+    "despesas_pagas": "SELECT COUNT(*) FROM despesas_pagas",
+    "fornecedores": """
+        SELECT COUNT(*), md5(COALESCE(STRING_AGG(
+            cnpj || '|' || COALESCE(razao_social, '') || '|' || COALESCE(situacao, '')
+                 || '|' || COALESCE(situacao_anterior, ''),
+            ';' ORDER BY cnpj), ''))
+        FROM fornecedores""",
+}
+
+
+def _existe(con, nome: str) -> bool:
+    return bool(con.execute("""
+        SELECT (SELECT count(*) FROM information_schema.tables WHERE table_name = ?)
+             + (SELECT count(*) FROM duckdb_views() WHERE view_name = ?)
+    """, [nome, nome]).fetchone()[0])
+
+
+def fingerprint(con) -> str:
+    """Resumo do estado publicável do banco: muda quando (e só quando) algo que
+    o site exibe mudou — extração nova, retificação, cadastro de CNPJ novo."""
+    partes = []
+    for nome, sql in CONSULTAS_FINGERPRINT.items():
+        partes.append(str(con.execute(sql).fetchone()) if _existe(con, nome) else "ausente")
+    return hashlib.md5("|".join(partes).encode("utf-8")).hexdigest()
+
+
+def ultima_publicacao(con) -> str | None:
+    """Fingerprint da última publicação registrada (None se nunca publicou)."""
+    if not _existe(con, "publicacoes"):
+        return None
+    linha = con.execute("SELECT fingerprint FROM publicacoes").fetchone()
+    return linha[0] if linha else None
+
+
+def registrar_publicacao(con, fp: str) -> None:
+    """Guarda o estado da última publicação (uma linha só — o histórico de
+    publicações já fica no log da rotina e no próprio release)."""
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS publicacoes (dt_publicacao TIMESTAMP, fingerprint VARCHAR)
+    """)
+    con.execute("DELETE FROM publicacoes")
+    con.execute("INSERT INTO publicacoes VALUES (now(), ?)", [fp])
 
 
 def publicar(arquivos: list[Path]) -> None:

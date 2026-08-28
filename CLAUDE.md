@@ -21,7 +21,7 @@ python gastos.py sql "SELECT ..."        # consulta livre (sua principal ferrame
 python gastos.py enriquecer --numero 12345 --uf XX    # consulta CNPJs dos fornecedores na Receita
 python gastos.py mudancas                # linhas removidas/alteradas entre extrações
 python gastos.py exportar --publicar     # Parquet -> GitHub Release 'dados' (público)
-python gastos.py rotina --ano 2026       # pipeline diário completo (baixar+carregar+exportar+publicar)
+python gastos.py rotina --ano 2026       # pipeline diário completo (baixar+carregar+exportar+publicar; só publica se algo mudou desde a última publicação)
 ```
 
 A rotina diária roda agendada em servidor próprio via Docker (`Dockerfile` +
@@ -65,7 +65,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 - `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal quando > 1×) do site e do `resumo.json`.
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
 - `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
-- `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário; completa aos poucos). CNPJ 404 na base pública vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (não reconsulta).
+- `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário). Pendentes novos primeiro (maiores valores); a folga do limite reconsulta os cadastros mais antigos (`dt_consulta`, vencidos há 30+ dias, ciclo de ~30 dias pela base). Mudança de situação cadastral preserva `situacao_anterior`/`dt_situacao_anterior` (base da futura red flag "baixado após receber"). CNPJ 404 vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (reconsultado só no ciclo, como os demais).
 
 ## Testes e verificação
 
