@@ -61,10 +61,18 @@ export interface CandidatoForaDaCurva {
   sinais: SinalForaDaCurva[];
 }
 
+export interface TotaisMudancas {
+  despesas_removidas_qtd: number;
+  despesas_removidas_valor: number;
+  receitas_removidas_qtd: number;
+  receitas_removidas_valor: number;
+}
+
 export interface Resumo {
   gerado_em: string;
   primeira_extracao: boolean;
   totais: Totais;
+  mudancas?: TotaisMudancas;
   novas_despesas: DespesaResumo[];
   despesas_removidas: DespesaResumo[];
   receitas_removidas: DespesaResumo[];

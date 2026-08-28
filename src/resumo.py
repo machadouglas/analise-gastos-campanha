@@ -96,6 +96,17 @@ def gerar(con) -> dict:
     ).fetchone()
     primeira_extracao = dt_extracao == dt_inicio
 
+    # totais das mudanças (as listas abaixo são só as maiores; a Home mostra o
+    # número cheio e manda o visitante explorar o resto com filtros)
+    mudancas = _registros(con, """
+        SELECT (SELECT COUNT(*) FROM v_removidas_despesas_contratadas) AS despesas_removidas_qtd,
+               (SELECT COALESCE(ROUND(SUM(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas), 2), 0)
+                FROM v_removidas_despesas_contratadas) AS despesas_removidas_valor,
+               (SELECT COUNT(*) FROM v_removidas_receitas) AS receitas_removidas_qtd,
+               (SELECT COALESCE(ROUND(SUM(TRY_CAST(REPLACE(VR_RECEITA,',','.') AS DOUBLE) * qt_linhas), 2), 0)
+                FROM v_removidas_receitas) AS receitas_removidas_valor
+    """)[0]
+
     totais = _registros(con, """
         SELECT (SELECT COUNT(DISTINCT SQ_CANDIDATO) FROM v_despesas) AS candidatos_com_gastos,
                (SELECT ROUND(SUM(VR),2) FROM v_despesas) AS total_contratado,
@@ -161,6 +172,7 @@ def gerar(con) -> dict:
         "gerado_em": str(dt_extracao),
         "primeira_extracao": primeira_extracao,
         "totais": totais,
+        "mudancas": mudancas,
         "novas_despesas": novas,
         "despesas_removidas": removidas,
         "receitas_removidas": removidas_receitas,

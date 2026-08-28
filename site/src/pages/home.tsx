@@ -62,8 +62,8 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
   {
     icone: Scale,
     pergunta: 'Quem está fora da curva do próprio grupo?',
-    detalhe: 'Cada candidato comparado aos pares do mesmo cargo e estado — gasto, concentração, documentação.',
-    href: '#fora-da-curva',
+    detalhe: 'Cada candidato comparado aos pares do mesmo cargo e estado — gasto, concentração, documentação. Refine por UF e partido.',
+    href: '/explorar?visao=fora-da-curva',
   },
   {
     icone: EyeOff,
@@ -159,7 +159,7 @@ function Secao({
       {verTudo && (
         <Link
           to={verTudo.href}
-          className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+          className="mt-5 inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-[#10244A] to-[#264E9B] px-4 py-2 text-sm font-semibold text-white shadow-md shadow-[#10244A]/15 transition-all hover:shadow-lg hover:shadow-[#10244A]/25"
         >
           {verTudo.rotulo} <ArrowRight className="h-4 w-4" />
         </Link>
@@ -220,8 +220,12 @@ export function Home() {
   }
 
   const t = resumo.totais;
-  const removidas = resumo.despesas_removidas ?? [];
-  const removidasReceitas = resumo.receitas_removidas ?? [];
+  const m = resumo.mudancas;
+  // a Home mostra só os maiores casos — o trabalho de busca é do Explorar
+  const removidas = (resumo.despesas_removidas ?? []).slice(0, 5);
+  const removidasReceitas = (resumo.receitas_removidas ?? []).slice(0, 5);
+  const qtdRemovidas = m?.despesas_removidas_qtd ?? removidas.length;
+  const qtdRemovidasReceitas = m?.receitas_removidas_qtd ?? removidasReceitas.length;
 
   return (
     <div className="mx-auto max-w-7xl px-6 pb-24">
@@ -260,10 +264,13 @@ export function Home() {
         id="mudancas"
         eyebrow="O diferencial"
         titulo="Declarações removidas ou alteradas"
-        descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Aqui ficam as maiores; a lista completa, com filtros por UF, cargo, partido ou candidato, está no Explorar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
-        verTudo={{ href: '/explorar?visao=removidas', rotulo: 'Ver todas as remoções no Explorar' }}
+        descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Abaixo, só as maiores de cada lado — a busca completa, com filtros por UF, cargo, partido ou candidato, é sua no Explorar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
+        verTudo={{
+          href: '/explorar?visao=removidas',
+          rotulo: `Explorar as ${num.format(qtdRemovidas)} remoções com filtros`,
+        }}
       >
-        {removidas.length === 0 && removidasReceitas.length === 0 ? (
+        {qtdRemovidas === 0 && qtdRemovidasReceitas === 0 ? (
           <Card>
             <CardContent className="flex items-center gap-3 p-5 text-sm text-muted-foreground">
               <CheckCircle2 className="h-5 w-5 shrink-0 text-[#264E9B]" />
@@ -277,7 +284,8 @@ export function Home() {
             {removidas.length > 0 && (
               <div>
                 <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="h-4 w-4" /> Despesas que sumiram da declaração: {removidas.length}
+                  <AlertTriangle className="h-4 w-4" /> Despesas removidas: {num.format(qtdRemovidas)}
+                  {m && <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span>}
                 </p>
                 <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
               </div>
@@ -285,7 +293,8 @@ export function Home() {
             {removidasReceitas.length > 0 && (
               <div>
                 <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="h-4 w-4" /> Receitas que sumiram da declaração: {removidasReceitas.length}
+                  <AlertTriangle className="h-4 w-4" /> Receitas removidas: {num.format(qtdRemovidasReceitas)}
+                  {m && <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span>}
                 </p>
                 <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
               </div>
@@ -299,10 +308,11 @@ export function Home() {
           id="fora-da-curva"
           eyebrow="Fora da curva"
           titulo="Quem mais destoa do próprio grupo"
-          descricao="Candidatos com mais métricas acima do p95 do grupo de comparação (mesmo cargo e estado — âmbito nacional quando o grupo local é pequeno). Estar fora da curva não é irregularidade: é onde os dados sugerem começar as perguntas. Cada sinal traz o valor do candidato e a mediana do grupo, conferíveis na página Consultar."
+          descricao="Os 5 casos com mais métricas acima do p95 do grupo de comparação (mesmo cargo e estado — âmbito nacional quando o grupo local é pequeno). A lista completa está no Explorar, para você refinar por UF, cargo ou partido. Estar fora da curva não é irregularidade: é onde os dados sugerem começar as perguntas."
+          verTudo={{ href: '/explorar?visao=fora-da-curva', rotulo: 'Explorar todos os fora da curva com filtros' }}
         >
           <div className="space-y-3">
-            {(resumo.fora_da_curva ?? []).map((c: CandidatoForaDaCurva) => (
+            {(resumo.fora_da_curva ?? []).slice(0, 5).map((c: CandidatoForaDaCurva) => (
               <div key={c.SQ_CANDIDATO} className="rounded-xl border bg-card p-4 shadow-sm">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <Link
@@ -314,6 +324,12 @@ export function Home() {
                   <span className="text-sm text-muted-foreground">
                     {c.SG_PARTIDO}/{c.SG_UF} · {c.DS_CARGO} · contratou {brl.format(c.total_contratado)}
                   </span>
+                  <Link
+                    to={`/explorar?visao=fora-da-curva&uf=${encodeURIComponent(c.SG_UF)}&cargo=${encodeURIComponent(c.DS_CARGO)}`}
+                    className="ml-auto text-xs font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+                  >
+                    ver o grupo ({c.DS_CARGO}/{c.SG_UF}) →
+                  </Link>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {c.sinais.map((s) => {
@@ -347,8 +363,9 @@ export function Home() {
         descricao={
           resumo.primeira_extracao
             ? 'Panorama nacional da primeira fotografia da série.'
-            : 'Despesas que apareceram na extração mais recente e não constavam na anterior.'
+            : 'As maiores despesas que apareceram na extração mais recente. No Explorar você filtra por estado, cargo, partido ou tipo de gasto.'
         }
+        verTudo={{ href: '/explorar', rotulo: 'Explorar todos os gastos com filtros' }}
       >
         <Tabela
           colunas={[
@@ -358,7 +375,7 @@ export function Home() {
             { titulo: 'Valor', numerica: true },
           ]}
         >
-          {(resumo.novas_despesas ?? []).map((x, i) => (
+          {(resumo.novas_despesas ?? []).slice(0, 6).map((x, i) => (
             <tr key={i}>
               <td>
                 {x.NM_CANDIDATO}
@@ -394,7 +411,7 @@ export function Home() {
             { titulo: 'Total recebido', numerica: true },
           ]}
         >
-          {(resumo.fornecedores_compartilhados ?? []).map((x) => (
+          {(resumo.fornecedores_compartilhados ?? []).slice(0, 6).map((x) => (
             <tr key={x.cnpj}>
               <td>
                 {temFichaFornecedor(x.cnpj) ? (
@@ -430,7 +447,7 @@ export function Home() {
             { titulo: 'Receita declarada', numerica: true },
           ]}
         >
-          {(resumo.top_candidatos ?? []).map((x, i) => (
+          {(resumo.top_candidatos ?? []).slice(0, 6).map((x, i) => (
             <tr key={i}>
               <td>
                 {x.SQ_CANDIDATO ? (

@@ -15,7 +15,7 @@ from src import agregados, resumo  # noqa: E402
 from tests.conftest import extrair_dia  # noqa: E402
 
 CHAVES = {
-    "gerado_em", "primeira_extracao", "totais", "novas_despesas",
+    "gerado_em", "primeira_extracao", "totais", "mudancas", "novas_despesas",
     "despesas_removidas", "receitas_removidas", "fornecedores_compartilhados",
     "top_candidatos", "fora_da_curva",
 }
@@ -62,6 +62,9 @@ def test_remocoes_aparecem_no_resumo_apos_sumirem(banco):
                 receitas=[{"SQ_RECEITA": "1", "VR_RECEITA": "1000,00"}])
     r = resumo.gerar(banco)
     assert r["primeira_extracao"] is False
+    assert r["mudancas"]["despesas_removidas_qtd"] == 1
+    assert r["mudancas"]["despesas_removidas_valor"] == pytest.approx(5000.0)
+    assert r["mudancas"]["receitas_removidas_valor"] == pytest.approx(7000.0)
     assert [d["valor"] for d in r["despesas_removidas"]] == [pytest.approx(5000.0)]
     assert [d["NM_DOADOR"] for d in r["receitas_removidas"]] == ["SUMIDO ME"]
     # datas serializadas como texto (JSON não aceita date do pandas)

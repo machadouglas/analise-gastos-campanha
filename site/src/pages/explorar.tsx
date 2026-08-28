@@ -28,13 +28,19 @@ interface Filtros {
 const FILTROS_VAZIOS: Filtros = { uf: '', cargo: '', partido: '', candidato: '', fornecedor: '', descricao: '' };
 
 /** Visões: recortes prontos que respondem uma pergunta e aceitam os demais filtros. */
-type Visao = 'atual' | 'removidas' | 'compartilhados' | 'sem-nota' | 'pessoa-fisica';
+type Visao = 'atual' | 'fora-da-curva' | 'removidas' | 'compartilhados' | 'sem-nota' | 'pessoa-fisica';
 
 const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
   {
     id: 'atual',
     rotulo: 'Todos os gastos',
     descricao: 'Estado atual das despesas declaradas ao TSE.',
+  },
+  {
+    id: 'fora-da-curva',
+    rotulo: 'Fora da curva',
+    descricao:
+      'Candidatos acima do p95 do próprio grupo de comparação (mesmo cargo e UF; âmbito nacional quando o grupo local é pequeno) em ao menos uma métrica. Estar fora da curva não é irregularidade — é onde vale perguntar. Refine por UF, cargo, partido ou nome.',
   },
   {
     id: 'removidas',
@@ -71,8 +77,66 @@ const CATEGORIAS_SEM_NOTA_ESPERADA = [
   'Despesas com pessoal',
 ];
 
-function whereDaVisao(visao: Visao, w: string): { base: string; where: string } {
+// espelha METRICAS_SINAL em src/resumo.py: sinal = métrica estritamente acima
+// do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe)
+const SINAIS_CTE = `
+  metricas AS (
+    SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'total_contratado' AS metrica, total_contratado AS valor
+    FROM indicadores WHERE total_contratado > 0
+    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'razao_gasto_receita', razao_gasto_receita
+    FROM indicadores WHERE razao_gasto_receita IS NOT NULL
+    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_maior_fornecedor', pct_maior_fornecedor
+    FROM indicadores WHERE n_fornecedores > 1
+    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_sem_nota', pct_sem_nota
+    FROM indicadores WHERE total_contratado > 0
+    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_pessoa_fisica', pct_pessoa_fisica
+    FROM indicadores WHERE total_contratado > 0),
+  sinais AS (
+    SELECT m.SQ_CANDIDATO, m.metrica, m.valor, COALESCE(buf.p95, bbr.p95) AS p95
+    FROM metricas m
+    LEFT JOIN benchmark_indicadores buf
+      ON buf.DS_CARGO = m.DS_CARGO AND buf.SG_UF = m.SG_UF AND buf.metrica = m.metrica
+    LEFT JOIN benchmark_indicadores bbr
+      ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica
+    WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND m.valor > COALESCE(buf.p95, bbr.p95))`;
+
+const ROTULO_SINAL_SQL = `CASE s.metrica
+  WHEN 'total_contratado' THEN 'gasto total'
+  WHEN 'razao_gasto_receita' THEN 'gasto ÷ arrecadado'
+  WHEN 'pct_maior_fornecedor' THEN 'concentração no maior fornecedor'
+  WHEN 'pct_sem_nota' THEN '% sem nota fiscal'
+  WHEN 'pct_pessoa_fisica' THEN '% a pessoas físicas'
+  ELSE s.metrica END`;
+
+/** Filtros aplicáveis sobre `indicadores` (fornecedor/descrição não existem lá). */
+function whereIndicadores(f: Filtros): string {
+  const esc = (s: string) => s.replaceAll("'", "''");
+  const partes = ['1=1'];
+  if (f.uf) partes.push(`i.SG_UF = '${esc(f.uf)}'`);
+  if (f.cargo) partes.push(`i.DS_CARGO ILIKE '${esc(f.cargo)}'`);
+  if (f.partido) partes.push(`i.SG_PARTIDO = '${esc(f.partido)}'`);
+  const cand = f.candidato.trim();
+  if (cand) {
+    partes.push(
+      /^\d+$/.test(cand) ? `i.NR_CANDIDATO = '${cand}'` : `i.NM_CANDIDATO ILIKE '%${esc(cand)}%'`,
+    );
+  }
+  return partes.join(' AND ');
+}
+
+function whereDaVisao(visao: Visao, f: Filtros): { base: string; where: string } {
+  const w = montarWhere(f);
   if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
+  if (visao === 'fora-da-curva') {
+    // gráficos e KPIs mostram os gastos DOS candidatos fora da curva do recorte
+    return {
+      base: 'despesas_atual',
+      where:
+        `${w} AND SQ_CANDIDATO IN (WITH ${SINAIS_CTE} ` +
+        `SELECT DISTINCT s.SQ_CANDIDATO FROM sinais s ` +
+        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)})`,
+    };
+  }
   if (visao === 'sem-nota') {
     const categorias = CATEGORIAS_SEM_NOTA_ESPERADA.map((c) => `'${c.replaceAll("'", "''")}'`).join(', ');
     return {
@@ -215,7 +279,7 @@ export function Explorar() {
     setCarregando(true);
     setErro(null);
     try {
-      const { base, where: w } = whereDaVisao(v, montarWhere(f));
+      const { base, where: w } = whereDaVisao(v, f);
       const encontrados = v === 'atual' && f.candidato.trim()
         ? await executarSQL(`
             SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
@@ -232,7 +296,21 @@ export function Explorar() {
             ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
             : '';
       const tabelaSQL =
-        v === 'compartilhados'
+        v === 'fora-da-curva'
+          ? `WITH ${SINAIS_CTE}
+             SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
+                    i.NM_CANDIDATO AS "Candidato",
+                    i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
+                    i.DS_CARGO AS "Cargo",
+                    ROUND(i.total_contratado, 2) AS "Contratado",
+                    ROUND(i.total_receitas, 2) AS "Arrecadado",
+                    COUNT(*) AS "Sinais",
+                    STRING_AGG(${ROTULO_SINAL_SQL}, ' · ' ORDER BY s.metrica) AS "Acima do típico do grupo em"
+             FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
+             WHERE ${whereIndicadores(f)}
+             GROUP BY ALL ORDER BY "Sinais" DESC, "Contratado" DESC
+             LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
+          : v === 'compartilhados'
           ? `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
                     COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
                     NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
@@ -518,7 +596,9 @@ export function Explorar() {
                   ? 'Fornecedores compartilhados do recorte, maiores primeiro'
                   : visao === 'removidas'
                     ? 'Declarações removidas do recorte, maiores primeiro'
-                    : 'Despesas do recorte, maiores primeiro'} — página {pagina + 1}
+                    : visao === 'fora-da-curva'
+                      ? 'Candidatos fora da curva do recorte — mais sinais primeiro (os gráficos acima mostram os gastos deles)'
+                      : 'Despesas do recorte, maiores primeiro'} — página {pagina + 1}
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" disabled={pagina === 0 || carregando} onClick={() => setPagina((p) => p - 1)}>
@@ -536,16 +616,18 @@ export function Explorar() {
             </div>
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
-              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos'].includes(c),
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais'].includes(c),
             }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
                   {l.map((v, j) => {
                     const col = dados.colunas[j];
                     if (col.startsWith('_')) return null;
-                    if (col === 'Valor' || col === 'Total')
+                    if (col === 'Valor' || col === 'Total' || col === 'Contratado')
                       return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
-                    if (col === 'Candidatos' || col === 'Partidos')
+                    if (col === 'Arrecadado')
+                      return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
+                    if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais')
                       return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'CNPJ/CPF')
                       return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
