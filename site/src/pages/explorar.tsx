@@ -398,7 +398,8 @@ export function Explorar() {
           : `SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
                     DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
                     SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
-                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
+                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NULLIF(NM_FORNECEDOR,'#NULO'),
+                             'Não identificado (declarado sem contraparte)') AS "Fornecedor",
                     DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
                     ${colunaExtra}
                     ROUND(valor, 2) AS "Valor"

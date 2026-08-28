@@ -19,6 +19,8 @@ export function dataBR(iso: string | null | undefined): string {
 export function cnpjCpf(id: string): string {
   if (/^\d{14}$/.test(id)) return id.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
   if (/^\d{11}$/.test(id)) return id.replace(/^\d{3}(\d{3})(\d{3})\d{2}$/, '***.$1.$2-**');
+  // '-1'/'#NULO' são códigos do TSE para "sem contraparte" — não são um documento
+  if (id === '-1' || id === '#NULO') return '—';
   return id;
 }
 

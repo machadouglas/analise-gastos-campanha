@@ -68,13 +68,19 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     flags.push(`${brl.format(Number(linha.valor_sem_nota))} sem nota fiscal`);
   if (Number(linha.valor_pessoa_fisica ?? 0) > 0)
     flags.push(`${brl.format(Number(linha.valor_pessoa_fisica))} pagos a pessoas físicas`);
-  if (Number(linha.grupos_valor_repetido ?? 0) > 0)
-    flags.push(`${linha.grupos_valor_repetido} valores repetidos 3+ vezes no mesmo fornecedor`);
+  const repetidos = Number(linha.grupos_valor_repetido ?? 0);
+  if (repetidos > 0)
+    flags.push(repetidos === 1
+      ? '1 valor repetido 3+ vezes no mesmo fornecedor'
+      : `${repetidos} valores repetidos 3+ vezes no mesmo fornecedor`);
   if (Number(linha.valor_removido ?? 0) > 0)
     flags.push(`${brl.format(Number(linha.valor_removido))} removidos da declaração`);
-  if (Number(linha.fornecedores_recem_abertos ?? 0) > 0)
+  const recemAbertos = Number(linha.fornecedores_recem_abertos ?? 0);
+  if (recemAbertos > 0)
     flags.push(
-      `${linha.fornecedores_recem_abertos} fornecedores com CNPJ recém-aberto` +
+      (recemAbertos === 1
+        ? '1 fornecedor com CNPJ recém-aberto'
+        : `${recemAbertos} fornecedores com CNPJ recém-aberto`) +
       ` (${linha.fornecedores_consultados} de ${linha.fornecedores_cnpj} CNPJs verificados)`,
     );
 
@@ -140,7 +146,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   const temForn = tabelasDisponiveis.has('fornecedores');
   const fornecedores = await executarSQL(`
-      SELECT COALESCE(NULLIF(d.NM_FORNECEDOR_RFB, '#NULO'), d.NM_FORNECEDOR) AS "Fornecedor",
+      SELECT COALESCE(NULLIF(d.NM_FORNECEDOR_RFB, '#NULO'), NULLIF(d.NM_FORNECEDOR, '#NULO'),
+                      'Não identificado (declarado sem contraparte)') AS "Fornecedor",
              d.NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
              ROUND(SUM(d.valor), 2) AS "Total",
              COUNT(*) AS "Itens"
@@ -193,7 +200,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   // mesma régua do backend: sem retransmissões renumeradas, sem placeholders
   const removidas = tabelasDisponiveis.has('despesas_removidas')
     ? await executarSQL(`
-        SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS "Fornecedor",
+        SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NULLIF(NM_FORNECEDOR, '#NULO'),
+                        'Não identificado (declarado sem contraparte)') AS "Fornecedor",
                DS_DESPESA AS "Descrição",
                ROUND(valor, 2) AS "Valor",
                STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
