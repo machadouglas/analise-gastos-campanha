@@ -33,10 +33,21 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   const con = await db.connect();
 
   const origem = window.location.origin;
+  // Cache-buster: o carimbo de publicação (resumo.json, cache curto) entra na
+  // URL dos parquet — publicação nova = URL nova, sem servir arquivo velho do
+  // cache de 1h nem misturar arquivos de publicações diferentes.
+  let versao = '';
+  try {
+    const r = await fetch(`${origem}/dados/resumo.json`, { cache: 'no-cache' });
+    if (r.ok) versao = String((await r.json()).publicado_em ?? '');
+  } catch {
+    // sem resumo, segue sem versão — os parquet ainda funcionam
+  }
+  const sufixo = versao ? `?v=${encodeURIComponent(versao)}` : '';
   for (const t of TABELAS) {
     try {
       await con.query(
-        `CREATE VIEW ${t} AS SELECT * FROM read_parquet('${origem}/dados/${t}.parquet')`,
+        `CREATE VIEW ${t} AS SELECT * FROM read_parquet('${origem}/dados/${t}.parquet${sufixo}')`,
       );
       tabelasDisponiveis.add(t);
     } catch {

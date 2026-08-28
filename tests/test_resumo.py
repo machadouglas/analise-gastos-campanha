@@ -15,9 +15,9 @@ from src import agregados, resumo  # noqa: E402
 from tests.conftest import extrair_dia  # noqa: E402
 
 CHAVES = {
-    "gerado_em", "primeira_extracao", "totais", "mudancas", "novas_despesas",
-    "despesas_removidas", "receitas_removidas", "fornecedores_compartilhados",
-    "top_candidatos", "fora_da_curva",
+    "gerado_em", "publicado_em", "primeira_extracao", "totais", "mudancas",
+    "novas_despesas", "despesas_removidas", "receitas_removidas",
+    "fornecedores_compartilhados", "top_candidatos", "fora_da_curva",
 }
 
 

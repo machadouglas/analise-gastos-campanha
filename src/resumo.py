@@ -4,6 +4,7 @@ Tudo aqui é derivado dos dados públicos do TSE já carregados no banco.
 """
 
 import json
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -170,6 +171,9 @@ def gerar(con) -> dict:
 
     return {
         "gerado_em": str(dt_extracao),
+        # carimbo desta publicação: o site usa como cache-buster (?v=) nos
+        # parquet, para ninguém misturar arquivos de publicações diferentes
+        "publicado_em": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "primeira_extracao": primeira_extracao,
         "totais": totais,
         "mudancas": mudancas,
