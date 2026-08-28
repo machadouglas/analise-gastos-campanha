@@ -115,6 +115,21 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
     return saida[:limite]
 
 
+def _serie_nacional(con) -> list[dict]:
+    """Totais do país por dia de extração — alimenta os sparklines da Home
+    (que não carrega DuckDB-WASM; tudo que ela mostra vem do resumo.json)."""
+    if not _existe(con, "serie_diaria"):
+        return []
+    return _registros(con, """
+        SELECT STRFTIME(dt_extracao, '%Y-%m-%d') AS dt,
+               ROUND(SUM(total_contratado), 2) AS contratado,
+               ROUND(SUM(total_receitas), 2) AS receitas,
+               COUNT(DISTINCT CASE WHEN total_contratado > 0 THEN SQ_CANDIDATO END) AS candidatos
+        FROM serie_diaria
+        GROUP BY dt_extracao ORDER BY dt_extracao
+    """)
+
+
 def gerar(con) -> dict:
     dt_extracao, dt_inicio = con.execute(
         "SELECT MAX(dt_ultima_extracao), MIN(dt_primeira_extracao) FROM hist_despesas_contratadas"
@@ -140,9 +155,12 @@ def gerar(con) -> dict:
                (SELECT COUNT(DISTINCT SQ_CANDIDATO) FROM candidatos) AS candidaturas_registradas
     """)[0]
 
+    # SQ_CANDIDATO e o CNPJ/CPF do fornecedor viajam junto: a Home linka cada
+    # nome à sua ficha (site todo conectado)
     novas = _registros(con, f"""
-        SELECT NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF,
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF,
                COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
+               NR_CPF_CNPJ_FORNECEDOR,
                DS_ORIGEM_DESPESA, DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                DT_DESPESA
@@ -153,8 +171,9 @@ def gerar(con) -> dict:
     """)
 
     removidas = _registros(con, """
-        SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF,
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF,
                COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
+               NR_CPF_CNPJ_FORNECEDOR,
                DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                dt_primeira_extracao, dt_ultima_extracao
@@ -163,7 +182,7 @@ def gerar(con) -> dict:
     """)
 
     removidas_receitas = _registros(con, """
-        SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF, NM_DOADOR, DS_ORIGEM_RECEITA,
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF, NM_DOADOR, DS_ORIGEM_RECEITA,
                ROUND(TRY_CAST(REPLACE(VR_RECEITA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                dt_primeira_extracao, dt_ultima_extracao
         FROM v_removidas_receitas
@@ -207,4 +226,5 @@ def gerar(con) -> dict:
         "fornecedores_compartilhados": compartilhados,
         "top_candidatos": top_candidatos,
         "fora_da_curva": _fora_da_curva(con),
+        "serie_nacional": _serie_nacional(con),
     }

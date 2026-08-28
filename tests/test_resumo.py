@@ -18,6 +18,7 @@ CHAVES = {
     "gerado_em", "publicado_em", "primeira_extracao", "totais", "mudancas",
     "novas_despesas", "despesas_removidas", "receitas_removidas",
     "fornecedores_compartilhados", "top_candidatos", "fora_da_curva",
+    "serie_nacional",
 }
 
 
@@ -67,6 +68,10 @@ def test_remocoes_aparecem_no_resumo_apos_sumirem(banco):
     assert r["mudancas"]["receitas_removidas_valor"] == pytest.approx(7000.0)
     assert [d["valor"] for d in r["despesas_removidas"]] == [pytest.approx(5000.0)]
     assert [d["NM_DOADOR"] for d in r["receitas_removidas"]] == ["SUMIDO ME"]
+    # ids das fichas: a Home linka candidato e fornecedor a partir do resumo
+    assert r["despesas_removidas"][0]["SQ_CANDIDATO"]
+    assert "NR_CPF_CNPJ_FORNECEDOR" in r["despesas_removidas"][0]
+    assert r["receitas_removidas"][0]["SQ_CANDIDATO"]
     # datas serializadas como texto (JSON não aceita date do pandas)
     assert isinstance(r["despesas_removidas"][0]["dt_primeira_extracao"], str)
 
@@ -112,6 +117,29 @@ def test_fora_da_curva_aponta_quem_estoura_o_p95_do_grupo(banco):
     assert sinal["valor"] == pytest.approx(100000.0)
     assert sinal["p95"] < 100000.0
     assert sinal["grupo_n"] == 20
+
+
+def test_serie_nacional_reconcilia_com_totais(banco):
+    """Os sparklines da Home leem serie_nacional do resumo.json; o último dia
+    da série precisa bater com os totais do próprio resumo."""
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "100,00"}],
+                receitas=[{"SQ_RECEITA": "1", "VR_RECEITA": "1000,00"}])
+    agregados.materializar(banco)
+    r = resumo.gerar(banco)
+    serie = r["serie_nacional"]
+    assert len(serie) == 1
+    ultimo = serie[-1]
+    assert ultimo["dt"] == "2026-08-20"
+    assert ultimo["contratado"] == pytest.approx(r["totais"]["total_contratado"])
+    assert ultimo["receitas"] == pytest.approx(r["totais"]["total_receitas"])
+    assert ultimo["candidatos"] == r["totais"]["candidatos_com_gastos"]
+
+
+def test_serie_nacional_vazia_sem_agregados(banco):
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "100,00"}])
+    assert resumo.gerar(banco)["serie_nacional"] == []
 
 
 def test_razao_gasto_receita_so_e_sinal_acima_de_1x(banco):
