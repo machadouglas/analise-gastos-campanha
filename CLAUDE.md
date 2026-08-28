@@ -108,7 +108,7 @@ SELECT * FROM 'https://github.com/machadouglas/analise-gastos-campanha/releases/
 WHERE NR_CANDIDATO = '12345'
 ```
 
-Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet`.
+Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — o site prefere estes e cai para o histórico se faltarem), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet`.
 
 ## Site público (`site/`)
 

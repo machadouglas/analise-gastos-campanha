@@ -61,24 +61,44 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
     }
   }
   // Atalhos com o estado atual das declarações e valor numérico pronto.
-  // Linhas-placeholder do SPCE (contraparte '-1'/'#NULO' E valor zero = prestação
-  // sem movimento) ficam de fora — sincronia com filtro_placeholder em src/carga.py.
-  await con.query(`
-    CREATE VIEW despesas_atual AS
-    SELECT *, TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas AS valor
-    FROM despesas
-    WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM despesas)
-      AND NOT (NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
-               AND COALESCE(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
-  `);
-  await con.query(`
-    CREATE VIEW receitas_atual AS
-    SELECT *, TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE) * qt_linhas AS valor
-    FROM receitas
-    WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM receitas)
-      AND NOT (NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
-               AND COALESCE(TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
-  `);
+  // Preferimos o parquet dedicado (despesas_atual.parquet/receitas_atual.parquet,
+  // gerado por src/exportar.py com os mesmos filtros — bem menor que o histórico);
+  // sem ele, derivamos do histórico completo. Linhas-placeholder do SPCE
+  // (contraparte '-1'/'#NULO' E valor zero = prestação sem movimento) ficam de
+  // fora nos dois caminhos — sincronia com filtro_placeholder em src/carga.py.
+  const atuais = [
+    {
+      nome: 'despesas_atual',
+      derivada: `
+        SELECT *, TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas AS valor
+        FROM despesas
+        WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM despesas)
+          AND NOT (NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
+                   AND COALESCE(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)`,
+    },
+    {
+      nome: 'receitas_atual',
+      derivada: `
+        SELECT *, TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE) * qt_linhas AS valor
+        FROM receitas
+        WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM receitas)
+          AND NOT (NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
+                   AND COALESCE(TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)`,
+    },
+  ];
+  for (const { nome, derivada } of atuais) {
+    try {
+      await con.query(
+        `CREATE VIEW ${nome} AS SELECT * FROM read_parquet('${origem}/dados/${nome}.parquet${sufixo}')`,
+      );
+    } catch {
+      try {
+        await con.query(`CREATE VIEW ${nome} AS ${derivada}`);
+      } catch {
+        // nem o parquet dedicado nem o histórico publicados — a página degrada
+      }
+    }
+  }
   try {
     // Remoções com o MESMO critério do backend: retransmitir a prestação
     // renumera as notas, então só é remoção o conteúdo sem correspondente de

@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from src import resumo as resumo_mod
+from src.carga import filtro_placeholder
 
 DIR_EXPORT = Path("data/export")
 TAG_RELEASE = "dados"
@@ -31,10 +32,40 @@ EXPORTS = {
     "fornecedores.parquet": "fornecedores",
 }
 
+# Estado atual em parquet próprio, bem menor que o histórico completo: a maior
+# parte das consultas do site (Explorar, fichas, console) é sobre a extração
+# mais recente, e o histórico só cresce com a campanha. Mesmos filtros das
+# views despesas_atual/receitas_atual do site (site/src/lib/duckdb.ts), com a
+# coluna `valor` (DOUBLE, já multiplicada por qt_linhas) pronta.
+# nome do parquet -> (tabela hist_*, coluna da contraparte, coluna de valor)
+EXPORTS_ATUAL = {
+    "despesas_atual.parquet": (
+        "hist_despesas_contratadas", "NR_CPF_CNPJ_FORNECEDOR", "VR_DESPESA_CONTRATADA"),
+    "receitas_atual.parquet": ("hist_receitas", "NR_CPF_CNPJ_DOADOR", "VR_RECEITA"),
+}
+
 
 def exportar(con) -> list[Path]:
     DIR_EXPORT.mkdir(parents=True, exist_ok=True)
     gerados = []
+    for nome, (origem, contraparte, valor) in EXPORTS_ATUAL.items():
+        existe = con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [origem]
+        ).fetchone()[0]
+        if not existe:
+            print(f"[aviso] {origem} não existe — pulando {nome}")
+            continue
+        destino = DIR_EXPORT / nome
+        con.execute(f"""
+            COPY (
+                SELECT *, TRY_CAST(REPLACE({valor}, ',', '.') AS DOUBLE) * qt_linhas AS valor
+                FROM {origem}
+                WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM {origem})
+                  AND {filtro_placeholder(contraparte, valor)}
+            ) TO '{destino.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+        print(f"[exportado] {destino} ({destino.stat().st_size / 1e6:.1f} MB)")
+        gerados.append(destino)
     for nome, origem in EXPORTS.items():
         existe = con.execute("""
             SELECT count(*) FROM information_schema.tables WHERE table_name = ?
