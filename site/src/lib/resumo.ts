@@ -7,6 +7,9 @@ export interface Totais {
 }
 
 export interface DespesaResumo {
+  /** ids para linkar às fichas (resumos antigos podem não trazer) */
+  SQ_CANDIDATO?: string;
+  NR_CPF_CNPJ_FORNECEDOR?: string;
   NM_CANDIDATO: string;
   SG_PARTIDO: string;
   DS_CARGO?: string;
@@ -71,6 +74,13 @@ export interface TotaisMudancas {
   receitas_removidas_valor: number;
 }
 
+export interface PontoSerieNacional {
+  dt: string;
+  contratado: number;
+  receitas: number;
+  candidatos: number;
+}
+
 export interface Resumo {
   gerado_em: string;
   primeira_extracao: boolean;
@@ -82,6 +92,8 @@ export interface Resumo {
   fornecedores_compartilhados: FornecedorCompartilhado[];
   top_candidatos: TopCandidato[];
   fora_da_curva?: CandidatoForaDaCurva[];
+  /** totais do país por dia de extração (sparklines da Home); resumos antigos não trazem */
+  serie_nacional?: PontoSerieNacional[];
 }
 
 export async function carregarResumo(): Promise<Resumo | null> {

@@ -3,10 +3,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
-import { Tabela, CelulaNum } from '@/components/app/tabela';
+import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
+import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
+import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, cnpjCpf, dataBR, urlFornecedor } from '@/lib/format';
+import { CONDICAO_SEM_NOTA } from '@/lib/consultas';
+import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface CadastroRFB {
   razaoSocial: string | null;
@@ -39,6 +42,8 @@ interface DadosFornecedor {
   topCandidatos: ItemBarra[];
   categorias: ItemBarra[];
   porDia: PontoLinha[];
+  conexoes: NoConexao[];
+  conexoesSecundarias: NoSecundario[];
   candidatos: { sq: string; nome: string; cargo: string; partido: string; uf: string; itens: number; total: number }[];
   doacoes: unknown[][];
   removidas: unknown[][];
@@ -73,8 +78,9 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
                             THEN SQ_CANDIDATO_FORNECEDOR END),
              COUNT(DISTINCT SQ_CANDIDATO), COUNT(DISTINCT SG_PARTIDO), COUNT(DISTINCT SG_UF),
              ROUND(SUM(valor), 2), COUNT(*),
-             ROUND(SUM(valor) FILTER (WHERE DS_TIPO_DOCUMENTO IS NULL
-                                         OR TRIM(DS_TIPO_DOCUMENTO) IN ('', '#NULO')), 2)
+             -- mesma régua do backend (src/analises.py): sem nota fiscal, fora
+             -- das categorias em que a nota não é o documento próprio
+             ROUND(SUM(valor) FILTER (WHERE ${CONDICAO_SEM_NOTA}), 2)
       FROM despesas_atual WHERE ${w}`);
   const l = perfilRes.linhas[0] ?? [];
   if (!Number(l[4])) return null;
@@ -106,11 +112,14 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'`);
   const totalDoado = Number(doacaoAgg.linhas[0]?.[0] ?? 0);
 
-  const removidasAgg = await executarSQL(`
-      SELECT COUNT(*),
-             ROUND(SUM(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas), 2)
-      FROM despesas
-      WHERE ${w} AND dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)`);
+  // MESMA régua do resto do site (view despesas_removidas): retransmissões
+  // renumeradas pelo TSE e linhas-placeholder não contam como remoção — a
+  // consulta crua em `despesas` contava e contradizia a Metodologia
+  const removidasAgg = tabelasDisponiveis.has('despesas_removidas')
+    ? await executarSQL(`
+        SELECT COUNT(*), ROUND(SUM(valor), 2)
+        FROM despesas_removidas WHERE ${w}`)
+    : { linhas: [] as unknown[][] };
   const valorRemovido = Number(removidasAgg.linhas[0]?.[1] ?? 0);
 
   const flags: string[] = [];
@@ -120,7 +129,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
     flags.push(`recebe de ${num.format(nCandidatos)} candidatos de ${num.format(nPartidos)} partido${nPartidos > 1 ? 's' : ''}`);
   if (totalDoado > 0) flags.push(`também aparece como doador: ${brl.format(totalDoado)}`);
   if (/f.sica/i.test(String(l[1] ?? ''))) flags.push('pessoa física prestando serviços de campanha');
-  if (semNota > 0) flags.push(`${brl.format(semNota)} sem documento fiscal informado`);
+  if (semNota > 0) flags.push(`${brl.format(semNota)} sem nota fiscal`);
   if (valorRemovido > 0) flags.push(`${brl.format(valorRemovido)} em declarações removidas`);
   if (rfb?.abertura && rfb.abertura >= '2025-10-01')
     flags.push(`CNPJ aberto em ${dataBR(rfb.abertura)}, às vésperas da eleição`);
@@ -169,11 +178,11 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
     ? (await executarSQL(`
         SELECT NM_CANDIDATO AS "Candidato", SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
                DS_DESPESA AS "Descrição",
-               ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas, 2) AS "Valor",
+               ROUND(valor, 2) AS "Valor",
                STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
                STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até"
-        FROM despesas
-        WHERE ${w} AND dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
+        FROM despesas_removidas
+        WHERE ${w}
         ORDER BY 4 DESC LIMIT 30`)).linhas
     : [];
 
@@ -184,6 +193,75 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
              ROUND(valor, 2) AS "Valor"
       FROM despesas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`);
 
+  // grafo: candidatos que pagam (despesa) e que recebem doação deste CNPJ/CPF;
+  // quem faz as duas coisas com a mesma contraparte ganha o anel do "dinheiro que volta"
+  const conexoes = new Map<string, NoConexao>();
+  for (const c of candidatos.linhas.slice(0, 14)) {
+    const sq = String(c[0]);
+    conexoes.set(sq, {
+      id: sq,
+      rotulo: `${c[1]} (${c[3]}/${c[4]})`,
+      valor: Number(c[6] ?? 0),
+      tipo: 'despesa',
+    });
+  }
+  const doadoPorSq = new Map<string, number>();
+  for (const d of doacoes) {
+    const sq = String(d[0]);
+    doadoPorSq.set(sq, (doadoPorSq.get(sq) ?? 0) + Number(d[6] ?? 0));
+  }
+  for (const [sq, valorDoado] of doadoPorSq) {
+    const existente = conexoes.get(sq);
+    if (existente) {
+      existente.tipo = 'ambos';
+      existente.detalhe = `pagamentos ${brl.format(existente.valor)} · doações ${brl.format(valorDoado)}`;
+      existente.valor += valorDoado;
+    } else {
+      const d = doacoes.find((x) => String(x[0]) === sq);
+      conexoes.set(sq, {
+        id: sq,
+        rotulo: `${d?.[1] ?? 'Candidato'} (${d?.[2] ?? ''})`,
+        valor: valorDoado,
+        tipo: 'doacao',
+      });
+    }
+  }
+
+  // 2º nível do grafo: os outros maiores fornecedores de cada candidato — mostra
+  // o ecossistema em que este fornecedor está inserido (parceiros de rateio?)
+  const sqsGrafo = [...conexoes.keys()].slice(0, 10);
+  let conexoesSecundarias: NoSecundario[] = [];
+  if (sqsGrafo.length) {
+    const lista = sqsGrafo.map((s) => `'${esc(s)}'`).join(', ');
+    const outros = await executarSQL(`
+        SELECT SQ_CANDIDATO, NR_CPF_CNPJ_FORNECEDOR,
+               ANY_VALUE(COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)) AS nome,
+               ROUND(SUM(valor), 2) AS total
+        FROM despesas_atual
+        WHERE SQ_CANDIDATO IN (${lista})
+          AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO', '${esc(id)}')
+        GROUP BY 1, 2
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY SQ_CANDIDATO ORDER BY total DESC) <= 2`);
+    const porFornecedor = new Map<string, NoSecundario>();
+    for (const l of outros.linhas) {
+      const cnpj = String(l[1]);
+      const existente = porFornecedor.get(cnpj);
+      if (existente) {
+        existente.ligadoA.push(String(l[0]));
+        existente.valor += Number(l[3] ?? 0);
+      } else {
+        porFornecedor.set(cnpj, {
+          id: cnpj,
+          rotulo: String(l[2]),
+          valor: Number(l[3] ?? 0),
+          ligadoA: [String(l[0])],
+          detalhe: 'outro fornecedor do mesmo candidato',
+        });
+      }
+    }
+    conexoesSecundarias = [...porFornecedor.values()];
+  }
+
   return {
     perfil,
     rfb,
@@ -191,6 +269,8 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       rotulo: `${c[1]} (${c[3]}/${c[4]})`,
       valor: Number(c[6] ?? 0),
     })),
+    conexoes: [...conexoes.values()],
+    conexoesSecundarias,
     categorias: categorias.linhas.map((c) => ({ rotulo: String(c[0]), valor: Number(c[1]) })),
     porDia: porDia.linhas.map((c) => ({ rotulo: String(c[0]), valor: Number(c[2]) })),
     candidatos: candidatos.linhas.map((c) => ({
@@ -356,7 +436,8 @@ export function Fornecedor() {
           <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Partido/UF' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
             {dados.removidas.map((l, i) => (
               <tr key={i}>
-                <td>{celula(l[0])}</td><td className="text-muted-foreground">{celula(l[1])}</td><td>{celula(l[2])}</td>
+                <td>{celula(l[0])}</td><td className="text-muted-foreground">{celula(l[1])}</td>
+                <CelulaTexto>{celula(l[2])}</CelulaTexto>
                 <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
                 <td>{celula(l[4])}</td><td>{celula(l[5])}</td>
               </tr>
@@ -365,7 +446,27 @@ export function Fornecedor() {
         </Secao>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      {dados.conexoes.length > 0 && (
+        <SecaoRecolhivel
+          aberta
+          titulo="Rede de conexões"
+          resumo={`${num.format(p.nCandidatos)} candidatos`}
+          descricao="Candidatos que pagam este fornecedor (navy) e que recebem doações dele (âmbar); em cinza, os outros maiores fornecedores desses candidatos. Anel vermelho: os dois papéis ao mesmo tempo — o clássico 'dinheiro que volta'. Clique num nó para abrir a ficha."
+        >
+          <GrafoConexoes
+            centro={p.nome}
+            nos={dados.conexoes}
+            secundarios={dados.conexoesSecundarias}
+            rotuloSecundarios="outros fornecedores dos mesmos candidatos"
+            aoClicar={(no) => navigate(`/candidato/${no.id}`)}
+            aoClicarSecundario={(no) => {
+              if (temFichaFornecedor(no.id)) navigate(urlFornecedor(no.id));
+            }}
+          />
+        </SecaoRecolhivel>
+      )}
+
+      <div className="grid items-start gap-6 lg:grid-cols-2">
         <Secao titulo="Quem paga este fornecedor" descricao="Os dez candidatos com maior valor contratado.">
           <BarrasHorizontais dados={dados.topCandidatos} />
         </Secao>
@@ -374,13 +475,19 @@ export function Fornecedor() {
         </Secao>
       </div>
 
-      <Secao titulo="Recebimentos no tempo" descricao="Soma dos valores contratados pela data declarada da despesa.">
+      <SecaoRecolhivel titulo="Recebimentos no tempo" descricao="Soma dos valores contratados pela data declarada da despesa.">
         <LinhaTemporal pontos={dados.porDia} />
-      </Secao>
+      </SecaoRecolhivel>
 
-      <Secao titulo="Candidatos atendidos" descricao="Clique para abrir a ficha completa de cada candidato.">
+      <SecaoRecolhivel
+        titulo="Candidatos atendidos"
+        resumo={`${num.format(dados.candidatos.length)} listados`}
+        descricao="Clique para abrir a ficha completa de cada candidato."
+      >
         <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Cargo' }, { titulo: 'Partido/UF' }, { titulo: 'Itens', numerica: true }, { titulo: 'Total', numerica: true }]}>
-          {dados.candidatos.map((c) => (
+          {dados.candidatos.map((c) => {
+            const maxTotal = dados.candidatos[0]?.total ?? 0;
+            return (
             <tr key={c.sq} className="hover:bg-muted/40">
               <td>
                 <Link to={`/candidato/${c.sq}`} className="text-[#264E9B] underline-offset-4 hover:underline">
@@ -394,11 +501,12 @@ export function Fornecedor() {
                 </Link>/{c.uf}
               </td>
               <CelulaNum>{num.format(c.itens)}</CelulaNum>
-              <CelulaNum>{brl.format(c.total)}</CelulaNum>
+              <CelulaNum frac={maxTotal > 0 ? c.total / maxTotal : undefined}>{brl.format(c.total)}</CelulaNum>
             </tr>
-          ))}
+            );
+          })}
         </Tabela>
-      </Secao>
+      </SecaoRecolhivel>
 
       {dados.doacoes.length > 0 && (
         <Secao titulo="Também aparece como doador" descricao="Doações declaradas com este mesmo CNPJ/CPF. Fornecedor que também doa para campanhas é o clássico 'dinheiro que volta' — vale conferir se doa para quem o contrata.">
@@ -421,9 +529,15 @@ export function Fornecedor() {
         </Secao>
       )}
 
-      <Secao titulo="Despesas declaradas" descricao="As cinquenta maiores notas com este fornecedor no estado atual das declarações.">
+      <SecaoRecolhivel
+        titulo="Despesas declaradas"
+        resumo={`${num.format(p.itens)} itens · ${brl.format(p.total)}`}
+        descricao="As cinquenta maiores notas com este fornecedor no estado atual das declarações."
+      >
         <Tabela colunas={[{ titulo: 'Data' }, { titulo: 'Candidato' }, { titulo: 'Categoria' }, { titulo: 'Descrição' }, { titulo: 'Documento' }, { titulo: 'Valor', numerica: true }]}>
-          {dados.notas.map((l, i) => (
+          {dados.notas.map((l, i) => {
+            const maxNota = Number(dados.notas[0]?.[6] ?? 0);
+            return (
             <tr key={i} className="hover:bg-muted/40">
               <td className="whitespace-nowrap">{celula(l[0])}</td>
               <td>
@@ -432,13 +546,16 @@ export function Fornecedor() {
                 </Link>
               </td>
               <td className="text-muted-foreground">{celula(l[3])}</td>
-              <td>{celula(l[4])}</td>
+              <CelulaTexto>{celula(l[4])}</CelulaTexto>
               <td className="text-muted-foreground">{celula(l[5]) || '—'}</td>
-              <CelulaNum>{brl.format(Number(l[6] ?? 0))}</CelulaNum>
+              <CelulaNum frac={maxNota > 0 ? Number(l[6] ?? 0) / maxNota : undefined}>
+                {brl.format(Number(l[6] ?? 0))}
+              </CelulaNum>
             </tr>
-          ))}
+            );
+          })}
         </Tabela>
-      </Secao>
+      </SecaoRecolhivel>
     </div>
   );
 }

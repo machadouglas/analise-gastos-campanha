@@ -71,6 +71,13 @@ export function Metodologia() {
           órgãos de controle façam as perguntas — nunca afirmar irregularidade, fraude ou crime.
         </p>
         <p>
+          Há duas réguas distintas no site, e elas não se misturam: os{' '}
+          <strong>chips âmbar das fichas</strong> marcam fatos absolutos do próprio candidato
+          (gastou mais do que arrecadou, tem valor sem nota, teve declaração removida), enquanto
+          o <strong>"fora da curva"</strong> compara o candidato ao grupo — um candidato pode ter
+          chips na ficha sem estar fora da curva, e vice-versa.
+        </p>
+        <p>
           <strong>"Fora da curva"</strong> significa estar acima do percentil 95 do{' '}
           <strong>grupo de comparação</strong>: candidatos ao mesmo cargo na mesma UF (ou no país,
           quando o grupo local tem menos de 20 candidatos). Nunca comparamos um candidato a

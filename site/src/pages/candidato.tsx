@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { AlertTriangle, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
-import { Tabela, CelulaNum } from '@/components/app/tabela';
+import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
+import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import {
   BarrasHorizontais,
+  BarraComposicao,
   FaixasDePreco,
   LinhasComparadas,
   type FaixaPreco,
@@ -13,9 +15,13 @@ import {
   type MarcaLinha,
   type Serie,
 } from '@/components/app/graficos';
+import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
+import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
+import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
+import { gerarCartaoCandidato } from '@/lib/cartao';
 import { FotoCandidato } from '@/components/app/foto';
 
 interface Perfil {
@@ -31,6 +37,8 @@ interface Perfil {
   receitas: number | null;
   pago: number | null;
   pctFundosPublicos: number | null;
+  fundosPublicos: number;
+  recursosProprios: number;
   nFornecedores: number;
   cnpjs: number;
   cnpjsConsultados: number;
@@ -43,6 +51,9 @@ interface DadosCandidato {
   series: Serie[];
   marcas: MarcaLinha[];
   categorias: ItemBarra[];
+  origensReceita: NoFluxo[];
+  conexoes: NoConexao[];
+  conexoesSecundarias: NoSecundario[];
   fornecedores: unknown[][];
   colunasFornecedores: string[];
   faixas: FaixaPreco[];
@@ -56,6 +67,32 @@ function esc(s: string) {
   return s.replaceAll("'", "''");
 }
 
+/** Amostra dos indicadores do grupo de comparação para o beeswarm — uma linha
+ *  por candidato do grupo, colunas = métricas comparáveis. */
+async function amostraGrupo(cargo: string, uf: string | null): Promise<Record<string, number[]>> {
+  const colunas = Object.keys(METRICAS);
+  const ondeUf = uf ? `AND SG_UF = '${esc(uf)}'` : '';
+  try {
+    const r = await executarSQL(`
+        SELECT ${colunas.join(', ')}, n_fornecedores
+        FROM indicadores
+        WHERE DS_CARGO ILIKE '${esc(cargo)}' ${ondeUf}
+        USING SAMPLE 200 ROWS (reservoir, 42)`);
+    const idx = Object.fromEntries(r.colunas.map((c, i) => [c, i]));
+    const saida: Record<string, number[]> = {};
+    for (const c of colunas) {
+      saida[c] = r.linhas
+        .filter((l) => l[idx[c]] != null &&
+          // mesma régua do benchmark: concentração só faz sentido com 2+ fornecedores
+          (c !== 'pct_maior_fornecedor' || Number(l[idx.n_fornecedores]) > 1))
+        .map((l) => Number(l[idx[c]]));
+    }
+    return saida;
+  } catch {
+    return {};
+  }
+}
+
 async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   const w = `SQ_CANDIDATO = '${esc(sq)}'`;
 
@@ -65,7 +102,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   const flags: string[] = [];
   const razao = Number(linha.razao_gasto_receita ?? 0);
-  if (razao > 1.2) flags.push(`contratou ${razao.toLocaleString('pt-BR')}× o que declarou arrecadar`);
+  // mesma régua do sinal do backend (razão > 1): gastou mais do que arrecadou
+  if (razao > 1) flags.push(`contratou ${razao.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}× o que declarou arrecadar`);
   if (Number(linha.pct_maior_fornecedor ?? 0) >= 50 && Number(linha.n_fornecedores) > 1)
     flags.push(`${linha.pct_maior_fornecedor}% do gasto em um único fornecedor`);
   if (Number(linha.valor_sem_nota ?? 0) > 0)
@@ -119,6 +157,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     receitas: linha.total_receitas == null ? null : Number(linha.total_receitas),
     pago: linha.total_pago == null ? null : Number(linha.total_pago),
     pctFundosPublicos: linha.pct_fundos_publicos == null ? null : Number(linha.pct_fundos_publicos),
+    fundosPublicos: Number(linha.fundos_publicos ?? 0),
+    recursosProprios: Number(linha.recursos_proprios ?? 0),
     nFornecedores: Number(linha.n_fornecedores ?? 0),
     cnpjs: Number(linha.fornecedores_cnpj ?? 0),
     cnpjsConsultados: Number(linha.fornecedores_consultados ?? 0),
@@ -144,16 +184,26 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
         });
       }
     }
+    // beeswarm: pontos cinza = amostra dos candidatos do grupo de cada métrica
+    const precisaLocal = [...porMetrica.values()].some((g) => g.ambito !== 'BR-TODAS');
+    const precisaBr = [...porMetrica.values()].some((g) => g.ambito === 'BR-TODAS');
+    const vazio: Record<string, number[]> = {};
+    const [grupoLocal, grupoBr] = await Promise.all([
+      precisaLocal ? amostraGrupo(perfil.cargo, perfil.uf) : Promise.resolve(vazio),
+      precisaBr ? amostraGrupo(perfil.cargo, null) : Promise.resolve(vazio),
+    ]);
     for (const nome of Object.keys(METRICAS)) {
       const grupo = porMetrica.get(nome);
       const valor = linha[nome];
       if (!grupo || valor == null) continue;
       if (nome === 'pct_maior_fornecedor' && Number(linha.n_fornecedores) <= 1) continue;
       const info = metrica(nome);
+      const amostra = (grupo.ambito === 'BR-TODAS' ? grupoBr : grupoLocal)[nome] ?? [];
       comparacao.push({
         categoria: `${info.rotulo} · grupo: ${grupo.n} candidatos${grupo.ambito === 'BR-TODAS' ? ' (BR)' : ''}`,
         p25: grupo.p25, mediana: grupo.mediana, p75: grupo.p75, p95: grupo.p95,
         notas: [{ valor: Number(valor), descricao: perfil.nome }],
+        grupo: amostra,
         formatar: info.formatar,
       });
     }
@@ -169,6 +219,10 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
       FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`);
 
+  const origens = await executarSQL(`
+      SELECT DS_ORIGEM_RECEITA, ROUND(SUM(valor), 2) AS total
+      FROM receitas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC`);
+
   const temForn = tabelasDisponiveis.has('fornecedores');
   const fornecedores = await executarSQL(`
       SELECT COALESCE(NULLIF(d.NM_FORNECEDOR_RFB, '#NULO'), NULLIF(d.NM_FORNECEDOR, '#NULO'),
@@ -181,6 +235,68 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       FROM despesas_atual d
       ${temForn ? 'LEFT JOIN fornecedores f ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj' : ''}
       WHERE d.${w} GROUP BY 1, 2 ORDER BY "Total" DESC LIMIT 30`);
+
+  // grafo de conexões: maiores fornecedores + maiores doadores, com destaque
+  // para quem aparece nos dois papéis (red flag nº 4, "dinheiro que volta")
+  const doadores = await executarSQL(`
+      SELECT NR_CPF_CNPJ_DOADOR,
+             COALESCE(NULLIF(NM_DOADOR_RFB, '#NULO'), NULLIF(NM_DOADOR, '#NULO'),
+                      'Doador não identificado') AS nome,
+             ROUND(SUM(valor), 2) AS total
+      FROM receitas_atual WHERE ${w}
+      GROUP BY 1, 2 ORDER BY total DESC LIMIT 12`);
+  const conexoes = new Map<string, NoConexao>();
+  for (const l of fornecedores.linhas.slice(0, 12)) {
+    const id = String(l[1]);
+    if (id === '-1' || id === '#NULO') continue;
+    conexoes.set(id, { id, rotulo: String(l[0]), valor: Number(l[2] ?? 0), tipo: 'despesa' });
+  }
+  for (const l of doadores.linhas) {
+    const id = String(l[0]);
+    if (id === '-1' || id === '#NULO') continue;
+    const existente = conexoes.get(id);
+    if (existente) {
+      existente.tipo = 'ambos';
+      existente.detalhe = `pagamentos ${brl.format(existente.valor)} · doações ${brl.format(Number(l[2] ?? 0))}`;
+      existente.valor += Number(l[2] ?? 0);
+    } else {
+      conexoes.set(id, { id, rotulo: String(l[1]), valor: Number(l[2] ?? 0), tipo: 'doacao' });
+    }
+  }
+
+  // 2º nível do grafo: outros candidatos que pagam os MESMOS fornecedores
+  // (fornecedor compartilhado — red flag nº 3 — visível na própria rede)
+  const cnpjsGrafo = [...conexoes.keys()].filter((id) => id.length >= 11);
+  let conexoesSecundarias: NoSecundario[] = [];
+  if (cnpjsGrafo.length) {
+    const lista = cnpjsGrafo.map((c) => `'${esc(c)}'`).join(', ');
+    const outros = await executarSQL(`
+        SELECT NR_CPF_CNPJ_FORNECEDOR, SQ_CANDIDATO,
+               ANY_VALUE(NM_CANDIDATO) || ' (' || ANY_VALUE(SG_PARTIDO) || '/' || ANY_VALUE(SG_UF) || ')' AS rotulo,
+               ROUND(SUM(valor), 2) AS total
+        FROM despesas_atual
+        WHERE NR_CPF_CNPJ_FORNECEDOR IN (${lista}) AND NOT ${w}
+        GROUP BY 1, 2
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY NR_CPF_CNPJ_FORNECEDOR ORDER BY total DESC) <= 3`);
+    const porCandidato = new Map<string, NoSecundario>();
+    for (const l of outros.linhas) {
+      const sqOutro = String(l[1]);
+      const existente = porCandidato.get(sqOutro);
+      if (existente) {
+        existente.ligadoA.push(String(l[0]));
+        existente.valor += Number(l[3] ?? 0);
+      } else {
+        porCandidato.set(sqOutro, {
+          id: sqOutro,
+          rotulo: String(l[2]),
+          valor: Number(l[3] ?? 0),
+          ligadoA: [String(l[0])],
+          detalhe: 'também paga este fornecedor',
+        });
+      }
+    }
+    conexoesSecundarias = [...porCandidato.values()];
+  }
 
   // a unidade é a nota (soma dos itens de mesma SQ_DESPESA), como no benchmark;
   // SQ_DESPESA = '-1' não permite reagrupar e cada linha conta como uma nota
@@ -243,6 +359,17 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     diasRemocao.has(r) ? [{ indice: i, rotulo: 'declaração removida — visível até este dia' }] : [],
   );
 
+  // sankey: top origens e categorias, resto agregado em "Outras"
+  const agruparCauda = (itens: NoFluxo[], teto: number): NoFluxo[] => {
+    if (itens.length <= teto) return itens;
+    const cauda = itens.slice(teto).reduce((s, n) => s + n.valor, 0);
+    return [...itens.slice(0, teto), { rotulo: `Outras (${itens.length - teto})`, valor: cauda }];
+  };
+  const origensReceita = agruparCauda(
+    origens.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1] ?? 0) })).filter((n) => n.valor > 0),
+    6,
+  );
+
   return {
     perfil,
     serieRotulos,
@@ -252,6 +379,9 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     ],
     marcas,
     categorias: categorias.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
+    origensReceita,
+    conexoes: [...conexoes.values()],
+    conexoesSecundarias,
     colunasFornecedores: fornecedores.colunas,
     fornecedores: fornecedores.linhas,
     faixas: [...faixasPorCategoria.values()].slice(0, 8),
@@ -276,7 +406,9 @@ function Secao({ titulo, descricao, children }: { titulo: string; descricao: str
 
 export function Candidato() {
   const { sq } = useParams<{ sq: string }>();
+  const navigate = useNavigate();
   const [dados, setDados] = useState<DadosCandidato | null | 'carregando' | 'nao-encontrado'>('carregando');
+  const [gerandoCartao, setGerandoCartao] = useState(false);
 
   useEffect(() => {
     if (!sq || !/^\d+$/.test(sq)) {
@@ -306,11 +438,44 @@ export function Candidato() {
   }
 
   const p = dados.perfil;
+  const maxFornecedor = Math.max(...dados.fornecedores.map((l) => Number(l[2] ?? 0)), 0);
+  const maxReceita = Math.max(...dados.receitas.map((l) => Number(l[4] ?? 0)), 0);
+  const doacoesPrivadas = Math.max((p.receitas ?? 0) - p.fundosPublicos - p.recursosProprios, 0);
+
+  async function baixarCartao() {
+    setGerandoCartao(true);
+    try {
+      const blob = await gerarCartaoCandidato({
+        nome: p.nome,
+        numero: p.numero,
+        cargo: p.cargo,
+        partido: p.partido,
+        uf: p.uf,
+        arrecadado: p.receitas,
+        contratado: p.contratado,
+        pctPublico: p.pctFundosPublicos,
+        flags: p.flags,
+        fotoUrl: p.cdEleicao && sq && p.sgUe
+          ? `https://divulgacandcontas.tse.jus.br/divulga/rest/arquivo/img/${p.cdEleicao}/${sq}/${p.sgUe}`
+          : null,
+        url: `${window.location.host}/candidato/${sq}`,
+      });
+      if (!blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `radar-${p.numero}-${p.nome.toLowerCase().replace(/\s+/g, '-').normalize('NFD').replace(/[^\w-]/g, '')}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally {
+      setGerandoCartao(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-6 py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do candidato</p>
-        <div className="mt-2 flex items-center gap-4">
+        <div className="mt-2 flex flex-wrap items-center gap-4">
           <FotoCandidato
             cdEleicao={p.cdEleicao}
             sq={sq ?? null}
@@ -318,7 +483,7 @@ export function Candidato() {
             nome={p.nome}
             className="h-16 w-16 text-lg sm:h-20 sm:w-20"
           />
-          <div>
+          <div className="min-w-0 flex-1">
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{p.nome}</h1>
             <p className="mt-2 text-muted-foreground">
               nº {p.numero} · {p.cargo} ·{' '}
@@ -328,6 +493,15 @@ export function Candidato() {
               · {p.uf}
             </p>
           </div>
+          <button
+            onClick={() => void baixarCartao()}
+            disabled={gerandoCartao}
+            className="inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-foreground disabled:opacity-60"
+            title="Gera uma imagem PNG com o resumo desta ficha, pronta para compartilhar"
+          >
+            {gerandoCartao ? <Spinner className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+            Cartão para compartilhar
+          </button>
         </div>
         {p.flags.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-2">
@@ -361,13 +535,45 @@ export function Candidato() {
         ))}
       </div>
 
-      {dados.comparacao.length > 0 && (
+      {(p.receitas ?? 0) > 0 && (
         <Secao
+          titulo="Composição da receita"
+          descricao="De que tipo de dinheiro a campanha vive: fundos públicos (Fundo Eleitoral + Fundo Partidário), bolso do próprio candidato e doações de terceiros."
+        >
+          <BarraComposicao
+            fatias={[
+              { rotulo: 'Dinheiro público', valor: p.fundosPublicos, cor: '#264E9B' },
+              { rotulo: 'Recursos próprios', valor: p.recursosProprios, cor: '#B45309' },
+              { rotulo: 'Demais doações', valor: doacoesPrivadas, cor: '#6e6a60' },
+            ]}
+          />
+        </Secao>
+      )}
+
+      {(dados.origensReceita.length > 0 || dados.categorias.length > 0) && (
+        <SecaoRecolhivel
+          aberta
+          titulo="Fluxo do dinheiro"
+          descricao="De onde a receita veio (esquerda) e em que tipos de gasto foi contratada (direita). Os lados podem somar valores diferentes — contratar acima do arrecadado aparece aqui."
+        >
+          <Ampliavel titulo="Fluxo do dinheiro">
+            <FluxoDinheiro
+              entradas={dados.origensReceita}
+              saidas={dados.categorias.slice(0, 8)}
+              centro={p.nome}
+            />
+          </Ampliavel>
+        </SecaoRecolhivel>
+      )}
+
+      {dados.comparacao.length > 0 && (
+        <SecaoRecolhivel
+          aberta
           titulo={`Comparado aos candidatos a ${p.cargo}`}
-          descricao="Cada linha mostra onde este candidato está na distribuição do próprio grupo de comparação (mesmo cargo e UF; nacional quando o grupo local é pequeno). Estar fora da faixa não é irregularidade — é onde vale perguntar."
+          descricao="Cada linha é uma métrica: pontos cinza são os demais candidatos do grupo de comparação (mesmo cargo e UF; nacional quando o grupo local é pequeno), o ponto âmbar é este candidato. Estar fora da faixa não é irregularidade — é onde vale perguntar."
         >
           <FaixasDePreco faixas={dados.comparacao} rotuloPontos="este candidato" />
-        </Secao>
+        </SecaoRecolhivel>
       )}
 
       {dados.removidas.length > 0 && (
@@ -375,7 +581,7 @@ export function Candidato() {
           <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
             {dados.removidas.map((l, i) => (
               <tr key={i}>
-                <td>{celula(l[0])}</td><td>{celula(l[1])}</td>
+                <td>{celula(l[0])}</td><CelulaTexto>{celula(l[1])}</CelulaTexto>
                 <CelulaNum>{brl.format(Number(l[2] ?? 0))}</CelulaNum>
                 <td>{celula(l[3])}</td><td>{celula(l[4])}</td>
               </tr>
@@ -384,26 +590,58 @@ export function Candidato() {
         </Secao>
       )}
 
-      <Secao titulo="Dinheiro no tempo" descricao="Evolução do declarado a cada extração diária: despesa contratada × receita arrecadada. Tesoura aberta = gasto sem origem declarada ainda.">
-        <LinhasComparadas rotulos={dados.serieRotulos} series={dados.series} marcas={dados.marcas} />
-      </Secao>
+      {dados.conexoes.length > 0 && (
+        <SecaoRecolhivel
+          aberta
+          titulo="Rede de conexões"
+          resumo={`${dados.conexoes.length} contrapartes`}
+          descricao="Maiores fornecedores e doadores deste candidato; em cinza, outros candidatos que pagam os mesmos fornecedores (fornecedor compartilhado). Anel vermelho marca quem aparece nos dois papéis — o clássico 'dinheiro que volta'. Clique num nó para abrir a ficha."
+        >
+          <GrafoConexoes
+            centro={p.nome}
+            nos={dados.conexoes}
+            secundarios={dados.conexoesSecundarias}
+            rotuloSecundarios="outros candidatos do mesmo fornecedor"
+            aoClicar={(no) => {
+              if (no.tipo !== 'doacao' && temFichaFornecedor(no.id)) navigate(urlFornecedor(no.id));
+            }}
+            aoClicarSecundario={(no) => navigate(`/candidato/${no.id}`)}
+          />
+        </SecaoRecolhivel>
+      )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Secao titulo="Para onde vai o dinheiro" descricao="Categorias de gasto declaradas.">
+      <SecaoRecolhivel
+        titulo="Dinheiro no tempo"
+        descricao="Evolução do declarado a cada extração diária: despesa contratada × receita arrecadada. Tesoura aberta = gasto sem origem declarada ainda."
+      >
+        <LinhasComparadas rotulos={dados.serieRotulos} series={dados.series} marcas={dados.marcas} />
+      </SecaoRecolhivel>
+
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <SecaoRecolhivel titulo="Para onde vai o dinheiro" descricao="Categorias de gasto declaradas.">
           <BarrasHorizontais dados={dados.categorias} />
-        </Secao>
-        <Secao titulo="Preços × mercado" descricao="Cada ponto âmbar é uma nota deste candidato sobre a distribuição de preços da categoria na UF. Pontos muito à direita da faixa merecem pergunta.">
+        </SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Preços × mercado" descricao="Cada ponto âmbar é uma nota deste candidato sobre a distribuição de preços da categoria na UF. Pontos muito à direita da faixa merecem pergunta.">
           <FaixasDePreco faixas={dados.faixas} />
-        </Secao>
+        </SecaoRecolhivel>
       </div>
 
-      <Secao titulo="Fornecedores" descricao={`Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (${p.cnpjsConsultados} de ${p.cnpjs} CNPJs já verificados na Receita Federal). Clique no nome para abrir a ficha do fornecedor.`}>
+      <SecaoRecolhivel
+        titulo="Fornecedores"
+        resumo={`${num.format(p.nFornecedores)} · maior ${brl.format(maxFornecedor)}`}
+        descricao={`Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (${p.cnpjsConsultados} de ${p.cnpjs} CNPJs já verificados na Receita Federal). Clique no nome para abrir a ficha do fornecedor.`}
+      >
         <Tabela colunas={dados.colunasFornecedores.map((c) => ({ titulo: c, numerica: c === 'Total' || c === 'Itens' }))}>
           {dados.fornecedores.map((l, i) => (
             <tr key={i} className="hover:bg-muted/40">
               {l.map((v, j) => {
                 const col = dados.colunasFornecedores[j];
-                if (col === 'Total') return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
+                if (col === 'Total')
+                  return (
+                    <CelulaNum key={j} frac={maxFornecedor > 0 ? Number(v ?? 0) / maxFornecedor : undefined}>
+                      {brl.format(Number(v ?? 0))}
+                    </CelulaNum>
+                  );
                 if (col === 'Itens') return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                 if (col === 'Empresa aberta em') return <td key={j}>{dataBR(celula(v))}</td>;
                 if (col === 'CNPJ/CPF') return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
@@ -420,21 +658,28 @@ export function Candidato() {
             </tr>
           ))}
         </Tabela>
-      </Secao>
+      </SecaoRecolhivel>
 
-      <Secao titulo="De onde vem o dinheiro" descricao="Doações e repasses declarados, maiores primeiro.">
+      <SecaoRecolhivel
+        titulo="Doações e repasses declarados"
+        descricao="De onde vem o dinheiro, maiores primeiro."
+      >
         <Tabela colunas={dados.colunasReceitas.map((c) => ({ titulo: c, numerica: c === 'Valor' }))}>
           {dados.receitas.map((l, i) => (
             <tr key={i}>
               {l.map((v, j) =>
                 dados.colunasReceitas[j] === 'Valor'
-                  ? <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>
+                  ? (
+                    <CelulaNum key={j} frac={maxReceita > 0 ? Number(v ?? 0) / maxReceita : undefined}>
+                      {brl.format(Number(v ?? 0))}
+                    </CelulaNum>
+                  )
                   : <td key={j}>{celula(v)}</td>,
               )}
             </tr>
           ))}
         </Tabela>
-      </Secao>
+      </SecaoRecolhivel>
     </div>
   );
 }

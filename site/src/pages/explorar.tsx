@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { AlertTriangle, Search } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { Tabela, CelulaNum } from '@/components/app/tabela';
+import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
+import { SecaoRecolhivel } from '@/components/app/recolhivel';
+import { FotoCandidato } from '@/components/app/foto';
+import { MapaBrasil, type ValorUF } from '@/components/app/mapa';
 import {
   BarrasHorizontais, Dispersao, LinhaTemporal,
   type ItemBarra, type PontoDispersao, type PontoLinha,
@@ -12,28 +15,15 @@ import {
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
+import {
+  FILTROS_VAZIOS, SINAIS_CTE, SINAIS_FILTRO, condUF, cteCategoria, eVisaoReceitas,
+  whereDaVisao, whereIndicadores,
+  type Filtros, type SinalFiltro, type Visao,
+} from '@/lib/consultas';
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
 const POR_PAGINA = 50;
-
-interface Filtros {
-  uf: string;
-  cargo: string;
-  partido: string;
-  candidato: string;
-  fornecedor: string;
-  descricao: string;
-}
-
-const FILTROS_VAZIOS: Filtros = { uf: '', cargo: '', partido: '', candidato: '', fornecedor: '', descricao: '' };
-
-/** Visões: recortes prontos que respondem uma pergunta e aceitam os demais filtros. */
-type Visao = 'atual' | 'fora-da-curva' | 'removidas' | 'removidas-receitas' | 'compartilhados' | 'sem-nota' | 'pessoa-fisica';
-
-/** A visão de receitas removidas anda sobre a tabela de receitas — a contraparte
- *  é o doador e a categoria é a origem da receita, não a do gasto. */
-const eVisaoReceitas = (v: Visao) => v === 'removidas-receitas';
 
 const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
   {
@@ -78,179 +68,6 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
   },
 ];
 
-// manter em sincronia com CATEGORIAS_SEM_NOTA_ESPERADA em src/analises.py
-const CATEGORIAS_SEM_NOTA_ESPERADA = [
-  'Doações financeiras a outros candidatos/partidos',
-  'Encargos financeiros, taxas bancárias e/ou op. cartão de crédito',
-  'Encargos sociais',
-  'Impostos, contribuições e taxas',
-  'Locação/cessão de bens imóveis',
-  'Despesas com pessoal',
-];
-
-// espelha METRICAS_SINAL em src/resumo.py: sinal = métrica estritamente acima
-// do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe).
-// razão gasto÷arrecadado só é sinal quando > 1 — mesma régua do backend.
-const SINAIS_CTE = `
-  metricas AS (
-    SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'total_contratado' AS metrica, total_contratado AS valor
-    FROM indicadores WHERE total_contratado > 0
-    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'razao_gasto_receita', razao_gasto_receita
-    FROM indicadores WHERE razao_gasto_receita > 1
-    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_maior_fornecedor', pct_maior_fornecedor
-    FROM indicadores WHERE n_fornecedores > 1
-    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_sem_nota', pct_sem_nota
-    FROM indicadores WHERE total_contratado > 0
-    UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_pessoa_fisica', pct_pessoa_fisica
-    FROM indicadores WHERE total_contratado > 0),
-  sinais AS (
-    SELECT m.SQ_CANDIDATO, m.metrica, m.valor, COALESCE(buf.p95, bbr.p95) AS p95
-    FROM metricas m
-    LEFT JOIN benchmark_indicadores buf
-      ON buf.DS_CARGO = m.DS_CARGO AND buf.SG_UF = m.SG_UF AND buf.metrica = m.metrica
-    LEFT JOIN benchmark_indicadores bbr
-      ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica
-    WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND m.valor > COALESCE(buf.p95, bbr.p95))`;
-
-// filtro de segundo nível da visão fora-da-curva: EM QUAL sinal a pessoa
-// destoa ('' = qualquer). Ids espelham METRICAS_SINAL em src/resumo.py.
-const SINAIS_FILTRO = [
-  'total_contratado',
-  'razao_gasto_receita',
-  'pct_maior_fornecedor',
-  'pct_sem_nota',
-  'pct_pessoa_fisica',
-] as const;
-type SinalFiltro = (typeof SINAIS_FILTRO)[number] | '';
-
-const ROTULO_SINAL_SQL = `CASE s.metrica
-  WHEN 'total_contratado' THEN 'gasto total'
-  WHEN 'razao_gasto_receita' THEN 'gasto ÷ arrecadado'
-  WHEN 'pct_maior_fornecedor' THEN 'concentração no maior fornecedor'
-  WHEN 'pct_sem_nota' THEN '% sem nota fiscal'
-  WHEN 'pct_pessoa_fisica' THEN '% a pessoas físicas'
-  ELSE s.metrica END`;
-
-/** Filtros aplicáveis sobre `indicadores` (fornecedor/descrição não existem lá). */
-function whereIndicadores(f: Filtros): string {
-  const esc = (s: string) => s.replaceAll("'", "''");
-  const partes = ['1=1'];
-  if (f.uf) partes.push(`i.SG_UF = '${esc(f.uf)}'`);
-  if (f.cargo) partes.push(`i.DS_CARGO ILIKE '${esc(f.cargo)}'`);
-  if (f.partido) partes.push(`i.SG_PARTIDO = '${esc(f.partido)}'`);
-  const cand = f.candidato.trim();
-  if (cand) {
-    partes.push(
-      /^\d+$/.test(cand) ? `i.NR_CANDIDATO = '${cand}'` : `i.NM_CANDIDATO ILIKE '%${esc(cand)}%'`,
-    );
-  }
-  return partes.join(' AND ');
-}
-
-/** CTE do fora-da-curva POR CATEGORIA: total do candidato na categoria contra
- *  o p95 do grupo em benchmark_categorias (UF, com fallback BR-TODAS). */
-function cteCategoria(categoria: string): string {
-  const cat = categoria.replaceAll("'", "''");
-  return `
-  gasto AS (
-    SELECT SQ_CANDIDATO, SUM(valor) AS total
-    FROM despesas_atual WHERE DS_ORIGEM_DESPESA = '${cat}' GROUP BY 1),
-  estouro AS (
-    SELECT g.SQ_CANDIDATO, g.total, COALESCE(buf.p95, bbr.p95) AS p95
-    FROM gasto g
-    JOIN indicadores i USING (SQ_CANDIDATO)
-    LEFT JOIN benchmark_categorias buf
-      ON buf.DS_CARGO = i.DS_CARGO AND buf.SG_UF = i.SG_UF AND buf.DS_ORIGEM_DESPESA = '${cat}'
-    LEFT JOIN benchmark_categorias bbr
-      ON bbr.DS_CARGO = i.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.DS_ORIGEM_DESPESA = '${cat}'
-    WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND g.total > COALESCE(buf.p95, bbr.p95))`;
-}
-
-function whereDaVisao(visao: Visao, f: Filtros, sinal: SinalFiltro, categoria: string): { base: string; where: string } {
-  if (visao === 'removidas-receitas') return { base: 'receitas_removidas', where: montarWhere(f, true) };
-  const w = montarWhere(f);
-  if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
-  if (visao === 'fora-da-curva') {
-    // gráficos e KPIs mostram os gastos DOS candidatos fora da curva do recorte
-    if (categoria) {
-      return {
-        base: 'despesas_atual',
-        where:
-          `${w} AND SQ_CANDIDATO IN (WITH ${cteCategoria(categoria)} ` +
-          `SELECT e.SQ_CANDIDATO FROM estouro e ` +
-          `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)})`,
-      };
-    }
-    const porSinal = sinal ? ` AND s.metrica = '${sinal}'` : '';
-    return {
-      base: 'despesas_atual',
-      where:
-        `${w} AND SQ_CANDIDATO IN (WITH ${SINAIS_CTE} ` +
-        `SELECT DISTINCT s.SQ_CANDIDATO FROM sinais s ` +
-        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)}${porSinal})`,
-    };
-  }
-  if (visao === 'sem-nota') {
-    const categorias = CATEGORIAS_SEM_NOTA_ESPERADA.map((c) => `'${c.replaceAll("'", "''")}'`).join(', ');
-    return {
-      base: 'despesas_atual',
-      where:
-        `${w} AND (DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO = '#NULO'` +
-        ` OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%') AND DS_ORIGEM_DESPESA NOT IN (${categorias})`,
-    };
-  }
-  if (visao === 'pessoa-fisica') {
-    return { base: 'despesas_atual', where: `${w} AND DS_TIPO_FORNECEDOR ILIKE '%f_sica%'` };
-  }
-  if (visao === 'compartilhados') {
-    return {
-      base: 'despesas_atual',
-      where:
-        `${w} AND NR_CPF_CNPJ_FORNECEDOR IN (` +
-        `SELECT NR_CPF_CNPJ_FORNECEDOR FROM despesas_atual WHERE ${w}` +
-        ` AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')` +
-        ` GROUP BY 1 HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1)`,
-    };
-  }
-  return { base: 'despesas_atual', where: w };
-}
-
-function montarWhere(f: Filtros, receitas = false): string {
-  const partes = ['1=1'];
-  const esc = (s: string) => s.replaceAll("'", "''");
-  if (f.uf) partes.push(`SG_UF = '${esc(f.uf)}'`);
-  if (f.cargo) partes.push(`DS_CARGO ILIKE '${esc(f.cargo)}'`);
-  if (f.partido) partes.push(`SG_PARTIDO = '${esc(f.partido)}'`);
-  const cand = f.candidato.trim();
-  if (cand) {
-    partes.push(
-      /^\d+$/.test(cand)
-        ? `NR_CANDIDATO = '${cand}'`
-        : `NM_CANDIDATO ILIKE '%${esc(cand)}%'`,
-    );
-  }
-  const forn = f.fornecedor.trim();
-  if (forn) {
-    const [colId, colNome, colNomeRfb] = receitas
-      ? ['NR_CPF_CNPJ_DOADOR', 'NM_DOADOR', 'NM_DOADOR_RFB']
-      : ['NR_CPF_CNPJ_FORNECEDOR', 'NM_FORNECEDOR', 'NM_FORNECEDOR_RFB'];
-    partes.push(
-      /^[\d./-]+$/.test(forn)
-        ? `${colId} LIKE '${forn.replace(/\D/g, '')}%'`
-        : `(${colNome} ILIKE '%${esc(forn)}%' OR ${colNomeRfb} ILIKE '%${esc(forn)}%')`,
-    );
-  }
-  const desc = f.descricao.trim();
-  if (desc) {
-    partes.push(
-      receitas
-        ? `(DS_ORIGEM_RECEITA ILIKE '%${esc(desc)}%' OR DS_ESPECIE_RECEITA ILIKE '%${esc(desc)}%')`
-        : `(DS_DESPESA ILIKE '%${esc(desc)}%' OR DS_ORIGEM_DESPESA ILIKE '%${esc(desc)}%')`,
-    );
-  }
-  return partes.join(' AND ');
-}
-
 interface CandidatoEncontrado {
   sq: string;
   nome: string;
@@ -261,15 +78,52 @@ interface CandidatoEncontrado {
   contratado: number;
 }
 
+/** Card da visão fora-da-curva: sinais estruturados (para os chips) + foto. */
+interface CandidatoFora {
+  sq: string;
+  nome: string;
+  partidoUf: string;
+  cargo: string;
+  contratado: number;
+  arrecadado: number | null;
+  cdEleicao: string | null;
+  sgUe: string | null;
+  sinais: { metrica: string; valor: number; p95: number }[];
+}
+
 interface Dados {
   kpis: { contratado: number; candidatos: number; fornecedores: number; itens: number };
   encontrados: CandidatoEncontrado[];
   categorias: ItemBarra[];
   candidatos: ItemBarra[];
   porDia: PontoLinha[];
+  mapa: ValorUF[];
   dispersao: PontoDispersao[] | null;
+  foraDaCurva: CandidatoFora[] | null;
   linhas: unknown[][];
   colunas: string[];
+}
+
+/** SQL dos cards fora-da-curva: um candidato por linha, sinais agregados de
+ *  forma legível por máquina (metrica~valor~p95;...) e, quando o parquet de
+ *  candidatos traz CD_ELEICAO/SG_UE, os metadados da foto oficial. */
+function sqlForaDaCurva(f: Filtros, s: SinalFiltro, pag: number, comFoto: boolean): string {
+  return `WITH ${SINAIS_CTE}${comFoto ? `,
+    foto AS (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd, ANY_VALUE(SG_UE) AS ue
+             FROM candidatos GROUP BY 1)` : ''}
+    SELECT i.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO || '/' || i.SG_UF AS partido_uf,
+           i.DS_CARGO, ROUND(i.total_contratado, 2) AS contratado,
+           ROUND(i.total_receitas, 2) AS arrecadado,
+           ${comFoto ? 'ANY_VALUE(c.cd) AS cd, ANY_VALUE(c.ue) AS ue,' : 'NULL AS cd, NULL AS ue,'}
+           ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 4) AS sinal_sel,` : 'NULL AS sinal_sel,'}
+           COUNT(*) AS n_sinais,
+           STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais
+    FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
+    ${comFoto ? 'LEFT JOIN foto c USING (SQ_CANDIDATO)' : ''}
+    WHERE ${whereIndicadores(f)}
+    GROUP BY ALL
+    ${s ? 'HAVING sinal_sel IS NOT NULL ORDER BY sinal_sel DESC' : 'ORDER BY n_sinais DESC, contratado DESC'}
+    LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`;
 }
 
 const LIMITE_DISPERSAO = 1500;
@@ -285,7 +139,8 @@ async function consultarDispersao(f: Filtros): Promise<PontoDispersao[] | null> 
   if (f.candidato.trim() || f.fornecedor.trim() || f.descricao.trim()) return null;
   const esc = (s: string) => s.replaceAll("'", "''");
   const partes = ['(total_contratado > 0 OR COALESCE(total_receitas, 0) > 0)'];
-  if (f.uf) partes.push(`SG_UF = '${esc(f.uf)}'`);
+  const uf = condUF(f.uf);
+  if (uf) partes.push(uf);
   if (f.cargo) partes.push(`DS_CARGO ILIKE '${esc(f.cargo)}'`);
   if (f.partido) partes.push(`SG_PARTIDO = '${esc(f.partido)}'`);
   const r = await executarSQL(`
@@ -399,22 +254,7 @@ export function Explorar() {
              ORDER BY "Neste tipo de gasto" DESC
              LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
           : v === 'fora-da-curva'
-          ? `WITH ${SINAIS_CTE}
-             SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
-                    i.NM_CANDIDATO AS "Candidato",
-                    i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
-                    i.DS_CARGO AS "Cargo",
-                    ROUND(i.total_contratado, 2) AS "Contratado",
-                    ROUND(i.total_receitas, 2) AS "Arrecadado",
-                    ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 2) AS "Neste sinal",
-                    ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.p95 END), 2) AS "p95 do grupo",` : ''}
-                    COUNT(*) AS "Sinais",
-                    STRING_AGG(${ROTULO_SINAL_SQL}, ' · ' ORDER BY s.metrica) AS "Acima do típico do grupo em"
-             FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
-             WHERE ${whereIndicadores(f)}
-             GROUP BY ALL
-             ${s ? 'HAVING "Neste sinal" IS NOT NULL ORDER BY "Neste sinal" DESC' : 'ORDER BY "Sinais" DESC, "Contratado" DESC'}
-             LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
+          ? '' // sem categoria, a visão vira cards (consulta própria abaixo)
           : v === 'compartilhados'
           ? `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
                     COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
@@ -440,7 +280,36 @@ export function Explorar() {
       const colContraparte = eVisaoReceitas(v) ? 'NR_CPF_CNPJ_DOADOR' : 'NR_CPF_CNPJ_FORNECEDOR';
       const colCategoria = eVisaoReceitas(v) ? 'DS_ORIGEM_RECEITA' : 'DS_ORIGEM_DESPESA';
       const colData = eVisaoReceitas(v) ? 'DT_RECEITA' : 'DT_DESPESA';
-      const [kpis, categorias, candidatos, porDia, tabela, dispersao] = await Promise.all([
+      // cards do fora-da-curva: tenta com os metadados da foto; parquet de
+      // candidatos antigo (sem CD_ELEICAO/SG_UE) cai na variante sem foto
+      const consultarForaDaCurva = async (): Promise<CandidatoFora[]> => {
+        await obterConexao();
+        let r;
+        try {
+          r = await executarSQL(sqlForaDaCurva(f, s, pag, tabelasDisponiveis.has('candidatos')));
+        } catch {
+          r = await executarSQL(sqlForaDaCurva(f, s, pag, false));
+        }
+        return r.linhas.map((l) => ({
+          sq: String(l[0]),
+          nome: String(l[1]),
+          partidoUf: String(l[2]),
+          cargo: String(l[3]),
+          contratado: Number(l[4] ?? 0),
+          arrecadado: l[5] == null ? null : Number(l[5]),
+          cdEleicao: l[6] == null ? null : String(l[6]),
+          sgUe: l[7] == null ? null : String(l[7]),
+          sinais: String(l[10] ?? '')
+            .split(';')
+            .filter(Boolean)
+            .map((par) => {
+              const [metrica, valor, p95] = par.split('~');
+              return { metrica, valor: Number(valor), p95: Number(p95) };
+            }),
+        }));
+      };
+      const eCards = v === 'fora-da-curva' && !cat;
+      const [kpis, categorias, candidatos, porDia, mapa, tabela, dispersao, foraDaCurva] = await Promise.all([
         executarSQL(`SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
                             COUNT(DISTINCT ${colContraparte}), COUNT(*)
                      FROM ${base} WHERE ${w}`),
@@ -452,8 +321,12 @@ export function Explorar() {
                             MIN(STRPTIME(${colData}, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} AND ${colData} <> '#NULO'
                      GROUP BY 1 ORDER BY ord`),
-        executarSQL(tabelaSQL),
+        executarSQL(`SELECT SG_UF, ROUND(SUM(valor),2) AS total
+                     FROM ${base} WHERE ${w} AND SG_UF NOT IN ('#NULO', 'BR')
+                     GROUP BY 1`),
+        eCards ? Promise.resolve({ colunas: [] as string[], linhas: [] as unknown[][] }) : executarSQL(tabelaSQL),
         v === 'atual' ? consultarDispersao(f) : Promise.resolve(null),
+        eCards ? consultarForaDaCurva() : Promise.resolve(null),
       ]);
       const [contratado, nCand, nForn, itens] = kpis.linhas[0] ?? [0, 0, 0, 0];
       setDados({
@@ -475,7 +348,9 @@ export function Explorar() {
         categorias: categorias.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
         candidatos: candidatos.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
         porDia: porDia.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[2]) })),
+        mapa: mapa.linhas.map((l) => ({ uf: String(l[0]), valor: Number(l[1] ?? 0) })),
         dispersao,
+        foraDaCurva,
         colunas: tabela.colunas,
         linhas: tabela.linhas,
       });
@@ -496,6 +371,13 @@ export function Explorar() {
     setFiltros((f) => ({ ...f, ...parcial }));
   }
 
+  /** Clique no mapa: alterna a UF na seleção (o filtro aceita várias, por vírgula). */
+  function alternarUF(uf: string) {
+    const atual = filtros.uf ? filtros.uf.split(',').filter(Boolean) : [];
+    const nova = atual.includes(uf) ? atual.filter((u) => u !== uf) : [...atual, uf];
+    mudar({ uf: nova.join(',') });
+  }
+
   function limparFiltros() {
     setPagina(0);
     setSinal('');
@@ -503,6 +385,12 @@ export function Explorar() {
     setDigitado({ candidato: '', fornecedor: '', descricao: '' });
     setFiltros(FILTROS_VAZIOS);
   }
+
+  // micro-barras da coluna monetária principal: proporção contra o maior da página
+  const idxBarra = dados ? dados.colunas.findIndex((c) => c === 'Valor' || c === 'Total') : -1;
+  const maxBarra = dados && idxBarra >= 0
+    ? Math.max(...dados.linhas.map((l) => Number(l[idxBarra] ?? 0)), 0)
+    : 0;
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-6 py-12">
@@ -594,6 +482,10 @@ export function Explorar() {
       >
         <select className={seletor} value={filtros.uf} onChange={(e) => mudar({ uf: e.target.value })} aria-label="UF">
           <option value="">Todas as UFs</option>
+          {/* seleção múltipla feita no mapa aparece como opção combinada */}
+          {filtros.uf.includes(',') && (
+            <option value={filtros.uf}>{filtros.uf.replaceAll(',', ' + ')}</option>
+          )}
           {UFS.filter(Boolean).map((uf) => <option key={uf}>{uf}</option>)}
         </select>
         <select className={seletor} value={filtros.cargo} onChange={(e) => mudar({ cargo: e.target.value })} aria-label="Cargo">
@@ -764,43 +656,68 @@ export function Explorar() {
                 </Card>
               </div>
 
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle className="text-base">
-                    {eVisaoReceitas(visao)
-                      ? 'Receita declarada por dia da doação'
-                      : 'Gasto declarado por dia da despesa'}
-                  </CardTitle>
-                  <CardDescription>
-                    {eVisaoReceitas(visao)
-                      ? 'Soma dos valores pela data em que a doação foi recebida.'
-                      : 'Soma dos valores pela data em que a despesa foi realizada.'}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent><LinhaTemporal pontos={dados.porDia} /></CardContent>
-              </Card>
-
-              {dados.dispersao && dados.dispersao.length >= 3 && (
-                <Card className="mt-6">
+              <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Arrecadado × contratado, candidato a candidato</CardTitle>
-                    <CardDescription>
-                      Cada ponto é um candidato do recorte
-                      {dados.dispersao.length >= LIMITE_DISPERSAO
-                        ? ` (mostrando os ${num.format(LIMITE_DISPERSAO)} de maior movimentação)`
-                        : ''}
-                      . Acima da linha tracejada, contratou mais do que declarou arrecadar — a conta
-                      precisa fechar até a prestação final. Clique num ponto para abrir a ficha.
-                    </CardDescription>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-base">
+                          {visao === 'removidas' || visao === 'removidas-receitas'
+                            ? 'Onde houve remoção'
+                            : 'Onde está o dinheiro'}
+                        </CardTitle>
+                        <CardDescription className="mt-1.5">
+                          Distribuição do recorte pelas UFs — clique nos estados para filtrar
+                          (a seleção acumula).
+                        </CardDescription>
+                      </div>
+                      {filtros.uf && (
+                        <Button variant="outline" size="sm" onClick={() => mudar({ uf: '' })}>
+                          Limpar seleção ({filtros.uf.split(',').filter(Boolean).length})
+                        </Button>
+                      )}
+                    </div>
                   </CardHeader>
                   <CardContent>
-                    <Dispersao
-                      pontos={dados.dispersao}
-                      aoClicar={(p) => p.sq && navigate(`/candidato/${p.sq}`)}
+                    <MapaBrasil
+                      dados={dados.mapa}
+                      selecionada={filtros.uf}
+                      aoClicar={alternarUF}
+                      rotuloValor={visao === 'removidas' || visao === 'removidas-receitas'
+                        ? 'valor removido' : 'valor do recorte'}
                     />
                   </CardContent>
                 </Card>
-              )}
+                {/* gráficos secundários recolhidos: quem quiser expande — a página
+                    não vira um paredão de visualizações */}
+                <div className="space-y-6">
+                  <SecaoRecolhivel
+                    titulo={eVisaoReceitas(visao)
+                      ? 'Receita declarada por dia da doação'
+                      : 'Gasto declarado por dia da despesa'}
+                    descricao={eVisaoReceitas(visao)
+                      ? 'Soma dos valores pela data em que a doação foi recebida.'
+                      : 'Soma dos valores pela data em que a despesa foi realizada.'}
+                  >
+                    <LinhaTemporal pontos={dados.porDia} />
+                  </SecaoRecolhivel>
+                  {dados.dispersao && dados.dispersao.length >= 3 && (
+                    <SecaoRecolhivel
+                      titulo="Arrecadado × contratado, candidato a candidato"
+                      descricao={`Cada ponto é um candidato do recorte${
+                        dados.dispersao.length >= LIMITE_DISPERSAO
+                          ? ` (os ${num.format(LIMITE_DISPERSAO)} de maior movimentação)`
+                          : ''
+                      }. Acima da linha tracejada, contratou mais do que declarou arrecadar. Clique num ponto para abrir a ficha.`}
+                    >
+                      <Dispersao
+                        pontos={dados.dispersao}
+                        aoClicar={(p) => p.sq && navigate(`/candidato/${p.sq}`)}
+                      />
+                    </SecaoRecolhivel>
+                  )}
+                </div>
+              </div>
           </>
 
           <div className="mt-6">
@@ -825,14 +742,83 @@ export function Explorar() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={carregando || dados.linhas.length < POR_PAGINA}
+                  disabled={carregando || (dados.foraDaCurva ?? dados.linhas).length < POR_PAGINA}
                   onClick={() => setPagina((p) => p + 1)}
                 >
                   Próxima
                 </Button>
               </div>
             </div>
-            {dados.linhas.length === 0 && !carregando ? (
+            {dados.foraDaCurva ? (
+              dados.foraDaCurva.length === 0 && !carregando ? (
+                <div className="rounded-xl border bg-card p-8 text-center shadow-sm">
+                  <p className="text-sm text-muted-foreground">
+                    Ninguém fora da curva com esses filtros — o que também é uma informação.
+                  </p>
+                  <Button variant="outline" size="sm" className="mt-4" onClick={limparFiltros}>
+                    Limpar filtros
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {dados.foraDaCurva.map((c) => (
+                    <div key={c.sq} className="flex items-start gap-4 rounded-xl border bg-card p-4 shadow-sm">
+                      <Link to={`/candidato/${c.sq}`} tabIndex={-1} aria-hidden>
+                        <FotoCandidato
+                          cdEleicao={c.cdEleicao}
+                          sq={c.sq}
+                          sgUe={c.sgUe}
+                          nome={c.nome}
+                          className="h-12 w-12 text-sm"
+                        />
+                      </Link>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <Link
+                            to={`/candidato/${c.sq}`}
+                            className="font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+                          >
+                            {c.nome}
+                          </Link>
+                          <span className="text-sm text-muted-foreground">
+                            {c.partidoUf} · {c.cargo} · contratou {brl.format(c.contratado)}
+                            {c.arrecadado != null && <> · arrecadou {brl.format(c.arrecadado)}</>}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {c.sinais.map((si) => {
+                            const m = metrica(si.metrica);
+                            const selecionado = sinal === si.metrica;
+                            return (
+                              <button
+                                key={si.metrica}
+                                onClick={() => {
+                                  setPagina(0);
+                                  setCategoria('');
+                                  setSinal(selecionado ? '' : (si.metrica as SinalFiltro));
+                                }}
+                                title={`corte do grupo (p95): ${m.formatar(si.p95)} — clique para ${selecionado ? 'limpar o filtro deste sinal' : 'ver todos fora da curva neste sinal'}`}
+                                className={
+                                  selecionado
+                                    ? 'inline-flex items-center gap-1.5 rounded-full border border-[#B45309] bg-[#B45309] px-3 py-1 text-xs font-medium text-white'
+                                    : 'inline-flex items-center gap-1.5 rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20'
+                                }
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                {m.rotulo}: {m.formatar(si.valor)}
+                                <span className={selecionado ? 'text-white/75' : 'text-[#7c3a06]/70'}>
+                                  · corte (p95): {m.formatar(si.p95)}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : dados.linhas.length === 0 && !carregando ? (
               <div className="rounded-xl border bg-card p-8 text-center shadow-sm">
                 <p className="text-sm text-muted-foreground">
                   Nada encontrado com esses filtros neste recorte — o que também é uma informação.
@@ -851,7 +837,13 @@ export function Explorar() {
                   {l.map((v, j) => {
                     const col = dados.colunas[j];
                     if (col.startsWith('_')) return null;
-                    if (col === 'Valor' || col === 'Total' || col === 'Contratado')
+                    if (col === 'Valor' || col === 'Total')
+                      return (
+                        <CelulaNum key={j} frac={maxBarra > 0 ? Number(v ?? 0) / maxBarra : undefined}>
+                          {brl.format(Number(v ?? 0))}
+                        </CelulaNum>
+                      );
+                    if (col === 'Contratado')
                       return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Arrecadado')
                       return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
@@ -861,6 +853,8 @@ export function Explorar() {
                     }
                     if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais')
                       return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
+                    if (col === 'Descrição' || col === 'Acima do típico do grupo em')
+                      return <CelulaTexto key={j}>{celula(v)}</CelulaTexto>;
                     if (col === 'CNPJ/CPF')
                       return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
                     if (col === 'Candidato')

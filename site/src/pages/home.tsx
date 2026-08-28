@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
-import { Tabela, CelulaNum } from '@/components/app/tabela';
+import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
+import { Sparkline } from '@/components/app/graficos';
 import { FotoCandidato } from '@/components/app/foto';
 import { carregarResumo, type Resumo, type DespesaResumo, type CandidatoForaDaCurva } from '@/lib/resumo';
 import { brl, num, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
@@ -112,7 +113,13 @@ function PerguntasSection() {
   );
 }
 
-function Cartao({ rotulo, valor, indice }: { rotulo: string; valor: string; indice: number }) {
+function Cartao({ rotulo, valor, indice, serie }: {
+  rotulo: string;
+  valor: string;
+  indice: number;
+  /** série diária nacional — vira um sparkline discreto sob o número */
+  serie?: number[];
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -127,6 +134,11 @@ function Cartao({ rotulo, valor, indice }: { rotulo: string; valor: string; indi
           <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">
             {valor}
           </p>
+          {serie && serie.length >= 2 && (
+            <div className="mt-2" title="evolução por dia de extração">
+              <Sparkline valores={serie} />
+            </div>
+          )}
         </CardContent>
       </Card>
     </motion.div>
@@ -169,7 +181,46 @@ function Secao({
   );
 }
 
+/** Nome do candidato linkado à ficha (quando o resumo traz o SQ) + partido linkado. */
+function CelulaCandidato({ x }: { x: DespesaResumo }) {
+  return (
+    <td>
+      {x.SQ_CANDIDATO ? (
+        <Link to={`/candidato/${x.SQ_CANDIDATO}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+          {x.NM_CANDIDATO}
+        </Link>
+      ) : (
+        x.NM_CANDIDATO
+      )}
+      <span className="text-muted-foreground">
+        {' '}·{' '}
+        <Link to={`/partido/${encodeURIComponent(x.SG_PARTIDO)}`} className="hover:underline">
+          {x.SG_PARTIDO}
+        </Link>
+        /{x.SG_UF}
+        {x.DS_CARGO && <> · {x.DS_CARGO}</>}
+      </span>
+    </td>
+  );
+}
+
+/** Fornecedor linkado à ficha quando há CNPJ/CPF; doador (sem ficha própria) sai plano. */
+function CelulaFornecedor({ x }: { x: DespesaResumo }) {
+  const nome = x.fornecedor ?? x.NM_DOADOR;
+  if (temFichaFornecedor(x.NR_CPF_CNPJ_FORNECEDOR)) {
+    return (
+      <td>
+        <Link to={urlFornecedor(x.NR_CPF_CNPJ_FORNECEDOR!)} className="text-[#264E9B] underline-offset-4 hover:underline">
+          {nome}
+        </Link>
+      </td>
+    );
+  }
+  return <td>{nome}</td>;
+}
+
 function TabelaRemovidas({ linhas, quem }: { linhas: DespesaResumo[]; quem: string }) {
+  const max = Math.max(...linhas.map((x) => x.valor ?? 0), 0);
   return (
     <Tabela
       colunas={[
@@ -182,13 +233,10 @@ function TabelaRemovidas({ linhas, quem }: { linhas: DespesaResumo[]; quem: stri
     >
       {linhas.map((x, i) => (
         <tr key={i}>
-          <td>
-            {x.NM_CANDIDATO}
-            <span className="text-muted-foreground"> · {x.SG_PARTIDO}/{x.SG_UF}</span>
-          </td>
-          <td>{x.fornecedor ?? x.NM_DOADOR}</td>
-          <td>{x.DS_DESPESA ?? x.DS_ORIGEM_RECEITA ?? ''}</td>
-          <CelulaNum>{brl.format(x.valor ?? 0)}</CelulaNum>
+          <CelulaCandidato x={x} />
+          <CelulaFornecedor x={x} />
+          <CelulaTexto>{x.DS_DESPESA ?? x.DS_ORIGEM_RECEITA ?? ''}</CelulaTexto>
+          <CelulaNum frac={max > 0 ? (x.valor ?? 0) / max : undefined}>{brl.format(x.valor ?? 0)}</CelulaNum>
           <td className="whitespace-nowrap text-muted-foreground">
             {x.dt_primeira_extracao === x.dt_ultima_extracao
               ? `visto apenas em ${dataBR(x.dt_ultima_extracao)}`
@@ -268,9 +316,12 @@ export function Home() {
       <PerguntasSection />
 
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Cartao indice={0} rotulo="Receitas declaradas" valor={brl.format(t.total_receitas)} />
-        <Cartao indice={1} rotulo="Despesas contratadas" valor={brl.format(t.total_contratado)} />
-        <Cartao indice={2} rotulo="Candidatos com gastos" valor={num.format(t.candidatos_com_gastos)} />
+        <Cartao indice={0} rotulo="Receitas declaradas" valor={brl.format(t.total_receitas)}
+                serie={(resumo.serie_nacional ?? []).map((s) => s.receitas)} />
+        <Cartao indice={1} rotulo="Despesas contratadas" valor={brl.format(t.total_contratado)}
+                serie={(resumo.serie_nacional ?? []).map((s) => s.contratado)} />
+        <Cartao indice={2} rotulo="Candidatos com gastos" valor={num.format(t.candidatos_com_gastos)}
+                serie={(resumo.serie_nacional ?? []).map((s) => s.candidatos)} />
         <Cartao indice={3} rotulo="Candidaturas registradas" valor={num.format(t.candidaturas_registradas)} />
       </div>
 
@@ -422,22 +473,21 @@ export function Home() {
             { titulo: 'Valor', numerica: true },
           ]}
         >
-          {(resumo.novas_despesas ?? []).slice(0, 6).map((x, i) => (
+          {(() => {
+            const novas = (resumo.novas_despesas ?? []).slice(0, 6);
+            const max = Math.max(...novas.map((x) => x.valor ?? 0), 0);
+            return novas.map((x, i) => (
             <tr key={i}>
-              <td>
-                {x.NM_CANDIDATO}
-                <span className="text-muted-foreground">
-                  {' '}· {x.SG_PARTIDO}/{x.SG_UF} · {x.DS_CARGO}
-                </span>
-              </td>
-              <td>{x.fornecedor}</td>
-              <td>
+              <CelulaCandidato x={x} />
+              <CelulaFornecedor x={x} />
+              <CelulaTexto title={`${x.DS_ORIGEM_DESPESA} — ${x.DS_DESPESA}`}>
                 {x.DS_ORIGEM_DESPESA}
                 <span className="text-muted-foreground"> — {x.DS_DESPESA}</span>
-              </td>
-              <CelulaNum>{brl.format(x.valor ?? 0)}</CelulaNum>
+              </CelulaTexto>
+              <CelulaNum frac={max > 0 ? (x.valor ?? 0) / max : undefined}>{brl.format(x.valor ?? 0)}</CelulaNum>
             </tr>
-          ))}
+            ));
+          })()}
         </Tabela>
       </Secao>
 
@@ -458,7 +508,10 @@ export function Home() {
             { titulo: 'Total recebido', numerica: true },
           ]}
         >
-          {(resumo.fornecedores_compartilhados ?? []).slice(0, 6).map((x) => (
+          {(() => {
+            const compartilhados = (resumo.fornecedores_compartilhados ?? []).slice(0, 6);
+            const max = Math.max(...compartilhados.map((x) => x.total ?? 0), 0);
+            return compartilhados.map((x) => (
             <tr key={x.cnpj}>
               <td>
                 {temFichaFornecedor(x.cnpj) ? (
@@ -473,9 +526,10 @@ export function Home() {
               <CelulaNum>{num.format(x.candidatos)}</CelulaNum>
               <CelulaNum>{num.format(x.partidos)}</CelulaNum>
               <td className="text-muted-foreground">{x.ufs}</td>
-              <CelulaNum>{brl.format(x.total ?? 0)}</CelulaNum>
+              <CelulaNum frac={max > 0 ? (x.total ?? 0) / max : undefined}>{brl.format(x.total ?? 0)}</CelulaNum>
             </tr>
-          ))}
+            ));
+          })()}
         </Tabela>
       </Secao>
 
@@ -494,7 +548,10 @@ export function Home() {
             { titulo: 'Receita declarada', numerica: true },
           ]}
         >
-          {(resumo.top_candidatos ?? []).slice(0, 6).map((x, i) => (
+          {(() => {
+            const top = (resumo.top_candidatos ?? []).slice(0, 6);
+            const max = Math.max(...top.map((x) => x.contratado ?? 0), 0);
+            return top.map((x, i) => (
             <tr key={i}>
               <td>
                 {x.SQ_CANDIDATO ? (
@@ -513,10 +570,11 @@ export function Home() {
                 </span>
               </td>
               <td className="text-muted-foreground">{x.DS_CARGO}</td>
-              <CelulaNum>{brl.format(x.contratado ?? 0)}</CelulaNum>
+              <CelulaNum frac={max > 0 ? (x.contratado ?? 0) / max : undefined}>{brl.format(x.contratado ?? 0)}</CelulaNum>
               <CelulaNum>{x.receita == null ? '—' : brl.format(x.receita)}</CelulaNum>
             </tr>
-          ))}
+            ));
+          })()}
         </Tabela>
       </Secao>
     </div>

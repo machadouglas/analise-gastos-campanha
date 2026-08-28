@@ -3,13 +3,14 @@ import { Link, useParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
-import { BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
+import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface DadosPartido {
   nome: string;
   kpis: { candidatos: number; contratado: number; receitas: number; fornecedores: number };
+  composicao: { publico: number; proprios: number; total: number };
   serieRotulos: string[];
   series: Serie[];
   origens: ItemBarra[];
@@ -30,6 +31,14 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
   if (!Number(nCand)) return null;
 
   const rec = await executarSQL(`SELECT ROUND(SUM(valor), 2) FROM receitas_atual WHERE ${w}`);
+
+  // mesma régua de src/analises.py: dinheiro público pela FONTE oficial
+  // (FUNDO%), recursos próprios pela origem declarada
+  const comp = await executarSQL(`
+      SELECT ROUND(SUM(CASE WHEN DS_FONTE_RECEITA ILIKE 'FUNDO%' THEN valor ELSE 0 END), 2),
+             ROUND(SUM(CASE WHEN DS_ORIGEM_RECEITA ILIKE '%pr_prio%' THEN valor ELSE 0 END), 2),
+             ROUND(SUM(valor), 2)
+      FROM receitas_atual WHERE ${w}`);
 
   const serie = tabelasDisponiveis.has('serie_diaria')
     ? await executarSQL(`
@@ -72,6 +81,11 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
       contratado: Number(contratado ?? 0),
       receitas: Number(rec.linhas[0]?.[0] ?? 0),
       fornecedores: Number(nForn ?? 0),
+    },
+    composicao: {
+      publico: Number(comp.linhas[0]?.[0] ?? 0),
+      proprios: Number(comp.linhas[0]?.[1] ?? 0),
+      total: Number(comp.linhas[0]?.[2] ?? 0),
     },
     serieRotulos: serie.linhas.map((l) => String(l[0])),
     series: [
@@ -146,6 +160,31 @@ export function Partido() {
         ))}
       </div>
 
+      {dados.composicao.total > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Composição da receita</CardTitle>
+            <CardDescription>
+              De que tipo de dinheiro as campanhas da sigla vivem: fundos públicos (Fundo Eleitoral +
+              Fundo Partidário), bolso dos próprios candidatos e doações de terceiros.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <BarraComposicao
+              fatias={[
+                { rotulo: 'Dinheiro público', valor: dados.composicao.publico, cor: '#264E9B' },
+                { rotulo: 'Recursos próprios', valor: dados.composicao.proprios, cor: '#B45309' },
+                {
+                  rotulo: 'Demais doações',
+                  valor: Math.max(dados.composicao.total - dados.composicao.publico - dados.composicao.proprios, 0),
+                  cor: '#6e6a60',
+                },
+              ]}
+            />
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Dinheiro no tempo</CardTitle>
@@ -180,7 +219,9 @@ export function Partido() {
         </CardHeader>
         <CardContent>
           <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'CNPJ/CPF' }, { titulo: 'Candidatos', numerica: true }, { titulo: 'Total', numerica: true }]}>
-            {dados.compartilhados.map((l, i) => (
+            {dados.compartilhados.map((l, i) => {
+              const max = Number(dados.compartilhados[0]?.[3] ?? 0);
+              return (
               <tr key={i} className="hover:bg-muted/40">
                 <td>
                   {temFichaFornecedor(celula(l[1])) ? (
@@ -193,9 +234,10 @@ export function Partido() {
                 </td>
                 <td className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(l[1]))}</td>
                 <CelulaNum>{num.format(Number(l[2] ?? 0))}</CelulaNum>
-                <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
+                <CelulaNum frac={max > 0 ? Number(l[3] ?? 0) / max : undefined}>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
               </tr>
-            ))}
+              );
+            })}
           </Tabela>
         </CardContent>
       </Card>
@@ -207,7 +249,9 @@ export function Partido() {
         </CardHeader>
         <CardContent>
           <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Cargo' }, { titulo: 'UF' }, { titulo: 'Contratado', numerica: true }, { titulo: 'Arrecadado', numerica: true }]}>
-            {dados.candidatos.map((c) => (
+            {dados.candidatos.map((c) => {
+              const max = dados.candidatos[0]?.contratado ?? 0;
+              return (
               <tr key={c.sq} className="hover:bg-muted/40">
                 <td>
                   <Link to={`/candidato/${c.sq}`} className="text-[#264E9B] underline-offset-4 hover:underline">
@@ -216,10 +260,11 @@ export function Partido() {
                 </td>
                 <td className="text-muted-foreground">{c.cargo}</td>
                 <td>{c.uf}</td>
-                <CelulaNum>{brl.format(c.contratado)}</CelulaNum>
+                <CelulaNum frac={max > 0 ? c.contratado / max : undefined}>{brl.format(c.contratado)}</CelulaNum>
                 <CelulaNum>{c.receitas == null ? '—' : brl.format(c.receitas)}</CelulaNum>
               </tr>
-            ))}
+              );
+            })}
           </Tabela>
         </CardContent>
       </Card>

@@ -296,7 +296,9 @@ export function LinhasComparadas({
 }
 
 /* Strip plot de preços: cada nota do candidato é um ponto sobre a distribuição
-   da categoria na UF (faixa p25–p75, traço na mediana). Escala por linha. */
+   da categoria na UF (faixa p25–p75, traço na mediana). Escala por linha.
+   Com `grupo`, vira um beeswarm: os demais candidatos do grupo aparecem como
+   pontos cinza com jitter vertical — "fora da curva" passa a ser visível. */
 
 export interface FaixaPreco {
   categoria: string;
@@ -305,6 +307,8 @@ export interface FaixaPreco {
   p75: number | null;
   p95: number | null;
   notas: { valor: number; descricao: string }[];
+  /** valores dos demais candidatos do grupo de comparação (amostra) */
+  grupo?: number[];
   /** formatação dos valores desta linha (R$ por padrão; %, × etc. nos indicadores) */
   formatar?: (v: number) => string;
 }
@@ -312,15 +316,18 @@ export interface FaixaPreco {
 export function FaixasDePreco({
   faixas,
   rotuloPontos = 'notas deste recorte',
+  rotuloGrupo = 'demais candidatos do grupo',
   vazio = 'Sem categorias com benchmark disponível.',
 }: {
   faixas: FaixaPreco[];
   rotuloPontos?: string;
+  rotuloGrupo?: string;
   vazio?: string;
 }) {
   if (!faixas.length) {
     return <p className="text-sm text-muted-foreground">{vazio}</p>;
   }
+  const temGrupo = faixas.some((f) => (f.grupo?.length ?? 0) > 0);
   return (
     <div className="space-y-4">
       {faixas.map((f) => {
@@ -344,9 +351,16 @@ export function FaixasDePreco({
                      style={{ left: pos(f.mediana) }}
                      title={`mediana do grupo: ${fmt(f.mediana)}`} />
               )}
+              {(f.grupo ?? []).map((v, i) => (
+                // jitter vertical determinístico (sem aleatoriedade — render estável)
+                <div key={`g${i}`}
+                     aria-hidden
+                     className="absolute h-[5px] w-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#6e6a60]/35"
+                     style={{ left: pos(v), top: `${28 + ((i * 37) % 45)}%` }} />
+              ))}
               {f.notas.map((n, i) => (
                 <div key={i}
-                     className="absolute top-1/2 h-[10px] w-[10px] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[#fffdfa] bg-[#B45309]"
+                     className="absolute top-1/2 z-10 h-[10px] w-[10px] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[#fffdfa] bg-[#B45309]"
                      style={{ left: pos(n.valor) }}
                      title={`${n.descricao}: ${fmt(n.valor)}`} />
               ))}
@@ -358,6 +372,11 @@ export function FaixasDePreco({
         <span className="mr-4 inline-flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#B45309]" /> {rotuloPontos}
         </span>
+        {temGrupo && (
+          <span className="mr-4 inline-flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#6e6a60]/40" /> {rotuloGrupo}
+          </span>
+        )}
         <span className="mr-4 inline-flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-4 rounded-full bg-[#264E9B]/20" /> faixa típica (p25–p75)
         </span>
@@ -365,6 +384,77 @@ export function FaixasDePreco({
           <span className="inline-block h-2.5 w-[2px] bg-[#264E9B]" /> mediana
         </span>
       </p>
+    </div>
+  );
+}
+
+/* Sparkline: miniatura de série para dentro dos cartões KPI — só a forma da
+   tendência, sem eixos (o número grande do cartão é o valor). */
+
+export function Sparkline({ valores, cor = COR }: { valores: number[]; cor?: string }) {
+  if (valores.length < 2) return null;
+  const L = 120;
+  const A = 30;
+  const min = Math.min(...valores);
+  const max = Math.max(...valores);
+  const amplitude = max - min || 1;
+  const pts = valores.map((v, i) => ({
+    x: (i / (valores.length - 1)) * L,
+    y: 3 + (1 - (v - min) / amplitude) * (A - 6),
+  }));
+  const caminho = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const area = `${caminho} L${L},${A} L0,${A} Z`;
+  const fim = pts[pts.length - 1];
+  return (
+    <svg viewBox={`0 0 ${L} ${A}`} className="h-[30px] w-full max-w-[120px]" aria-hidden>
+      <path d={area} fill={cor} opacity="0.08" />
+      <path d={caminho} fill="none" stroke={cor} strokeWidth="1.5"
+            strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={fim.x} cy={fim.y} r="2.5" fill={cor} />
+    </svg>
+  );
+}
+
+/* Barra empilhada 100%: composição de um total em poucas fatias nomeadas
+   (ex.: dinheiro público × recursos próprios × demais doações). */
+
+export interface FatiaComposicao {
+  rotulo: string;
+  valor: number;
+  cor: string;
+}
+
+export function BarraComposicao({
+  fatias,
+  formatar = (v: number) => brl.format(v),
+}: {
+  fatias: FatiaComposicao[];
+  formatar?: (v: number) => string;
+}) {
+  const total = fatias.reduce((s, f) => s + Math.max(f.valor, 0), 0);
+  if (total <= 0) {
+    return <p className="text-sm text-muted-foreground">Sem receitas declaradas para compor.</p>;
+  }
+  const visiveis = fatias.filter((f) => f.valor > 0);
+  return (
+    <div>
+      <div className="flex h-4 w-full overflow-hidden rounded-full" role="img"
+           aria-label={visiveis.map((f) => `${f.rotulo}: ${formatar(f.valor)}`).join('; ')}>
+        {visiveis.map((f) => (
+          <div key={f.rotulo}
+               title={`${f.rotulo}: ${formatar(f.valor)} (${Math.round((100 * f.valor) / total)}%)`}
+               style={{ width: `${(100 * f.valor) / total}%`, background: f.cor }} />
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+        {visiveis.map((f) => (
+          <span key={f.rotulo} className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: f.cor }} />
+            {f.rotulo}: <span className="font-semibold tabular-nums text-foreground">{formatar(f.valor)}</span>
+            <span>({Math.round((100 * f.valor) / total)}%)</span>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -485,36 +575,5 @@ export function Dispersao({
   );
 }
 
-/* Detecção de forma para resultados de SQL: 1ª coluna texto + 1ª coluna numérica
-   -> barras (até 30 linhas); rótulos que parecem data -> linha temporal. */
-
-export interface GraficoDetectado {
-  tipo: 'barras' | 'linha';
-  titulo: string;
-  dados: ItemBarra[];
-  moeda: boolean;
-}
-
-const RE_DATA = /^\d{4}-\d{2}-\d{2}|^\d{2}\/\d{2}\/\d{4}/;
-
-export function detectarGrafico(colunas: string[], linhas: unknown[][]): GraficoDetectado | null {
-  if (linhas.length < 2 || linhas.length > 400 || colunas.length < 2) return null;
-  const ehNumero = (v: unknown) => typeof v === 'number' || typeof v === 'bigint';
-  const idxNum = colunas.findIndex((_, j) => linhas.every((l) => l[j] == null || ehNumero(l[j])));
-  const idxRotulo = colunas.findIndex((_, j) => linhas.every((l) => typeof l[j] === 'string' || l[j] instanceof Date));
-  if (idxNum < 0 || idxRotulo < 0 || idxNum === idxRotulo) return null;
-
-  const dados: ItemBarra[] = linhas.map((l) => ({
-    rotulo: l[idxRotulo] instanceof Date
-      ? (l[idxRotulo] as Date).toISOString().slice(0, 10)
-      : String(l[idxRotulo]),
-    valor: Number(l[idxNum] ?? 0),
-  }));
-  const moeda = /valor|total|vr_|receita|despesa|pago|contratado/i.test(colunas[idxNum]);
-  const temporal = dados.every((d) => RE_DATA.test(d.rotulo));
-  if (temporal) {
-    return { tipo: 'linha', titulo: colunas[idxNum], dados, moeda };
-  }
-  if (linhas.length > 30) return null;
-  return { tipo: 'barras', titulo: colunas[idxNum], dados, moeda };
-}
+/* A detecção de gráfico para resultados de SQL vive em src/lib/grafico-auto.ts
+   (função pura, testada sem React). */

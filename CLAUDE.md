@@ -69,7 +69,8 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 
 ## Testes e verificação
 
-- `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real. Rode após mudar `src/`.
+- `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real + **sincronia backend↔site** (`test_sincronia_site.py` lê `site/src/lib/consultas.ts`/`duckdb.ts` e falha se as regras espelhadas divergirem do Python). Rode após mudar `src/` OU as regras do site.
+- `npm test` (em `site/`) — vitest das funções puras do front: construtores de SQL (`lib/consultas.ts`), detecção de gráfico (`lib/grafico-auto.ts`) e formatação/mascaramento (`lib/format.ts`). Rode após mudar `site/src/lib/`.
 - `python gastos.py verificar` — checagens de integridade (conversão de valores, reconciliação agregados×fonte, janelas coerentes). A `rotina` roda isso automaticamente e **não publica** se falhar.
 
 ## Catálogo de red flags (implementadas em `src/analises.py`)
@@ -115,16 +116,32 @@ Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_
 SPA Vite + React + Tailwind v4. Se existir uma pasta local `trianox-front-standards/`
 (referência de padrão visual, fora do git), leia o `00-INDEX.md` dela antes de mexer no front;
 sem ela, siga o estilo do código existente (tema único papel/creme, acentos navy, lucide-react,
-componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release), Explorar
-(visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica), removidas, removidas-receitas, compartilhados, sem-nota, pessoa-fisica — combináveis
-com os filtros; as views `despesas_atual`/`receitas_atual`/`despesas_removidas`/`receitas_removidas` e a lista de
-categorias sem NF vivem em `site/src/lib/duckdb.ts`/`explorar.tsx` e devem espelhar
-`src/carga.py`, `src/historico.py` e `src/analises.py`) e Consultar (DuckDB-WASM no
-navegador + prompt copiável para a IA pessoal do visitante gerar SQL — `site/src/lib/prompt.ts`;
-mantenha esse prompt sincronizado com o schema). Fichas `/candidato/:sq`, `/partido/:sigla` e
-`/fornecedor/:id` (id = NR_CPF_CNPJ_FORNECEDOR; linke só ids com `temFichaFornecedor`)
-consomem os Parquet agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores)
-com degradação graciosa se algum ainda não foi publicado. Deploy: Cloudflare Pages
+componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release —
+inclui `serie_nacional` para os sparklines dos cartões; a Home NÃO carrega DuckDB-WASM),
+Explorar (visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica; sem
+categoria vira lista de cards com foto e chips), removidas, removidas-receitas, compartilhados,
+sem-nota, pessoa-fisica — combináveis com os filtros; mapa de tiles por UF clicável) e Consultar
+(DuckDB-WASM no navegador + prompt copiável para a IA pessoal do visitante gerar SQL —
+`site/src/lib/prompt.ts`; mantenha esse prompt sincronizado com o schema). Fichas
+`/candidato/:sq` (composição da receita, sankey do fluxo, beeswarm do grupo, grafo de conexões,
+cartão de compartilhamento em PNG via `lib/cartao.ts`), `/partido/:sigla` e `/fornecedor/:id`
+(id = NR_CPF_CNPJ_FORNECEDOR; linke só ids com `temFichaFornecedor`) consomem os Parquet
+agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores) com degradação
+graciosa se algum ainda não foi publicado.
+
+Regras espelhadas do backend vivem centralizadas em `site/src/lib/consultas.ts`
+(categorias sem NF ↔ `src/analises.py`; SINAIS_CTE/SINAIS_FILTRO ↔ `METRICAS_SINAL` em
+`src/resumo.py`) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
+`despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);
+`tests/test_sincronia_site.py` cobre essa sincronia — remoções NUNCA se calculam "na unha"
+nas páginas, sempre pelas views. Componentes de visualização: `components/app/graficos.tsx`
+(barras, linhas, faixas/beeswarm, sparkline, composição), `sankey.tsx` (rótulos com
+anti-colisão + linhas-guia), `grafo.tsx` (layout de força via d3-force, estático e
+determinístico; aceita `secundarios` para o 2º nível de conexões), `mapa.tsx`;
+blocos colapsáveis via `components/app/recolhivel.tsx` (SecaoRecolhivel — com muitos
+gráficos por página, declare `aberta` só no que é essencial) e zoom via
+`components/app/ampliavel.tsx` (Ampliavel — re-renderiza o gráfico num `<dialog>` de
+~96vw; envolva qualquer SVG responsivo denso). Deploy: Cloudflare Pages
 (`docs/deploy-cloudflare.md`). Os dados chegam ao site via Pages Function `/dados/*` que faz
 proxy do GitHub Releases (sem CORS lá).
 

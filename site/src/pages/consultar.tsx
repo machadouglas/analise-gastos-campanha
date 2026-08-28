@@ -16,7 +16,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { executarSQL, type ResultadoConsulta } from '@/lib/duckdb';
 import { PROMPT_IA, IAS_SUGERIDAS } from '@/lib/prompt';
 import { celula, brl, num } from '@/lib/format';
-import { BarrasHorizontais, LinhaTemporal, detectarGrafico } from '@/components/app/graficos';
+import { BarrasHorizontais, LinhaTemporal } from '@/components/app/graficos';
+import { detectarGrafico } from '@/lib/grafico-auto';
 
 const CONSULTA_INICIAL = `-- Pergunte à sua IA e cole o SQL aqui, ou edite à vontade.
 SELECT SG_PARTIDO, ROUND(SUM(valor), 2) AS total_contratado
