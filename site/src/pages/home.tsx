@@ -189,7 +189,9 @@ function TabelaRemovidas({ linhas, quem }: { linhas: DespesaResumo[]; quem: stri
           <td>{x.DS_DESPESA ?? x.DS_ORIGEM_RECEITA ?? ''}</td>
           <CelulaNum>{brl.format(x.valor ?? 0)}</CelulaNum>
           <td className="whitespace-nowrap text-muted-foreground">
-            {dataBR(x.dt_primeira_extracao)} → {dataBR(x.dt_ultima_extracao)}
+            {x.dt_primeira_extracao === x.dt_ultima_extracao
+              ? `visto apenas em ${dataBR(x.dt_ultima_extracao)}`
+              : `${dataBR(x.dt_primeira_extracao)} → ${dataBR(x.dt_ultima_extracao)}`}
           </td>
         </tr>
       ))}
@@ -224,6 +226,19 @@ export function Home() {
   // a Home mostra só os maiores casos — o trabalho de busca é do Explorar
   const removidas = (resumo.despesas_removidas ?? []).slice(0, 5);
   const removidasReceitas = (resumo.receitas_removidas ?? []).slice(0, 5);
+  // quando um único lançamento domina o total, o número cheio assusta sem
+  // informar — contexto explícito é a linha editorial do site
+  const notaDominancia = (maiores: DespesaResumo[], total: number | undefined) => {
+    const maior = maiores[0]?.valor ?? 0;
+    if (!total || total <= 0 || maior / total < 0.5) return null;
+    const pct = Math.round((100 * maior) / total);
+    return (
+      <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+        Um único lançamento de {brl.format(maior)} responde por {pct}% desse total — valores
+        muito destoantes costumam ser erro de digitação, corrigido (ou removido) depois.
+      </p>
+    );
+  };
 
   return (
     <div className="mx-auto max-w-7xl px-6 pb-24">
@@ -289,6 +304,7 @@ export function Home() {
                     ? <>Despesas removidas: {num.format(m.despesas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span></>
                     : <>Despesas removidas — as {removidas.length} maiores:</>}
                 </p>
+                {notaDominancia(removidas, m?.despesas_removidas_valor)}
                 <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
               </div>
             )}
@@ -300,6 +316,7 @@ export function Home() {
                     ? <>Receitas removidas: {num.format(m.receitas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span></>
                     : <>Receitas removidas — as {removidasReceitas.length} maiores:</>}
                 </p>
+                {notaDominancia(removidasReceitas, m?.receitas_removidas_valor)}
                 <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
                 <Link
                   to="/explorar?visao=removidas-receitas"
@@ -356,7 +373,11 @@ export function Home() {
                       >
                         <AlertTriangle className="h-3.5 w-3.5" />
                         {m.rotulo}: {m.formatar(s.valor)}
-                        <span className="text-[#7c3a06]/70">· grupo: {m.formatar(s.mediana)}</span>
+                        {/* mediana E p95 nomeados: "grupo: 0" sem dizer o que é parecia dado quebrado,
+                            e o p95 (o critério do corte) vivia só no tooltip, invisível no toque */}
+                        <span className="text-[#7c3a06]/70">
+                          · mediana do grupo: {m.formatar(s.mediana)} · corte (p95): {m.formatar(s.p95)}
+                        </span>
                       </Link>
                     );
                   })}
