@@ -113,10 +113,11 @@ Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_
 
 ## Site público (`site/`)
 
-SPA Vite + React + Tailwind v4. Se existir uma pasta local `trianox-front-standards/`
-(referência de padrão visual, fora do git), leia o `00-INDEX.md` dela antes de mexer no front;
-sem ela, siga o estilo do código existente (tema único papel/creme, acentos navy, lucide-react,
-componentes em `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release —
+SPA Vite + React + Tailwind v4. Se existir uma pasta local de padrão visual
+(referência interna, fora do git — o nome está em `.git/info/exclude`), leia o
+`00-INDEX.md` dela antes de mexer no front; sem ela, siga o estilo do código
+existente (tema único papel/creme, acentos navy, lucide-react, componentes em
+`site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release —
 inclui `serie_nacional` para os sparklines dos cartões; a Home NÃO carrega DuckDB-WASM),
 Explorar (visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica; sem
 categoria vira lista de cards com foto e chips), removidas, removidas-receitas, compartilhados,

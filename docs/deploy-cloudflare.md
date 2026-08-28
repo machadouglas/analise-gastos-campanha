@@ -1,7 +1,6 @@
 # Site no Cloudflare Pages
 
-O diretório `site/` é uma SPA (Vite + React + Tailwind v4, padrão `trianox-front-standards/`)
-com duas páginas:
+O diretório `site/` é uma SPA (Vite + React + Tailwind v4) com duas páginas:
 
 - **Radar** — visão diária dos dados (lê o `resumo.json` do release);
 - **Consultar** — console SQL com DuckDB-WASM rodando no navegador do visitante sobre os

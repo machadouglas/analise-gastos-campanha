@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Tema único "papel": off-white quente de jornal com acentos navy (Trianox).
+/* Tema único "papel": off-white quente de jornal com acentos navy.
    Sem dark mode — decisão de produto. */
 @theme {
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;

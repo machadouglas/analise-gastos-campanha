@@ -17,9 +17,6 @@ __pycache__/
 .claude/
 .vscode/
 
-# padrão visual interno — referência local, fora do repo público
-trianox-front-standards/
-
 # site (Vite)
 site/node_modules/
 site/dist/
