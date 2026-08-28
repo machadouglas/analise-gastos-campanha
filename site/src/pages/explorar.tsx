@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
-import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
-import { executarSQL } from '@/lib/duckdb';
+import {
+  BarrasHorizontais, Dispersao, LinhaTemporal,
+  type ItemBarra, type PontoDispersao, type PontoLinha,
+} from '@/components/app/graficos';
+import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
@@ -69,8 +72,35 @@ interface Dados {
   categorias: ItemBarra[];
   candidatos: ItemBarra[];
   porDia: PontoLinha[];
+  dispersao: PontoDispersao[] | null;
   linhas: unknown[][];
   colunas: string[];
+}
+
+const LIMITE_DISPERSAO = 1500;
+
+/** Dispersão só faz sentido no recorte por UF/cargo/partido — filtros de texto
+ *  (candidato, fornecedor, descrição) recortam despesas, não candidatos. */
+async function consultarDispersao(f: Filtros): Promise<PontoDispersao[] | null> {
+  if (!tabelasDisponiveis.has('indicadores')) return null;
+  if (f.candidato.trim() || f.fornecedor.trim() || f.descricao.trim()) return null;
+  const esc = (s: string) => s.replaceAll("'", "''");
+  const partes = ['(total_contratado > 0 OR COALESCE(total_receitas, 0) > 0)'];
+  if (f.uf) partes.push(`SG_UF = '${esc(f.uf)}'`);
+  if (f.cargo) partes.push(`DS_CARGO ILIKE '${esc(f.cargo)}'`);
+  if (f.partido) partes.push(`SG_PARTIDO = '${esc(f.partido)}'`);
+  const r = await executarSQL(`
+      SELECT SQ_CANDIDATO, NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')',
+             COALESCE(total_receitas, 0), total_contratado
+      FROM indicadores WHERE ${partes.join(' AND ')}
+      ORDER BY total_contratado + COALESCE(total_receitas, 0) DESC
+      LIMIT ${LIMITE_DISPERSAO}`);
+  return r.linhas.map((l) => ({
+    sq: String(l[0]),
+    rotulo: String(l[1]),
+    x: Number(l[2] ?? 0),
+    y: Number(l[3] ?? 0),
+  }));
 }
 
 const seletor =
@@ -78,6 +108,7 @@ const seletor =
 
 export function Explorar() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const iniciais: Filtros = {
     ...FILTROS_VAZIOS,
     uf: params.get('uf') ?? '',
@@ -119,7 +150,7 @@ export function Explorar() {
             WHERE ${w}
             GROUP BY 1 ORDER BY total DESC LIMIT 100`)
         : { linhas: [] as unknown[][] };
-      const [kpis, categorias, candidatos, porDia, tabela] = await Promise.all([
+      const [kpis, categorias, candidatos, porDia, tabela, dispersao] = await Promise.all([
         executarSQL(`SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
                             COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR), COUNT(*)
                      FROM despesas_atual WHERE ${w}`),
@@ -139,6 +170,7 @@ export function Explorar() {
                             ROUND(valor, 2) AS "Valor"
                      FROM despesas_atual WHERE ${w}
                      ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`),
+        consultarDispersao(f),
       ]);
       const [contratado, nCand, nForn, itens] = kpis.linhas[0] ?? [0, 0, 0, 0];
       setDados({
@@ -160,6 +192,7 @@ export function Explorar() {
         categorias: categorias.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
         candidatos: candidatos.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
         porDia: porDia.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[2]) })),
+        dispersao,
         colunas: tabela.colunas,
         linhas: tabela.linhas,
       });
@@ -335,6 +368,28 @@ export function Explorar() {
                 </CardHeader>
                 <CardContent><LinhaTemporal pontos={dados.porDia} /></CardContent>
               </Card>
+
+              {dados.dispersao && dados.dispersao.length >= 3 && (
+                <Card className="mt-6">
+                  <CardHeader>
+                    <CardTitle className="text-base">Arrecadado × contratado, candidato a candidato</CardTitle>
+                    <CardDescription>
+                      Cada ponto é um candidato do recorte
+                      {dados.dispersao.length >= LIMITE_DISPERSAO
+                        ? ` (mostrando os ${num.format(LIMITE_DISPERSAO)} de maior movimentação)`
+                        : ''}
+                      . Acima da linha tracejada, contratou mais do que declarou arrecadar — a conta
+                      precisa fechar até a prestação final. Clique num ponto para abrir a ficha.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Dispersao
+                      pontos={dados.dispersao}
+                      aoClicar={(p) => p.sq && navigate(`/candidato/${p.sq}`)}
+                    />
+                  </CardContent>
+                </Card>
+              )}
           </>
 
           <div className="mt-6">

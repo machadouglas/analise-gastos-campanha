@@ -68,6 +68,27 @@ export function Metodologia() {
           cidade. O papel do radar é tornar os fatos visíveis para que cidadãos, jornalistas e
           órgãos de controle façam as perguntas — nunca afirmar irregularidade, fraude ou crime.
         </p>
+        <p>
+          <strong>"Fora da curva"</strong> significa estar acima do percentil 95 do{' '}
+          <strong>grupo de comparação</strong>: candidatos ao mesmo cargo na mesma UF (ou no país,
+          quando o grupo local tem menos de 20 candidatos). Nunca comparamos um candidato a
+          presidente com um a deputado estadual, nem um número absoluto com um limiar inventado —
+          cada sinal informa o valor do candidato, a mediana e o p95 do grupo, todos conferíveis
+          na página Consultar.
+        </p>
+        <p>
+          Detalhes de cálculo que evitam falsos positivos: <strong>preços</strong> são comparados
+          por <em>nota</em> (soma dos itens de uma mesma nota), não por item, para que notas
+          fatiadas não distorçam a régua; <strong>"sem nota fiscal"</strong> exclui categorias em
+          que a nota não é o documento próprio (transferências, tributos, tarifas, aluguel de
+          imóveis, pessoal); <strong>valores repetidos</strong> só contam quando aparecem em 3+
+          notas distintas <em>do mesmo fornecedor</em>; <strong>"dinheiro público"</strong> soma
+          Fundo Especial e Fundo Partidário pela fonte oficial da receita; e o indicador de{' '}
+          <strong>CNPJ recém-aberto</strong> (empresa criada a partir de outubro do ano anterior à
+          eleição) sempre informa quantos dos fornecedores do candidato já foram verificados na
+          Receita — o cadastro é consultado aos poucos, e "nenhum encontrado" só vale para o que
+          já foi olhado.
+        </p>
       </Bloco>
 
       <Bloco titulo="Privacidade">

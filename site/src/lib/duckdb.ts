@@ -9,6 +9,7 @@ export const TABELAS = [
   'candidatos',
   'serie_diaria',
   'benchmark_precos',
+  'benchmark_indicadores',
   'indicadores',
   'rede',
   'fornecedores',

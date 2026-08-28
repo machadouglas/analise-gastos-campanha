@@ -25,13 +25,25 @@ TABELAS DISPONÍVEIS:
    Histórico: qt_linhas, dt_primeira_extracao, dt_ultima_extracao
 
 2. receitas — doações recebidas. Mesmas colunas de candidato e histórico, mais:
-   NM_DOADOR, NM_DOADOR_RFB, NR_CPF_CNPJ_DOADOR, DS_ORIGEM_RECEITA (Fundo Especial, pessoas físicas, recursos próprios...), DS_ESPECIE_RECEITA (PIX, estimável...), VR_RECEITA, DT_RECEITA
+   NM_DOADOR, NM_DOADOR_RFB, NR_CPF_CNPJ_DOADOR, DS_FONTE_RECEITA (FUNDO ESPECIAL / FUNDO PARTIDARIO / OUTROS RECURSOS — dinheiro público = fonte que começa com FUNDO), DS_ORIGEM_RECEITA (recursos de partido político, pessoas físicas, recursos próprios...), DS_ESPECIE_RECEITA (PIX, estimável...), VR_RECEITA, DT_RECEITA
 
 3. despesas_pagas — pagamentos efetivados (liga aos candidatos por SQ_PRESTADOR_CONTAS, presente também em despesas/receitas)
 
 4. receitas_doador_originario — quem doou originalmente quando o dinheiro passou por partido
 
 5. candidatos — registro de candidaturas: NM_CANDIDATO, NM_URNA_CANDIDATO, NR_CANDIDATO, DS_CARGO, SG_PARTIDO, SG_UF, SQ_CANDIDATO
+
+6. indicadores — scorecard pronto por candidato (1 linha cada): SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens, total_receitas, total_pago, pct_pago, razao_gasto_receita, fundos_publicos, pct_fundos_publicos, recursos_proprios, total_bens (patrimônio declarado), pct_maior_fornecedor, n_fornecedores, fornecedores_cnpj, fornecedores_consultados, valor_sem_nota, pct_sem_nota, valor_pessoa_fisica, pct_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos
+
+7. serie_diaria — total declarado por dia de extração × candidato: dt_extracao, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens_despesa, total_receitas
+
+8. benchmark_precos — distribuição de preços POR NOTA por categoria: DS_ORIGEM_DESPESA, SG_UF ('BR-TODAS' = nacional), notas, p25, mediana, p75, p95, maximo
+
+9. benchmark_indicadores — distribuição dos indicadores por grupo de comparação: DS_CARGO, SG_UF ('BR-TODAS' = nacional), metrica (total_contratado, razao_gasto_receita, pct_maior_fornecedor, pct_sem_nota, pct_pessoa_fisica, pct_fundos_publicos, total_receitas), candidatos, p25, mediana, p75, p95, maximo — grupos com 20+ candidatos
+
+10. rede — arestas candidato↔contraparte: tipo ('despesa' | 'doacao' | 'doacao_originaria'), contraparte_id, contraparte, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, valor, itens
+
+11. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios
 
 ATALHOS PRONTOS (prefira estes para perguntas sobre o estado atual):
 - despesas_atual e receitas_atual — já filtradas para a extração mais recente e com a coluna "valor" (DOUBLE, já multiplicada por qt_linhas).
@@ -45,6 +57,7 @@ REGRAS OBRIGATÓRIAS:
 - Nomes estão em MAIÚSCULAS e sem padronização: busque com ILIKE '%TERMO%'.
 - Nome de fornecedor: COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)
 - SQ_DESPESA/SQ_RECEITA NÃO são únicos (repetem por item de nota) — nunca use como chave.
+- Para responder "isso é muito?", compare com o grupo: benchmark_indicadores (mesmo DS_CARGO e SG_UF) para indicadores, benchmark_precos para preços de uma categoria.
 
 EXEMPLO:
 Pergunta: "quanto cada partido já gastou?"

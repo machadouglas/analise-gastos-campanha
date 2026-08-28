@@ -169,13 +169,21 @@ export interface Serie {
   valores: number[];
 }
 
+export interface MarcaLinha {
+  indice: number;
+  rotulo: string;
+}
+
 export function LinhasComparadas({
   rotulos,
   series,
+  marcas = [],
   formatar = (v: number) => brl.format(v),
 }: {
   rotulos: string[];
   series: Serie[];
+  /** dias a destacar no eixo (ex.: última extração em que algo removido esteve visível) */
+  marcas?: MarcaLinha[];
   formatar?: (v: number) => string;
 }) {
   const [ativo, setAtivo] = useState<number | null>(null);
@@ -220,6 +228,14 @@ export function LinhasComparadas({
             {s.nome}
           </span>
         ))}
+        {marcas.length > 0 && (
+          <span className="inline-flex items-center gap-2 text-muted-foreground">
+            <svg width="10" height="14" viewBox="0 0 10 14" aria-hidden>
+              <path d="M5,1 l4,6 l-4,6 l-4,-6 Z" fill="#B42318" />
+            </svg>
+            último dia em que algo removido esteve visível
+          </span>
+        )}
       </div>
       <div className="relative">
         <svg viewBox={`0 0 ${L} ${A}`} className="w-full" onMouseMove={aoMover}
@@ -238,6 +254,16 @@ export function LinhasComparadas({
             <path key={i} d={d} fill="none" stroke={CORES_SERIES[i]} strokeWidth="2"
                   strokeLinejoin="round" strokeLinecap="round" />
           ))}
+          {marcas.map((m) => {
+            const x = coords[0][m.indice]?.x;
+            if (x == null) return null;
+            return (
+              <g key={m.indice}>
+                <title>{m.rotulo}</title>
+                <path d={`M${x},${A - M.base + 4} l4,6 l-4,6 l-4,-6 Z`} fill="#B42318" />
+              </g>
+            );
+          })}
           {ativo != null && (
             <>
               <line x1={coords[0][ativo].x} x2={coords[0][ativo].x} y1={M.topo} y2={A - M.base}
@@ -279,15 +305,26 @@ export interface FaixaPreco {
   p75: number | null;
   p95: number | null;
   notas: { valor: number; descricao: string }[];
+  /** formatação dos valores desta linha (R$ por padrão; %, × etc. nos indicadores) */
+  formatar?: (v: number) => string;
 }
 
-export function FaixasDePreco({ faixas }: { faixas: FaixaPreco[] }) {
+export function FaixasDePreco({
+  faixas,
+  rotuloPontos = 'notas deste recorte',
+  vazio = 'Sem categorias com benchmark disponível.',
+}: {
+  faixas: FaixaPreco[];
+  rotuloPontos?: string;
+  vazio?: string;
+}) {
   if (!faixas.length) {
-    return <p className="text-sm text-muted-foreground">Sem categorias com benchmark disponível.</p>;
+    return <p className="text-sm text-muted-foreground">{vazio}</p>;
   }
   return (
     <div className="space-y-4">
       {faixas.map((f) => {
+        const fmt = f.formatar ?? ((v: number) => brl.format(v));
         const max = Math.max(f.p95 ?? 0, ...f.notas.map((n) => n.valor)) * 1.08 || 1;
         const pos = (v: number) => `${Math.min((v / max) * 100, 100)}%`;
         return (
@@ -300,18 +337,18 @@ export function FaixasDePreco({ faixas }: { faixas: FaixaPreco[] }) {
               {f.p25 != null && f.p75 != null && (
                 <div className="absolute inset-y-3 rounded-full bg-[#264E9B]/20"
                      style={{ left: pos(f.p25), width: `calc(${pos(f.p75)} - ${pos(f.p25)})` }}
-                     title={`faixa típica (p25–p75): ${brl.format(f.p25)} – ${brl.format(f.p75)}`} />
+                     title={`faixa típica (p25–p75): ${fmt(f.p25)} – ${fmt(f.p75)}`} />
               )}
               {f.mediana != null && (
                 <div className="absolute top-1.5 bottom-1.5 w-[2px] bg-[#264E9B]"
                      style={{ left: pos(f.mediana) }}
-                     title={`mediana da categoria: ${brl.format(f.mediana)}`} />
+                     title={`mediana do grupo: ${fmt(f.mediana)}`} />
               )}
               {f.notas.map((n, i) => (
                 <div key={i}
                      className="absolute top-1/2 h-[10px] w-[10px] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[#fffdfa] bg-[#B45309]"
                      style={{ left: pos(n.valor) }}
-                     title={`${n.descricao}: ${brl.format(n.valor)}`} />
+                     title={`${n.descricao}: ${fmt(n.valor)}`} />
               ))}
             </div>
           </div>
@@ -319,15 +356,131 @@ export function FaixasDePreco({ faixas }: { faixas: FaixaPreco[] }) {
       })}
       <p className="text-xs text-muted-foreground">
         <span className="mr-4 inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#B45309]" /> notas deste recorte
+          <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#B45309]" /> {rotuloPontos}
         </span>
         <span className="mr-4 inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-4 rounded-full bg-[#264E9B]/20" /> faixa típica da categoria (p25–p75)
+          <span className="inline-block h-2.5 w-4 rounded-full bg-[#264E9B]/20" /> faixa típica (p25–p75)
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-[2px] bg-[#264E9B]" /> mediana
         </span>
       </p>
+    </div>
+  );
+}
+
+/* Dispersão arrecadado × contratado: um ponto por candidato, escala log nos
+   dois eixos, diagonal do equilíbrio (gastar = arrecadar). Pontos acima da
+   diagonal contrataram mais do que declararam arrecadar. */
+
+export interface PontoDispersao {
+  x: number; // arrecadado
+  y: number; // contratado
+  rotulo: string;
+  sq?: string;
+}
+
+const PISO_LOG = 100; // R$ 100: piso da escala log (zero não tem log)
+
+function fmtEixo(v: number) {
+  if (v >= 1e6) return `${(v / 1e6).toLocaleString('pt-BR')} mi`;
+  if (v >= 1e3) return `${(v / 1e3).toLocaleString('pt-BR')} mil`;
+  return v.toLocaleString('pt-BR');
+}
+
+export function Dispersao({
+  pontos,
+  aoClicar,
+}: {
+  pontos: PontoDispersao[];
+  aoClicar?: (p: PontoDispersao) => void;
+}) {
+  const [ativo, setAtivo] = useState<number | null>(null);
+  const L = 720;
+  const A = 400;
+  const M = { topo: 14, dir: 18, base: 40, esq: 64 };
+
+  const { coords, ticks, diag } = useMemo(() => {
+    const teto = Math.max(...pontos.map((p) => Math.max(p.x, p.y)), PISO_LOG * 10);
+    const logMin = Math.log10(PISO_LOG);
+    const logMax = Math.ceil(Math.log10(teto));
+    const escala = (v: number, tam: number) =>
+      ((Math.log10(Math.max(v, PISO_LOG)) - logMin) / (logMax - logMin)) * tam;
+    const x = (v: number) => M.esq + escala(v, L - M.esq - M.dir);
+    const y = (v: number) => A - M.base - escala(v, A - M.topo - M.base);
+    const coords = pontos.map((p) => ({ ...p, cx: x(p.x), cy: y(p.y), acima: p.y > p.x }));
+    const ticks: { v: number; x: number; y: number }[] = [];
+    for (let e = Math.log10(PISO_LOG); e <= logMax; e++) {
+      const v = 10 ** e;
+      ticks.push({ v, x: x(v), y: y(v) });
+    }
+    const diag = { x1: x(PISO_LOG), y1: y(PISO_LOG), x2: x(10 ** logMax), y2: y(10 ** logMax) };
+    return { coords, ticks, diag };
+  }, [pontos]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (pontos.length < 3) {
+    return <p className="text-sm text-muted-foreground">Poucos candidatos neste recorte para uma dispersão.</p>;
+  }
+  const pt = ativo != null ? coords[ativo] : null;
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#B45309]" /> contratou acima do arrecadado
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#264E9B]/50" /> dentro do arrecadado
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-[2px] w-5 bg-[#6e6a60]" /> linha do equilíbrio (gastar = arrecadar)
+        </span>
+      </div>
+      <div className="relative">
+        <svg viewBox={`0 0 ${L} ${A}`} className="w-full" role="img"
+             aria-label="Dispersão: arrecadado × contratado por candidato"
+             onMouseLeave={() => setAtivo(null)}>
+          {ticks.map((t) => (
+            <g key={t.v}>
+              <line x1={M.esq} x2={L - M.dir} y1={t.y} y2={t.y} stroke="#e6dfd2" strokeWidth="1" />
+              <line x1={t.x} x2={t.x} y1={M.topo} y2={A - M.base} stroke="#e6dfd2" strokeWidth="1" />
+              <text x={M.esq - 8} y={t.y + 3} textAnchor="end" fontSize="10" fill="#6e6a60">{fmtEixo(t.v)}</text>
+              <text x={t.x} y={A - M.base + 14} textAnchor="middle" fontSize="10" fill="#6e6a60">{fmtEixo(t.v)}</text>
+            </g>
+          ))}
+          <line x1={diag.x1} y1={diag.y1} x2={diag.x2} y2={diag.y2}
+                stroke="#6e6a60" strokeWidth="1.5" strokeDasharray="5 4" />
+          <text x={L - M.dir} y={A - M.base + 30} textAnchor="end" fontSize="10" fill="#6e6a60">
+            arrecadado (R$, escala log) →
+          </text>
+          <text x={14} y={M.topo + 4} fontSize="10" fill="#6e6a60" transform={`rotate(-90 14 ${M.topo + 4})`} textAnchor="end">
+            contratado (R$, escala log) →
+          </text>
+          {coords.map((c, i) => (
+            <circle key={i} cx={c.cx} cy={c.cy}
+                    r={ativo === i ? 6 : 3.5}
+                    fill={c.acima ? '#B45309' : '#264E9B'}
+                    opacity={ativo === i ? 1 : c.acima ? 0.85 : 0.45}
+                    stroke={ativo === i ? '#fffdfa' : 'none'} strokeWidth="1.5"
+                    style={{ cursor: aoClicar ? 'pointer' : 'default' }}
+                    onMouseEnter={() => setAtivo(i)}
+                    onClick={() => aoClicar?.(c)} />
+          ))}
+        </svg>
+        {pt && (
+          <div className="pointer-events-none absolute rounded-md border bg-card px-3 py-1.5 text-xs shadow-md"
+               style={{
+                 left: `${Math.min((pt.cx / L) * 100, 82)}%`,
+                 top: `${(pt.cy / A) * 100}%`,
+                 transform: 'translate(8px, -110%)',
+               }}>
+            <span className="font-semibold">{pt.rotulo}</span>
+            <span className="ml-2 tabular-nums text-muted-foreground">
+              arrecadou {brl.format(pt.x)} · contratou {brl.format(pt.y)}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

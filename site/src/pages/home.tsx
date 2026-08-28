@@ -8,8 +8,9 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
-import { carregarResumo, type Resumo, type DespesaResumo } from '@/lib/resumo';
+import { carregarResumo, type Resumo, type DespesaResumo, type CandidatoForaDaCurva } from '@/lib/resumo';
 import { brl, num, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { metrica } from '@/lib/metricas';
 
 function BuscaHero() {
   const navigate = useNavigate();
@@ -60,9 +61,9 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
   },
   {
     icone: Scale,
-    pergunta: 'Quem contrata acima do que declarou arrecadar?',
-    detalhe: 'A conta precisa fechar até a prestação final — acompanhe a tesoura.',
-    href: '#ranking',
+    pergunta: 'Quem está fora da curva do próprio grupo?',
+    detalhe: 'Cada candidato comparado aos pares do mesmo cargo e estado — gasto, concentração, documentação.',
+    href: '#fora-da-curva',
   },
   {
     icone: EyeOff,
@@ -280,6 +281,49 @@ export function Home() {
           </div>
         )}
       </Secao>
+
+      {(resumo.fora_da_curva ?? []).length > 0 && (
+        <Secao
+          id="fora-da-curva"
+          eyebrow="Fora da curva"
+          titulo="Quem mais destoa do próprio grupo"
+          descricao="Candidatos com mais métricas acima do p95 do grupo de comparação (mesmo cargo e estado — âmbito nacional quando o grupo local é pequeno). Estar fora da curva não é irregularidade: é onde os dados sugerem começar as perguntas. Cada sinal traz o valor do candidato e a mediana do grupo, conferíveis na página Consultar."
+        >
+          <div className="space-y-3">
+            {(resumo.fora_da_curva ?? []).map((c: CandidatoForaDaCurva) => (
+              <div key={c.SQ_CANDIDATO} className="rounded-xl border bg-card p-4 shadow-sm">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <Link
+                    to={`/candidato/${c.SQ_CANDIDATO}`}
+                    className="font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+                  >
+                    {c.NM_CANDIDATO}
+                  </Link>
+                  <span className="text-sm text-muted-foreground">
+                    {c.SG_PARTIDO}/{c.SG_UF} · {c.DS_CARGO} · contratou {brl.format(c.total_contratado)}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {c.sinais.map((s) => {
+                    const m = metrica(s.metrica);
+                    return (
+                      <span
+                        key={s.metrica}
+                        title={`p95 do grupo (${s.grupo_n} candidatos${s.grupo_ambito === 'BR-TODAS' ? ', âmbito nacional' : ''}): ${m.formatar(s.p95)}`}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium text-[#7c3a06]"
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {m.rotulo}: {m.formatar(s.valor)}
+                        <span className="text-[#7c3a06]/70">· grupo: {m.formatar(s.mediana)}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Secao>
+      )}
 
       <Secao
         eyebrow="Movimentação"

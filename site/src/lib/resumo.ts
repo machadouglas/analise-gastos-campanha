@@ -41,6 +41,26 @@ export interface TopCandidato {
   receita: number | null;
 }
 
+export interface SinalForaDaCurva {
+  metrica: string;
+  valor: number;
+  mediana: number;
+  p95: number;
+  grupo_n: number;
+  grupo_ambito: string;
+}
+
+export interface CandidatoForaDaCurva {
+  SQ_CANDIDATO: string;
+  NM_CANDIDATO: string;
+  SG_PARTIDO: string;
+  DS_CARGO: string;
+  SG_UF: string;
+  total_contratado: number;
+  total_receitas: number | null;
+  sinais: SinalForaDaCurva[];
+}
+
 export interface Resumo {
   gerado_em: string;
   primeira_extracao: boolean;
@@ -50,6 +70,7 @@ export interface Resumo {
   receitas_removidas: DespesaResumo[];
   fornecedores_compartilhados: FornecedorCompartilhado[];
   top_candidatos: TopCandidato[];
+  fora_da_curva?: CandidatoForaDaCurva[];
 }
 
 export async function carregarResumo(): Promise<Resumo | null> {

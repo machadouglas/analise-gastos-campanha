@@ -10,10 +10,12 @@ import {
   LinhasComparadas,
   type FaixaPreco,
   type ItemBarra,
+  type MarcaLinha,
   type Serie,
 } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { METRICAS, metrica } from '@/lib/metricas';
 
 interface Perfil {
   nome: string;
@@ -23,7 +25,11 @@ interface Perfil {
   uf: string;
   contratado: number;
   receitas: number | null;
+  pago: number | null;
+  pctFundosPublicos: number | null;
   nFornecedores: number;
+  cnpjs: number;
+  cnpjsConsultados: number;
   flags: string[];
 }
 
@@ -31,10 +37,12 @@ interface DadosCandidato {
   perfil: Perfil;
   serieRotulos: string[];
   series: Serie[];
+  marcas: MarcaLinha[];
   categorias: ItemBarra[];
   fornecedores: unknown[][];
   colunasFornecedores: string[];
   faixas: FaixaPreco[];
+  comparacao: FaixaPreco[];
   receitas: unknown[][];
   colunasReceitas: string[];
   removidas: unknown[][];
@@ -61,11 +69,14 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   if (Number(linha.valor_pessoa_fisica ?? 0) > 0)
     flags.push(`${brl.format(Number(linha.valor_pessoa_fisica))} pagos a pessoas físicas`);
   if (Number(linha.grupos_valor_repetido ?? 0) > 0)
-    flags.push(`${linha.grupos_valor_repetido} valores repetidos 3+ vezes`);
+    flags.push(`${linha.grupos_valor_repetido} valores repetidos 3+ vezes no mesmo fornecedor`);
   if (Number(linha.valor_removido ?? 0) > 0)
     flags.push(`${brl.format(Number(linha.valor_removido))} removidos da declaração`);
   if (Number(linha.fornecedores_recem_abertos ?? 0) > 0)
-    flags.push(`${linha.fornecedores_recem_abertos} fornecedores com CNPJ recém-aberto`);
+    flags.push(
+      `${linha.fornecedores_recem_abertos} fornecedores com CNPJ recém-aberto` +
+      ` (${linha.fornecedores_consultados} de ${linha.fornecedores_cnpj} CNPJs verificados)`,
+    );
 
   const perfil: Perfil = {
     nome: String(linha.NM_CANDIDATO),
@@ -75,9 +86,47 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     uf: String(linha.SG_UF),
     contratado: Number(linha.total_contratado ?? 0),
     receitas: linha.total_receitas == null ? null : Number(linha.total_receitas),
+    pago: linha.total_pago == null ? null : Number(linha.total_pago),
+    pctFundosPublicos: linha.pct_fundos_publicos == null ? null : Number(linha.pct_fundos_publicos),
     nFornecedores: Number(linha.n_fornecedores ?? 0),
+    cnpjs: Number(linha.fornecedores_cnpj ?? 0),
+    cnpjsConsultados: Number(linha.fornecedores_consultados ?? 0),
     flags,
   };
+
+  // faixa típica de cada indicador no grupo de comparação (mesmo cargo, mesma
+  // UF; nacional quando o grupo local é pequeno) — responde "isso é muito?"
+  const comparacao: FaixaPreco[] = [];
+  if (tabelasDisponiveis.has('benchmark_indicadores')) {
+    const grupos = await executarSQL(`
+        SELECT metrica, SG_UF, candidatos, p25, mediana, p75, p95
+        FROM benchmark_indicadores
+        WHERE DS_CARGO = '${esc(perfil.cargo)}' AND SG_UF IN ('${esc(perfil.uf)}', 'BR-TODAS')`);
+    const porMetrica = new Map<string, { ambito: string; n: number; p25: number; mediana: number; p75: number; p95: number }>();
+    for (const l of grupos.linhas) {
+      const nome = String(l[0]);
+      const ambito = String(l[1]);
+      if (!porMetrica.has(nome) || ambito !== 'BR-TODAS') {
+        porMetrica.set(nome, {
+          ambito, n: Number(l[2]),
+          p25: Number(l[3]), mediana: Number(l[4]), p75: Number(l[5]), p95: Number(l[6]),
+        });
+      }
+    }
+    for (const nome of Object.keys(METRICAS)) {
+      const grupo = porMetrica.get(nome);
+      const valor = linha[nome];
+      if (!grupo || valor == null) continue;
+      if (nome === 'pct_maior_fornecedor' && Number(linha.n_fornecedores) <= 1) continue;
+      const info = metrica(nome);
+      comparacao.push({
+        categoria: `${info.rotulo} · grupo: ${grupo.n} candidatos${grupo.ambito === 'BR-TODAS' ? ' (BR)' : ''}`,
+        p25: grupo.p25, mediana: grupo.mediana, p75: grupo.p75, p95: grupo.p95,
+        notas: [{ valor: Number(valor), descricao: perfil.nome }],
+        formatar: info.formatar,
+      });
+    }
+  }
 
   const serie = tabelasDisponiveis.has('serie_diaria')
     ? await executarSQL(`
@@ -101,16 +150,23 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       ${temForn ? 'LEFT JOIN fornecedores f ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj' : ''}
       WHERE d.${w} GROUP BY 1, 2 ORDER BY "Total" DESC LIMIT 30`);
 
+  // a unidade é a nota (soma dos itens de mesma SQ_DESPESA), como no benchmark;
+  // SQ_DESPESA = '-1' não permite reagrupar e cada linha conta como uma nota
   const faixasRes = tabelasDisponiveis.has('benchmark_precos')
     ? await executarSQL(`
-        SELECT d.DS_ORIGEM_DESPESA, b.p25, b.mediana, b.p75, b.p95,
-               TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) AS valor,
-               d.DS_DESPESA
-        FROM despesas_atual d
+        WITH notas AS (
+          SELECT DS_ORIGEM_DESPESA, SG_UF, SUM(valor) AS valor, MIN(DS_DESPESA) AS descricao
+          FROM despesas_atual WHERE ${w} AND SQ_DESPESA <> '-1'
+          GROUP BY DS_ORIGEM_DESPESA, SG_UF, SQ_DESPESA
+          UNION ALL
+          SELECT DS_ORIGEM_DESPESA, SG_UF, valor, DS_DESPESA
+          FROM despesas_atual WHERE ${w} AND SQ_DESPESA = '-1')
+        SELECT n.DS_ORIGEM_DESPESA, b.p25, b.mediana, b.p75, b.p95, n.valor, n.descricao
+        FROM notas n
         JOIN benchmark_precos b
-          ON b.DS_ORIGEM_DESPESA = d.DS_ORIGEM_DESPESA AND b.SG_UF = d.SG_UF
-        WHERE d.${w} AND valor IS NOT NULL
-        ORDER BY b.mediana DESC, valor DESC LIMIT 200`)
+          ON b.DS_ORIGEM_DESPESA = n.DS_ORIGEM_DESPESA AND b.SG_UF = n.SG_UF
+        WHERE n.valor IS NOT NULL AND n.valor > 0
+        ORDER BY b.mediana DESC, n.valor DESC LIMIT 200`)
     : { colunas: [] as string[], linhas: [] as unknown[][] };
 
   const faixasPorCategoria = new Map<string, FaixaPreco>();
@@ -144,17 +200,26 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       WHERE ${w} AND dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
       ORDER BY 3 DESC LIMIT 30`);
 
+  // marca na linha do tempo: último dia em que cada conteúdo removido esteve visível
+  const serieRotulos = serie.linhas.map((l) => String(l[0]));
+  const diasRemocao = new Set(removidas.linhas.map((l) => String(l[4] ?? '').slice(0, 5)));
+  const marcas: MarcaLinha[] = serieRotulos.flatMap((r, i) =>
+    diasRemocao.has(r) ? [{ indice: i, rotulo: 'declaração removida — visível até este dia' }] : [],
+  );
+
   return {
     perfil,
-    serieRotulos: serie.linhas.map((l) => String(l[0])),
+    serieRotulos,
     series: [
       { nome: 'Contratado', valores: serie.linhas.map((l) => Number(l[1] ?? 0)) },
       { nome: 'Arrecadado', valores: serie.linhas.map((l) => Number(l[2] ?? 0)) },
     ],
+    marcas,
     categorias: categorias.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
     colunasFornecedores: fornecedores.colunas,
     fornecedores: fornecedores.linhas,
     faixas: [...faixasPorCategoria.values()].slice(0, 8),
+    comparacao,
     colunasReceitas: receitas.colunas,
     receitas: receitas.linhas,
     removidas: removidas.linhas,
@@ -231,10 +296,12 @@ export function Candidato() {
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {[
           ['Arrecadado', p.receitas == null ? '—' : brl.format(p.receitas)],
           ['Contratado', brl.format(p.contratado)],
+          ['Pago até agora', p.pago == null ? '—' : brl.format(p.pago)],
+          ['Dinheiro público', p.pctFundosPublicos == null ? '—' : `${p.pctFundosPublicos.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do arrecadado`],
           ['Fornecedores', num.format(p.nFornecedores)],
           ['Gasto ÷ arrecadado', p.receitas ? `${(p.contratado / p.receitas).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}×` : '—'],
         ].map(([r, v]) => (
@@ -246,6 +313,15 @@ export function Candidato() {
           </Card>
         ))}
       </div>
+
+      {dados.comparacao.length > 0 && (
+        <Secao
+          titulo={`Comparado aos candidatos a ${p.cargo}`}
+          descricao="Cada linha mostra onde este candidato está na distribuição do próprio grupo de comparação (mesmo cargo e UF; nacional quando o grupo local é pequeno). Estar fora da faixa não é irregularidade — é onde vale perguntar."
+        >
+          <FaixasDePreco faixas={dados.comparacao} rotuloPontos="este candidato" />
+        </Secao>
+      )}
 
       {dados.removidas.length > 0 && (
         <Secao titulo="Declarações removidas" descricao="Conteúdo que estava declarado ao TSE e deixou de estar. Pode ser correção legítima — é um indício, não uma acusação.">
@@ -262,7 +338,7 @@ export function Candidato() {
       )}
 
       <Secao titulo="Dinheiro no tempo" descricao="Evolução do declarado a cada extração diária: despesa contratada × receita arrecadada. Tesoura aberta = gasto sem origem declarada ainda.">
-        <LinhasComparadas rotulos={dados.serieRotulos} series={dados.series} />
+        <LinhasComparadas rotulos={dados.serieRotulos} series={dados.series} marcas={dados.marcas} />
       </Secao>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -274,7 +350,7 @@ export function Candidato() {
         </Secao>
       </div>
 
-      <Secao titulo="Fornecedores" descricao="Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (via Receita Federal). Clique no nome para abrir a ficha do fornecedor.">
+      <Secao titulo="Fornecedores" descricao={`Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (${p.cnpjsConsultados} de ${p.cnpjs} CNPJs já verificados na Receita Federal). Clique no nome para abrir a ficha do fornecedor.`}>
         <Tabela colunas={dados.colunasFornecedores.map((c) => ({ titulo: c, numerica: c === 'Total' || c === 'Itens' }))}>
           {dados.fornecedores.map((l, i) => (
             <tr key={i} className="hover:bg-muted/40">
