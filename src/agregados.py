@@ -21,6 +21,7 @@ def materializar(con) -> None:
     _benchmark_precos(con)
     _indicadores(con)
     _benchmark_indicadores(con)
+    _benchmark_categorias(con)
     _rede(con)
 
 
@@ -309,6 +310,40 @@ def _benchmark_indicadores(con) -> None:
     """)
     n = con.execute("SELECT COUNT(*) FROM benchmark_indicadores").fetchone()[0]
     print(f"[agregado] benchmark_indicadores: {n} combinações grupo×métrica")
+
+
+def _benchmark_categorias(con) -> None:
+    """Distribuição do TOTAL gasto POR CANDIDATO em cada categoria de despesa,
+    dentro do grupo de comparação (cargo×UF e 'BR-TODAS') — a régua do "fora da
+    curva por tipo de gasto". A comparação é entre quem GASTA na categoria
+    (candidato sem gasto ali não entra na distribuição): a pergunta é "entre
+    quem contrata carro de som, quem contrata demais?"."""
+    con.execute(f"""
+        CREATE OR REPLACE TABLE benchmark_categorias AS
+        WITH gasto AS (
+            SELECT SQ_CANDIDATO, DS_ORIGEM_DESPESA,
+                   ANY_VALUE(DS_CARGO) AS DS_CARGO, ANY_VALUE(SG_UF) AS SG_UF,
+                   SUM(VR) AS total
+            FROM v_despesas
+            WHERE VR IS NOT NULL AND VR > 0 AND DS_ORIGEM_DESPESA <> '#NULO'
+            GROUP BY 1, 2),
+        ambito AS (
+            SELECT DS_CARGO, SG_UF, DS_ORIGEM_DESPESA, total FROM gasto
+            UNION ALL
+            SELECT DS_CARGO, 'BR-TODAS', DS_ORIGEM_DESPESA, total FROM gasto)
+        SELECT DS_CARGO, SG_UF, DS_ORIGEM_DESPESA,
+               COUNT(*) AS candidatos,
+               ROUND(QUANTILE_CONT(total, 0.25), 2) AS p25,
+               ROUND(MEDIAN(total), 2) AS mediana,
+               ROUND(QUANTILE_CONT(total, 0.75), 2) AS p75,
+               ROUND(QUANTILE_CONT(total, 0.95), 2) AS p95,
+               ROUND(MAX(total), 2) AS maximo
+        FROM ambito
+        GROUP BY 1, 2, 3
+        HAVING candidatos >= {MIN_GRUPO_COMPARACAO}
+    """)
+    n = con.execute("SELECT COUNT(*) FROM benchmark_categorias").fetchone()[0]
+    print(f"[agregado] benchmark_categorias: {n} combinações grupo×categoria")
 
 
 def _rede(con) -> None:

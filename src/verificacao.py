@@ -158,7 +158,7 @@ def verificar(con) -> list[str]:
         checar("rede (doações) == total atual", abs((rede_rec or 0) - (fonte_rec or 0)) < TOLERANCIA,
                f"rede={rede_rec} fonte={fonte_rec}")
 
-    for benchmark in ("benchmark_precos", "benchmark_indicadores"):
+    for benchmark in ("benchmark_precos", "benchmark_indicadores", "benchmark_categorias"):
         if _existe(con, benchmark):
             quebrados = con.execute(f"""
                 SELECT COUNT(*) FROM {benchmark}

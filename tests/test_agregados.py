@@ -293,6 +293,42 @@ def test_indicadores_sem_receita_declarada_nao_inventa_razao(banco):
     assert razao is None
 
 
+def test_benchmark_categorias_compara_total_por_candidato_no_grupo(banco):
+    """Régua do 'fora da curva por tipo de gasto': distribuição do total gasto
+    por candidato na categoria, dentro do grupo — só entre quem gasta nela."""
+    despesas = [
+        # 20 candidatos gastando em materiais impressos (categoria padrão);
+        # o candidato 19 gasta em DUAS notas (o total dele deve ser somado)
+        {"SQ_DESPESA": "1", "SQ_CANDIDATO": f"16{i:04d}", "SQ_PRESTADOR_CONTAS": f"90{i:04d}",
+         "NM_CANDIDATO": f"CAND {i}", "NR_CANDIDATO": str(10000 + i),
+         "VR_DESPESA_CONTRATADA": f"{(i + 1) * 100},00"}
+        for i in range(20)
+    ]
+    despesas.append(
+        {"SQ_DESPESA": "2", "SQ_CANDIDATO": "160019", "SQ_PRESTADOR_CONTAS": "900019",
+         "NM_CANDIDATO": "CAND 19", "NR_CANDIDATO": "10019",
+         "VR_DESPESA_CONTRATADA": "50000,00"})
+    # categoria com só 3 candidatos: não vira régua
+    despesas += [
+        {"SQ_DESPESA": "3", "SQ_CANDIDATO": f"16{i:04d}", "SQ_PRESTADOR_CONTAS": f"90{i:04d}",
+         "NM_CANDIDATO": f"CAND {i}", "NR_CANDIDATO": str(10000 + i),
+         "DS_ORIGEM_DESPESA": "Despesas com pessoal", "VR_DESPESA_CONTRATADA": "70,00"}
+        for i in range(3)
+    ]
+    extrair_dia(banco, "20/08/2026", despesas=despesas)
+    agregados.materializar(banco)
+    linhas = banco.execute("""
+        SELECT DS_ORIGEM_DESPESA, SG_UF, candidatos, maximo
+        FROM benchmark_categorias ORDER BY SG_UF
+    """).fetchall()
+    assert [(l[0], l[1], l[2]) for l in linhas] == [
+        ("Publicidade por materiais impressos", "BR-TODAS", 20),
+        ("Publicidade por materiais impressos", "XX", 20),
+    ]
+    # o máximo é o TOTAL do candidato 19 (2000 + 50000), não a maior nota
+    assert linhas[0][3] == pytest.approx(52000.0)
+
+
 def test_rede_reconcilia_com_despesas_e_receitas(banco):
     extrair_dia(banco, "20/08/2026", despesas=[
         {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "300,00"},

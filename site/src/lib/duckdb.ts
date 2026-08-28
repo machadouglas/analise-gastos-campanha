@@ -10,6 +10,7 @@ export const TABELAS = [
   'serie_diaria',
   'benchmark_precos',
   'benchmark_indicadores',
+  'benchmark_categorias',
   'indicadores',
   'rede',
   'fornecedores',

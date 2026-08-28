@@ -136,11 +136,39 @@ function whereIndicadores(f: Filtros): string {
   return partes.join(' AND ');
 }
 
-function whereDaVisao(visao: Visao, f: Filtros, sinal: SinalFiltro): { base: string; where: string } {
+/** CTE do fora-da-curva POR CATEGORIA: total do candidato na categoria contra
+ *  o p95 do grupo em benchmark_categorias (UF, com fallback BR-TODAS). */
+function cteCategoria(categoria: string): string {
+  const cat = categoria.replaceAll("'", "''");
+  return `
+  gasto AS (
+    SELECT SQ_CANDIDATO, SUM(valor) AS total
+    FROM despesas_atual WHERE DS_ORIGEM_DESPESA = '${cat}' GROUP BY 1),
+  estouro AS (
+    SELECT g.SQ_CANDIDATO, g.total, COALESCE(buf.p95, bbr.p95) AS p95
+    FROM gasto g
+    JOIN indicadores i USING (SQ_CANDIDATO)
+    LEFT JOIN benchmark_categorias buf
+      ON buf.DS_CARGO = i.DS_CARGO AND buf.SG_UF = i.SG_UF AND buf.DS_ORIGEM_DESPESA = '${cat}'
+    LEFT JOIN benchmark_categorias bbr
+      ON bbr.DS_CARGO = i.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.DS_ORIGEM_DESPESA = '${cat}'
+    WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND g.total > COALESCE(buf.p95, bbr.p95))`;
+}
+
+function whereDaVisao(visao: Visao, f: Filtros, sinal: SinalFiltro, categoria: string): { base: string; where: string } {
   const w = montarWhere(f);
   if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
   if (visao === 'fora-da-curva') {
     // gráficos e KPIs mostram os gastos DOS candidatos fora da curva do recorte
+    if (categoria) {
+      return {
+        base: 'despesas_atual',
+        where:
+          `${w} AND SQ_CANDIDATO IN (WITH ${cteCategoria(categoria)} ` +
+          `SELECT e.SQ_CANDIDATO FROM estouro e ` +
+          `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)})`,
+      };
+    }
     const porSinal = sinal ? ` AND s.metrica = '${sinal}'` : '';
     return {
       base: 'despesas_atual',
@@ -274,6 +302,15 @@ export function Explorar() {
   const [sinal, setSinal] = useState<SinalFiltro>(
     SINAIS_FILTRO.some((s) => s === sinalParam) ? (sinalParam as SinalFiltro) : '',
   );
+  const [categoria, setCategoria] = useState(params.get('categoria') ?? '');
+  const [categorias, setCategorias] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (visao !== 'fora-da-curva' || categorias.length) return;
+    executarSQL("SELECT DISTINCT DS_ORIGEM_DESPESA FROM benchmark_categorias ORDER BY 1")
+      .then((r) => setCategorias(r.linhas.map((l) => String(l[0]))))
+      .catch(() => {});
+  }, [visao, categorias.length]);
   const [filtros, setFiltros] = useState<Filtros>(iniciais);
   const [digitado, setDigitado] = useState({
     candidato: iniciais.candidato,
@@ -292,11 +329,11 @@ export function Explorar() {
       .catch(() => {});
   }, []);
 
-  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao, s: SinalFiltro) => {
+  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao, s: SinalFiltro, cat: string) => {
     setCarregando(true);
     setErro(null);
     try {
-      const { base, where: w } = whereDaVisao(v, f, s);
+      const { base, where: w } = whereDaVisao(v, f, s, cat);
       const encontrados = v === 'atual' && f.candidato.trim()
         ? await executarSQL(`
             SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
@@ -313,7 +350,21 @@ export function Explorar() {
             ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
             : '';
       const tabelaSQL =
-        v === 'fora-da-curva'
+        v === 'fora-da-curva' && cat
+          ? `WITH ${cteCategoria(cat)}
+             SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
+                    i.NM_CANDIDATO AS "Candidato",
+                    i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
+                    i.DS_CARGO AS "Cargo",
+                    ROUND(e.total, 2) AS "Neste tipo de gasto",
+                    ROUND(e.p95, 2) AS "p95 do grupo",
+                    ROUND(i.total_contratado, 2) AS "Contratado",
+                    ROUND(i.total_receitas, 2) AS "Arrecadado"
+             FROM estouro e JOIN indicadores i USING (SQ_CANDIDATO)
+             WHERE ${whereIndicadores(f)}
+             ORDER BY "Neste tipo de gasto" DESC
+             LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
+          : v === 'fora-da-curva'
           ? `WITH ${SINAIS_CTE}
              SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
                     i.NM_CANDIDATO AS "Candidato",
@@ -396,8 +447,9 @@ export function Explorar() {
   }, []);
 
   useEffect(() => {
-    void consultar(filtros, pagina, visao, visao === 'fora-da-curva' ? sinal : '');
-  }, [filtros, pagina, visao, sinal, consultar]);
+    const foraDaCurva = visao === 'fora-da-curva';
+    void consultar(filtros, pagina, visao, foraDaCurva ? sinal : '', foraDaCurva ? categoria : '');
+  }, [filtros, pagina, visao, sinal, categoria, consultar]);
 
   function mudar(parcial: Partial<Filtros>) {
     setPagina(0);
@@ -448,13 +500,14 @@ export function Explorar() {
               <button
                 key={s || 'qualquer'}
                 role="tab"
-                aria-selected={sinal === s}
+                aria-selected={sinal === s && !categoria}
                 onClick={() => {
                   setPagina(0);
+                  setCategoria('');
                   setSinal(s);
                 }}
                 className={
-                  sinal === s
+                  sinal === s && !categoria
                     ? 'rounded-full bg-[#B45309] px-3 py-1 text-xs font-semibold text-white shadow-sm'
                     : 'rounded-full border border-[#B45309]/30 bg-card px-3 py-1 text-xs text-muted-foreground shadow-sm transition-colors hover:border-[#B45309]/60 hover:text-foreground'
                 }
@@ -462,6 +515,24 @@ export function Explorar() {
                 {s ? metrica(s).rotulo : 'Qualquer sinal'}
               </button>
             ))}
+            {categorias.length > 0 && (
+              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                ou por tipo de gasto:
+                <select
+                  value={categoria}
+                  onChange={(e) => {
+                    setPagina(0);
+                    setSinal('');
+                    setCategoria(e.target.value);
+                  }}
+                  aria-label="Fora da curva por tipo de gasto"
+                  className={`h-7 max-w-72 rounded-full border bg-card px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${categoria ? 'border-[#B45309] font-semibold text-foreground' : 'border-[#B45309]/30'}`}
+                >
+                  <option value="">— escolha a categoria —</option>
+                  {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+            )}
           </div>
         )}
       </div>
@@ -642,7 +713,9 @@ export function Explorar() {
                   : visao === 'removidas'
                     ? 'Declarações removidas do recorte, maiores primeiro'
                     : visao === 'fora-da-curva'
-                      ? 'Candidatos fora da curva do recorte — mais sinais primeiro (os gráficos acima mostram os gastos deles)'
+                      ? categoria
+                        ? `Fora da curva em "${categoria}" — quem mais gasta acima do p95 do grupo primeiro`
+                        : 'Candidatos fora da curva do recorte — mais sinais primeiro (os gráficos acima mostram os gastos deles)'
                       : 'Despesas do recorte, maiores primeiro'} — página {pagina + 1}
               </p>
               <div className="flex gap-2">
@@ -661,7 +734,7 @@ export function Explorar() {
             </div>
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
-              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'p95 do grupo'].includes(c),
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'Neste tipo de gasto', 'p95 do grupo'].includes(c),
             }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
@@ -672,12 +745,10 @@ export function Explorar() {
                       return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Arrecadado')
                       return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
-                    if (col === 'Neste sinal' || col === 'p95 do grupo')
-                      return (
-                        <CelulaNum key={j}>
-                          {v == null || !sinal ? '—' : metrica(sinal).formatar(Number(v))}
-                        </CelulaNum>
-                      );
+                    if (col === 'Neste sinal' || col === 'Neste tipo de gasto' || col === 'p95 do grupo') {
+                      const fmt = sinal ? metrica(sinal).formatar : (n: number) => brl.format(n);
+                      return <CelulaNum key={j}>{v == null ? '—' : fmt(Number(v))}</CelulaNum>;
+                    }
                     if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais')
                       return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'CNPJ/CPF')

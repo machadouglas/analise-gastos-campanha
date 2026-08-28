@@ -25,6 +25,7 @@ EXPORTS = {
     "serie_diaria.parquet": "serie_diaria",
     "benchmark_precos.parquet": "benchmark_precos",
     "benchmark_indicadores.parquet": "benchmark_indicadores",
+    "benchmark_categorias.parquet": "benchmark_categorias",
     "indicadores.parquet": "indicadores",
     "rede.parquet": "rede",
     "fornecedores.parquet": "fornecedores",

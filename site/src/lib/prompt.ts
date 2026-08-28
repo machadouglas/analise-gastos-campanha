@@ -41,9 +41,11 @@ TABELAS DISPONÍVEIS:
 
 9. benchmark_indicadores — distribuição dos indicadores por grupo de comparação: DS_CARGO, SG_UF ('BR-TODAS' = nacional), metrica (total_contratado, razao_gasto_receita, pct_maior_fornecedor, pct_sem_nota, pct_pessoa_fisica, pct_fundos_publicos, total_receitas), candidatos, p25, mediana, p75, p95, maximo — grupos com 20+ candidatos
 
-10. rede — arestas candidato↔contraparte: tipo ('despesa' | 'doacao' | 'doacao_originaria'), contraparte_id, contraparte, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, valor, itens
+10. benchmark_categorias — distribuição do TOTAL gasto por candidato em cada categoria, por grupo de comparação: DS_CARGO, SG_UF ('BR-TODAS' = nacional), DS_ORIGEM_DESPESA, candidatos, p25, mediana, p75, p95, maximo — só entre quem gasta na categoria; grupos com 20+ candidatos
 
-11. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios
+11. rede — arestas candidato↔contraparte: tipo ('despesa' | 'doacao' | 'doacao_originaria'), contraparte_id, contraparte, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, valor, itens
+
+12. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios
 
 ATALHOS PRONTOS (prefira estes; já excluem linhas-placeholder do sistema do TSE — contraparte '-1'/'#NULO' com valor zero, que não são declarações):
 - despesas_atual e receitas_atual — já filtradas para a extração mais recente e com a coluna "valor" (DOUBLE, já multiplicada por qt_linhas).
