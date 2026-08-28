@@ -39,7 +39,12 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   let versao = '';
   try {
     const r = await fetch(`${origem}/dados/resumo.json`, { cache: 'no-cache' });
-    if (r.ok) versao = String((await r.json()).publicado_em ?? '');
+    if (r.ok) {
+      const j = await r.json();
+      // publicado_em (carimbo por publicação); gerado_em (data da extração)
+      // cobre resumos antigos que ainda não trazem o carimbo
+      versao = String(j.publicado_em ?? j.gerado_em ?? '');
+    }
   } catch {
     // sem resumo, segue sem versão — os parquet ainda funcionam
   }
