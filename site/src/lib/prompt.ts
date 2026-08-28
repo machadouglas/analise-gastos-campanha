@@ -45,7 +45,7 @@ TABELAS DISPONÍVEIS:
 
 11. rede — arestas candidato↔contraparte: tipo ('despesa' | 'doacao' | 'doacao_originaria'), contraparte_id, contraparte, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, valor, itens
 
-12. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios
+12. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios, dt_consulta (data da última consulta; o cadastro é reconsultado num ciclo de ~30 dias), situacao_anterior e dt_situacao_anterior (preenchidos quando a situação cadastral mudou entre consultas — ex.: ATIVA que virou BAIXADA)
 
 ATALHOS PRONTOS (prefira estes; já excluem linhas-placeholder do sistema do TSE — contraparte '-1'/'#NULO' com valor zero, que não são declarações):
 - despesas_atual e receitas_atual — já filtradas para a extração mais recente e com a coluna "valor" (DOUBLE, já multiplicada por qt_linhas).

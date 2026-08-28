@@ -6,12 +6,20 @@ Cache local em data/cache/cnpj/ e rate limit para respeitar a API pública.
 import json
 import re
 import time
+from datetime import date
+from math import ceil
 from pathlib import Path
 
 from curl_cffi import requests
 
 DIR_CACHE = Path("data/cache/cnpj")
 INTERVALO_SEGUNDOS = 1.5
+
+# reconsulta contínua do cadastro: um registro "vence" depois deste prazo e a
+# rotina diária reconsulta os mais antigos primeiro, num ritmo que percorre a
+# base inteira dentro de um ciclo (sem estourar o --limite-cnpj da rotina)
+REFRESH_APOS_DIAS = 30
+CICLO_REFRESH_DIAS = 30
 
 
 # marcador de cache negativo: CNPJ que a base pública não conhece (404) é fato
@@ -31,15 +39,16 @@ def nao_encontrado(cnpj: str) -> bool:
     return bool(json.loads(cache.read_text(encoding="utf-8")).get("nao_encontrado"))
 
 
-def consultar(cnpj: str) -> dict | None:
+def consultar(cnpj: str, ignorar_cache: bool = False) -> dict | None:
     """Consulta um CNPJ na BrasilAPI (com cache, inclusive de 404).
-    Retorna None para CPF/inválido, não encontrado ou erro transitório."""
+    Retorna None para CPF/inválido, não encontrado ou erro transitório.
+    `ignorar_cache` força ir à rede (reconsulta) — o resultado regrava o cache."""
     cnpj = re.sub(r"\D", "", cnpj or "")
     if len(cnpj) != 14:
         return None
     DIR_CACHE.mkdir(parents=True, exist_ok=True)
     cache = _caminho_cache(cnpj)
-    if cache.exists():
+    if cache.exists() and not ignorar_cache:
         dados = json.loads(cache.read_text(encoding="utf-8"))
         return None if dados.get("nao_encontrado") else dados
     r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", impersonate="chrome", timeout=60)
@@ -57,17 +66,92 @@ def consultar(cnpj: str) -> dict | None:
     return dados
 
 
-def enriquecer_em_massa(con, limite: int = 250) -> int:
-    """Consulta os CNPJs de fornecedores ainda não enriquecidos (maiores valores
-    primeiro) e mantém a tabela `fornecedores` no banco. O limite por execução
-    respeita a API pública; a rotina diária vai completando o restante."""
+SITUACAO_NAO_ENCONTRADO = "NAO ENCONTRADO NA BASE PUBLICA"
+
+COLUNAS_FORNECEDORES = (
+    "cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, "
+    "cnae_principal, municipio, uf, capital_social, socios, "
+    "dt_consulta, situacao_anterior, dt_situacao_anterior"
+)
+
+
+def _garantir_tabela(con) -> None:
     con.execute("""
         CREATE TABLE IF NOT EXISTS fornecedores (
             cnpj VARCHAR, razao_social VARCHAR, data_abertura VARCHAR,
             situacao VARCHAR, porte VARCHAR, opcao_mei BOOLEAN,
             cnae_principal VARCHAR, municipio VARCHAR, uf VARCHAR,
-            capital_social DOUBLE, socios VARCHAR)
+            capital_social DOUBLE, socios VARCHAR,
+            dt_consulta DATE, situacao_anterior VARCHAR, dt_situacao_anterior DATE)
     """)
+    # bases criadas antes do refresh contínuo: colunas novas entram com NULL
+    # (dt_consulta NULL = "consulta de data desconhecida" — vai primeiro na fila)
+    for coluna, tipo in [("dt_consulta", "DATE"), ("situacao_anterior", "VARCHAR"),
+                         ("dt_situacao_anterior", "DATE")]:
+        con.execute(f"ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
+
+
+def _inserir_fornecedor(con, numero: str, dados: dict | None, hoje: date) -> None:
+    if dados is None:
+        # registro-tombstone: consulta respondida (404) — sai da fila e conta
+        # como CNPJ verificado; a reconsulta por idade tenta de novo no ciclo
+        con.execute(
+            f"INSERT INTO fornecedores ({COLUNAS_FORNECEDORES}) VALUES "
+            "(?, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, ?, NULL, NULL)",
+            [numero, SITUACAO_NAO_ENCONTRADO, hoje],
+        )
+        return
+    r = resumir(dados)
+    con.execute(
+        f"INSERT INTO fornecedores ({COLUNAS_FORNECEDORES}) VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+        [numero, r["razao_social"], r["data_abertura"], r["situacao"], r["porte"],
+         bool(r["opcao_mei"]), r["cnae_principal"], r["municipio"], r["uf"],
+         float(r["capital_social"] or 0), r["socios"], hoje],
+    )
+
+
+def _atualizar_fornecedor(con, numero: str, dados: dict | None, hoje: date) -> bool:
+    """Regrava o cadastro reconsultado; preserva a situação anterior quando ela
+    muda (matéria-prima da futura red flag "baixado/inapto após receber").
+    Retorna True se a situação mudou."""
+    antiga, anterior, dt_anterior = con.execute(
+        "SELECT situacao, situacao_anterior, dt_situacao_anterior "
+        "FROM fornecedores WHERE cnpj = ?", [numero]).fetchone()
+    r = resumir(dados) if dados else None
+    nova = r["situacao"] if r else SITUACAO_NAO_ENCONTRADO
+    mudou = antiga is not None and nova != antiga
+    if mudou:
+        anterior, dt_anterior = antiga, hoje
+        print(f"[cnpj] MUDANÇA DE SITUAÇÃO: {numero}: '{antiga}' -> '{nova}'")
+    if r is None:
+        con.execute(
+            "UPDATE fornecedores SET situacao = ?, dt_consulta = ?, "
+            "situacao_anterior = ?, dt_situacao_anterior = ? WHERE cnpj = ?",
+            [SITUACAO_NAO_ENCONTRADO, hoje, anterior, dt_anterior, numero],
+        )
+    else:
+        con.execute(
+            "UPDATE fornecedores SET razao_social = ?, data_abertura = ?, situacao = ?, "
+            "porte = ?, opcao_mei = ?, cnae_principal = ?, municipio = ?, uf = ?, "
+            "capital_social = ?, socios = ?, dt_consulta = ?, "
+            "situacao_anterior = ?, dt_situacao_anterior = ? WHERE cnpj = ?",
+            [r["razao_social"], r["data_abertura"], r["situacao"], r["porte"],
+             bool(r["opcao_mei"]), r["cnae_principal"], r["municipio"], r["uf"],
+             float(r["capital_social"] or 0), r["socios"], hoje,
+             anterior, dt_anterior, numero],
+        )
+    return mudou
+
+
+def enriquecer_em_massa(con, limite: int = 250, hoje: date | None = None) -> int:
+    """Mantém a tabela `fornecedores`: consulta os CNPJs ainda não enriquecidos
+    (maiores valores primeiro) e, com a folga do limite, reconsulta os cadastros
+    mais antigos (vencidos há REFRESH_APOS_DIAS+), num ritmo que percorre a base
+    num ciclo de ~CICLO_REFRESH_DIAS dias. O limite por execução respeita a API
+    pública; a rotina diária vai completando o restante."""
+    hoje = hoje or date.today()
+    _garantir_tabela(con)
     pendentes = con.execute(f"""
         SELECT NR_CPF_CNPJ_FORNECEDOR AS cnpj, ROUND(SUM(VR), 2) AS total
         FROM v_despesas
@@ -75,37 +159,51 @@ def enriquecer_em_massa(con, limite: int = 250) -> int:
           AND NR_CPF_CNPJ_FORNECEDOR NOT IN (SELECT cnpj FROM fornecedores)
         GROUP BY 1 ORDER BY total DESC LIMIT {int(limite)}
     """).fetchall()
-    if not pendentes:
-        print("[cnpj] nenhum fornecedor pendente de enriquecimento")
-        return 0
-    print(f"[cnpj] enriquecendo {len(pendentes)} fornecedores (BrasilAPI, com cache)...")
+
     novos = 0
-    for i, (numero, _) in enumerate(pendentes, 1):
-        if i % 25 == 0:
-            print(f"[cnpj] {i}/{len(pendentes)} consultados ({novos} novos até aqui)")
-        dados = consultar(numero)
-        if not dados:
-            if nao_encontrado(numero):
-                # registro-tombstone: consulta respondida (404) — sai da fila e
-                # conta como CNPJ verificado, sem ocupar vaga nas rotinas seguintes
-                con.execute(
-                    "INSERT INTO fornecedores VALUES (?, NULL, NULL, "
-                    "'NAO ENCONTRADO NA BASE PUBLICA', NULL, NULL, NULL, NULL, NULL, 0, NULL)",
-                    [numero],
-                )
-                novos += 1
-            continue
-        r = resumir(dados)
-        con.execute(
-            "INSERT INTO fornecedores VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [numero, r["razao_social"], r["data_abertura"], r["situacao"], r["porte"],
-             bool(r["opcao_mei"]), r["cnae_principal"], r["municipio"], r["uf"],
-             float(r["capital_social"] or 0), r["socios"]],
-        )
-        novos += 1
-    print(f"[cnpj] {novos} fornecedores enriquecidos (total na base: "
-          f"{con.execute('SELECT COUNT(*) FROM fornecedores').fetchone()[0]})")
-    return novos
+    if pendentes:
+        print(f"[cnpj] enriquecendo {len(pendentes)} fornecedores novos (maiores valores primeiro)...")
+        for i, (numero, _) in enumerate(pendentes, 1):
+            if i % 25 == 0:
+                print(f"[cnpj] {i}/{len(pendentes)} consultados ({novos} novos até aqui)")
+            dados = consultar(numero)
+            if not dados and not nao_encontrado(numero):
+                continue  # erro transitório: tenta de novo amanhã
+            _inserir_fornecedor(con, numero, dados, hoje)
+            novos += 1
+
+    # folga do limite vira reconsulta: os cadastros mais antigos primeiro, só os
+    # vencidos, e no máximo o necessário para fechar o ciclo (base/ciclo por dia)
+    atualizados = mudancas = 0
+    restante = int(limite) - len(pendentes)
+    total_base = con.execute("SELECT COUNT(*) FROM fornecedores").fetchone()[0]
+    if restante > 0 and total_base:
+        quota = min(restante, max(1, ceil(total_base / CICLO_REFRESH_DIAS)))
+        vencidos = con.execute("""
+            SELECT f.cnpj FROM fornecedores f
+            JOIN (SELECT NR_CPF_CNPJ_FORNECEDOR AS cnpj, SUM(VR) AS total
+                  FROM v_despesas WHERE LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14
+                  GROUP BY 1) d USING (cnpj)
+            WHERE f.dt_consulta IS NULL OR f.dt_consulta <= ?::DATE - ?::INTEGER
+            ORDER BY f.dt_consulta ASC NULLS FIRST, d.total DESC
+            LIMIT ?
+        """, [hoje, REFRESH_APOS_DIAS, quota]).fetchall()
+        if vencidos:
+            print(f"[cnpj] reconsultando {len(vencidos)} cadastros vencidos "
+                  f"(mais antigos primeiro; ciclo ~{CICLO_REFRESH_DIAS} dias)...")
+        for (numero,) in vencidos:
+            dados = consultar(numero, ignorar_cache=True)
+            if not dados and not nao_encontrado(numero):
+                continue  # erro transitório: permanece vencido e volta amanhã
+            mudancas += _atualizar_fornecedor(con, numero, dados, hoje)
+            atualizados += 1
+
+    if not pendentes and not atualizados:
+        print(f"[cnpj] nada a fazer: sem pendentes e nenhum cadastro vencido (>{REFRESH_APOS_DIAS} dias)")
+        return 0
+    print(f"[cnpj] {novos} novos, {atualizados} reconsultados, {mudancas} mudanças de situação "
+          f"(base: {con.execute('SELECT COUNT(*) FROM fornecedores').fetchone()[0]})")
+    return novos + atualizados
 
 
 def resumir(dados: dict) -> dict:

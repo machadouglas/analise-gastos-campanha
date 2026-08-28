@@ -3,27 +3,24 @@
 Itens já discutidos e aprovados em conceito, aguardando implementação. Nada aqui é
 promessa pública; é memória de trabalho do projeto.
 
-## 1. Refresh mensal do cadastro de CNPJ (prioridade alta)
+## 1. Red flag "fornecedor baixado/inapto após receber" (prioridade alta)
 
-Hoje `fornecedores` é preenchido aos poucos pela rotina (`cnpj.enriquecer_em_massa`,
-com `--limite-cnpj`) e nunca reconsultado — a situação cadastral fica congelada na
-primeira consulta. Plano:
+A **reconsulta contínua** do cadastro já está implementada (`cnpj.enriquecer_em_massa`):
+pendentes novos primeiro (maiores valores), depois os cadastros mais antigos
+(`dt_consulta` mais antiga, vencidos há 30+ dias), num ritmo que percorre a base num
+ciclo de ~30 dias, dentro do `--limite-cnpj` diário. Os 404 (tombstones) entram no mesmo
+ciclo por idade. Quando a situação cadastral muda, a anterior fica registrada em
+`situacao_anterior` + `dt_situacao_anterior` — a matéria-prima da red flag já está
+sendo colhida.
 
-- **Validade de 30 dias**: guardar a data da consulta em cada linha de `fornecedores`
-  (nova coluna `dt_consulta`); registro com mais de 30 dias conta como "vencido".
-- **Fila com prioridade**, dentro do mesmo `--limite-cnpj` diário:
-  1. pendentes novos (nunca consultados);
-  2. 404 antigos (cache negativo com mais de 30 dias — a empresa pode ter sido incluída
-     na base pública depois);
-  3. vencidos, ordenados por valor recebido (quem recebe mais é reavaliado primeiro).
-- **Guardar a situação anterior** ao atualizar (ex.: coluna `situacao_anterior` +
-  `dt_situacao_anterior`) para detectar transição.
-- **Nova red flag**: "fornecedor baixado/inapto/suspenso APÓS receber pagamento de
-  campanha" — transição `ATIVA → BAIXADA/INAPTA/SUSPENSA` com despesa declarada antes da
-  transição. Entra em `src/analises.py`, no `indicadores` (com cobertura explícita, como
-  o recém-aberto) e na metodologia do site.
-- **Testes** para a fila (ordem e limite), a validade e a red flag (transição legítima
-  detectada; empresa já baixada antes do pagamento NÃO conta).
+Falta a red flag em si:
+
+- "fornecedor baixado/inapto/suspenso APÓS receber pagamento de campanha" — transição
+  `ATIVA → BAIXADA/INAPTA/SUSPENSA` com despesa declarada antes da transição. Entra em
+  `src/analises.py`, no `indicadores` (com cobertura explícita, como o recém-aberto) e
+  na metodologia do site.
+- **Testes**: transição legítima detectada; empresa já baixada antes do pagamento NÃO
+  conta.
 - Exige redeploy do container após implementado.
 
 ## 2. Migração dos `/dados` para R2 público (plano de escala)

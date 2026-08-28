@@ -93,7 +93,10 @@ export function Metodologia() {
           <strong>CNPJ recém-aberto</strong> (empresa criada a partir de outubro do ano anterior à
           eleição) sempre informa quantos dos fornecedores do candidato já foram verificados na
           Receita — o cadastro é consultado aos poucos, e "nenhum encontrado" só vale para o que
-          já foi olhado.
+          já foi olhado. O cadastro também é <strong>reconsultado continuamente</strong> (os
+          registros mais antigos primeiro, num ciclo de ~30 dias): se a situação cadastral de um
+          fornecedor mudar — uma empresa ativa que é baixada, por exemplo —, a situação anterior e
+          a data da mudança ficam registradas nos dados publicados.
         </p>
       </Bloco>
 
