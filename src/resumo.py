@@ -4,10 +4,11 @@ Tudo aqui é derivado dos dados públicos do TSE já carregados no banco.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
+from src import db, privacidade
 from src.carga import filtro_placeholder
 
 
@@ -32,10 +33,7 @@ METRICAS_SINAL = [
 ]
 
 
-def _existe(con, tabela: str) -> bool:
-    return bool(con.execute(
-        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [tabela]
-    ).fetchone()[0])
+_existe = db.existe
 
 
 def _tem_metadados_foto(con) -> bool:
@@ -131,6 +129,8 @@ def _serie_nacional(con) -> list[dict]:
 
 
 def gerar(con) -> dict:
+    # o resumo.json é público como os parquet: CPFs saem pseudonimizados (pf-…)
+    pseudo_fornecedor = privacidade.sql_pseudonimo("NR_CPF_CNPJ_FORNECEDOR", privacidade.sal())
     dt_extracao, dt_inicio = con.execute(
         "SELECT MAX(dt_ultima_extracao), MIN(dt_primeira_extracao) FROM hist_despesas_contratadas"
     ).fetchone()
@@ -160,7 +160,7 @@ def gerar(con) -> dict:
     novas = _registros(con, f"""
         SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF,
                COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
-               NR_CPF_CNPJ_FORNECEDOR,
+               {pseudo_fornecedor} AS NR_CPF_CNPJ_FORNECEDOR,
                DS_ORIGEM_DESPESA, DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                DT_DESPESA
@@ -170,10 +170,10 @@ def gerar(con) -> dict:
         ORDER BY valor DESC LIMIT 15
     """)
 
-    removidas = _registros(con, """
+    removidas = _registros(con, f"""
         SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF,
                COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
-               NR_CPF_CNPJ_FORNECEDOR,
+               {pseudo_fornecedor} AS NR_CPF_CNPJ_FORNECEDOR,
                DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                dt_primeira_extracao, dt_ultima_extracao
@@ -189,9 +189,9 @@ def gerar(con) -> dict:
         ORDER BY valor DESC LIMIT 20
     """)
 
-    compartilhados = _registros(con, """
+    compartilhados = _registros(con, f"""
         SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
-               NR_CPF_CNPJ_FORNECEDOR AS cnpj,
+               {pseudo_fornecedor} AS cnpj,
                COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
                COUNT(DISTINCT SG_PARTIDO) AS partidos,
                STRING_AGG(DISTINCT SG_UF, ', ') AS ufs,
@@ -216,7 +216,7 @@ def gerar(con) -> dict:
         "gerado_em": str(dt_extracao),
         # carimbo desta publicação: o site usa como cache-buster (?v=) nos
         # parquet, para ninguém misturar arquivos de publicações diferentes
-        "publicado_em": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "publicado_em": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
         "primeira_extracao": primeira_extracao,
         "totais": totais,
         "mudancas": mudancas,

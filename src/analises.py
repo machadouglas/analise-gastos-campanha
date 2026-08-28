@@ -4,7 +4,6 @@ Cada análise devolve (título, comentário, DataFrame). Os resultados são
 indícios para investigação, nunca prova de irregularidade.
 """
 
-import pandas as pd
 
 # Categorias em que documento fiscal não é esperado: transferências entre
 # campanhas, tributos e tarifas; locação de imóvel (não é serviço — não há NF,

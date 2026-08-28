@@ -1,0 +1,27 @@
+# Só configuração de ferramentas — o projeto não é empacotado.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["site", "data", "relatorios"]
+
+[tool.ruff.lint]
+# E/W (pycodestyle), F (pyflakes), I (isort), B (bugbear), UP (modernização),
+# S (bandit — segurança). Regras de formatação agressiva ficam de fora de
+# propósito: o objetivo é pegar erro e risco, não reescrever estilo.
+select = ["E", "W", "F", "I", "B", "UP", "S"]
+ignore = [
+    "E501",  # linhas longas: SQL embutido legível vale mais que o limite
+    "S101",  # assert é o mecanismo do pytest
+    "S603", "S607",  # subprocess sem shell com lista fixa de args (gh CLI) é o uso seguro
+    # padrão deliberado do projeto: SQL em f-string interpola SÓ constantes do
+    # próprio módulo (nomes de tabela/coluna); dado externo entra por bind (?).
+    "S608",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# nos testes, senhas/valores fixos são cenário sintético
+"tests/*" = ["S105", "S106", "S108"]
+# o sys.path.insert precisa vir antes dos imports de src/
+"gastos.py" = ["E402"]
+"tests/conftest.py" = ["E402"]

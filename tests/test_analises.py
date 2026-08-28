@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src import analises  # noqa: E402
-from tests.conftest import extrair_dia, inserir_despesa, inserir_receita  # noqa: E402
+from tests.conftest import inserir_despesa, inserir_receita  # noqa: E402
 
 
 def _resultado(resultados, titulo):
@@ -28,7 +28,7 @@ def test_todas_as_analises_rodam_no_schema_do_tse(banco):
     inserir_receita(banco)
     resultados = analises.executar_todas(banco)
     assert len(resultados) == 9
-    for titulo, comentario, df in resultados:
+    for titulo, comentario, _df in resultados:
         assert comentario, titulo
 
 

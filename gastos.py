@@ -49,10 +49,10 @@ def cmd_mudancas(args):
 
 def cmd_exportar(args):
     con = carga.conectar()
-    arquivos = exportar.exportar(con)
+    arquivos, hashes = exportar.exportar(con)
     if args.publicar:
-        exportar.publicar(arquivos)
-        exportar.registrar_publicacao(con, exportar.fingerprint(con))
+        exportar.publicar(arquivos, hashes, exportar.hashes_publicados(con))
+        exportar.registrar_publicacao(con, exportar.fingerprint(con), hashes)
     con.close()
 
 
@@ -70,28 +70,28 @@ def cmd_rotina(args):
             print(li)
         print("#" * largura)
 
-    etapa("baixando dados do TSE")
+    etapa("baixando dados do TSE (condicional)")
+    algum_novo = False
     for c in tse.CONJUNTOS:
         try:
-            tse.baixar_conjunto(c, args.ano, forcar=True)
+            _, baixou = tse.baixar_conjunto(c, args.ano, condicional=True)
+            algum_novo = algum_novo or baixou
         except RuntimeError as e:
             print(f"[erro] {c}: {e}")
-    etapa("carregando no banco")
-    carga.carregar(args.ano)
+    if algum_novo:
+        etapa("carregando no banco")
+        carga.carregar(args.ano)
+    else:
+        print("[rotina] nenhum zip novo no TSE — carga pulada")
     con = carga.conectar()
-    etapa("versionando extração")
-    historico.versionar(con)
+    if algum_novo:
+        etapa("versionando extração")
+        historico.versionar(con)
     etapa("enriquecendo CNPJs")
     cnpj.enriquecer_em_massa(con, limite=args.limite_cnpj)
-    etapa("materializando agregados")
-    agregados.materializar(con)
-    etapa("verificando integridade")
-    falhas = verificacao.verificar(con)
-    if falhas:
-        con.close()
-        marco("ABORTADO: verificação de integridade falhou — NADA foi publicado")
-        sys.exit(1)
 
+    # gate ANTES do trabalho caro: se nada publicável mudou (o fingerprint lê só
+    # as tabelas-base), não há por que materializar, verificar ou exportar
     dt_extracao = con.execute(
         "SELECT MAX(dt_ultima_extracao) FROM hist_despesas_contratadas").fetchone()[0]
     extracao = f"{dt_extracao:%d/%m/%Y}" if dt_extracao else "?"
@@ -102,16 +102,25 @@ def cmd_rotina(args):
               "Nada foi exportado nem publicado — visitantes não rebaixam nada.")
         return
 
+    etapa("materializando agregados")
+    agregados.materializar(con)
+    etapa("verificando integridade")
+    falhas = verificacao.verificar(con)
+    if falhas:
+        con.close()
+        marco("ABORTADO: verificação de integridade falhou — NADA foi publicado")
+        sys.exit(1)
+
     etapa("exportando e publicando")
-    arquivos = exportar.exportar(con)
+    arquivos, hashes = exportar.exportar(con)
     for titulo, df in historico.resumo_mudancas(con):
         print(f"[mudancas] {titulo}: {len(df)} linhas")
     if args.sem_publicar:
         con.close()
         marco(f"EXPORTADO SEM PUBLICAR (--sem-publicar) — extração do TSE de {extracao}")
         return
-    exportar.publicar(arquivos)
-    exportar.registrar_publicacao(con, fp)
+    exportar.publicar(arquivos, hashes, exportar.hashes_publicados(con))
+    exportar.registrar_publicacao(con, fp, hashes)
     con.close()
     marco(f"PUBLICADO: extração do TSE de {extracao} no release 'dados'")
 

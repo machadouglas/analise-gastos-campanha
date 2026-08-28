@@ -5,6 +5,7 @@ comparação (cargo×UF) e rede de relações. Rodam após cada carga.
 Tudo é derivado; recriar é sempre seguro.
 """
 
+from src import db
 from src.analises import SQL_CATEGORIAS_SEM_NOTA_ESPERADA
 from src.carga import filtro_placeholder
 
@@ -25,11 +26,7 @@ def materializar(con) -> None:
     _rede(con)
 
 
-def _tem(con, nome: str) -> bool:
-    return bool(con.execute("""
-        SELECT (SELECT count(*) FROM information_schema.tables WHERE table_name = ?)
-             + (SELECT count(*) FROM duckdb_views() WHERE view_name = ?)
-    """, [nome, nome]).fetchone()[0])
+_tem = db.existe
 
 
 def _ano_eleicao(con):
@@ -348,7 +345,7 @@ def _benchmark_categorias(con) -> None:
 
 def _rede(con) -> None:
     """Arestas agregadas: quem paga e quem doa para cada candidato."""
-    con.execute(f"""
+    con.execute("""
         CREATE OR REPLACE TABLE rede AS
         SELECT 'despesa' AS tipo,
                NR_CPF_CNPJ_FORNECEDOR AS contraparte_id,

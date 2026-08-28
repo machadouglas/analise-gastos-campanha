@@ -4,6 +4,8 @@ Rodam na rotina diária ANTES de publicar: se algo falhar, nada sobe.
 Cada checagem devolve (nome, ok, detalhe).
 """
 
+from src import db
+
 TOLERANCIA = 0.01  # centavos de diferença por arredondamento
 QUEDA_MAXIMA_PCT = 20.0  # retrato encolher mais que isso = suspeita de arquivo truncado
 
@@ -170,7 +172,4 @@ def verificar(con) -> list[str]:
     return falhas
 
 
-def _existe(con, tabela: str) -> bool:
-    return bool(con.execute(
-        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [tabela]
-    ).fetchone()[0])
+_existe = db.existe

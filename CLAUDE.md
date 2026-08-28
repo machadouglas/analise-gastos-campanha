@@ -7,7 +7,7 @@ Este projeto extrai e analisa dados públicos de financiamento de campanha do TS
 1. **Nunca** grave dados pessoais do usuário no repositório. Dados baixados ficam em `data/` (gitignored).
 2. Os dados do TSE são declaratórios. Ao reportar, trate achados como **indícios**, nunca como prova de fraude. Não acuse pessoas ou empresas; descreva os fatos ("fornecedor X recebeu R$ Y de N candidatos").
 3. Respeite as APIs públicas: os scripts já têm cache e rate limit — não os remova.
-4. CPFs vêm anonimizados do TSE (`-4`). CNPJs de empresas são dados públicos e podem ser reportados.
+4. A prestação de contas do TSE traz **CPF completo** de doadores/fornecedores PF (a anonimização `-4` vale para outros arquivos). O banco local mantém o CPF cru (necessário para as análises), mas **tudo que é publicado** (Parquet/resumo.json) sai pseudonimizado como `pf-<16 hex>` via `src/privacidade.py` (sal secreto em `RADAR_SAL_CPF` — estável, fora do repo). Nunca exponha CPF cru em relatório/site. CNPJs de empresas são dados públicos e podem ser reportados.
 
 ## Fluxo padrão
 
@@ -27,8 +27,8 @@ python gastos.py rotina --ano 2026       # pipeline diário completo (baixar+car
 A rotina diária roda agendada em servidor próprio via Docker (`Dockerfile` +
 `docs/deploy-coolify.md` — guia genérico, sem citar infra de ninguém); o site é
 publicado no Cloudflare Pages (`docs/deploy-cloudflare.md`). Publicação nos
-releases exige `GH_TOKEN` (e `GH_REPO` em container) como variáveis de ambiente —
-nunca em arquivo versionado.
+releases exige `GH_TOKEN`, `RADAR_SAL_CPF` (e `GH_REPO` em container) como
+variáveis de ambiente — nunca em arquivo versionado.
 
 Durante a campanha (agosto–outubro do ano eleitoral) o TSE atualiza os arquivos diariamente — rode `baixar --forcar` para atualizar.
 
@@ -109,7 +109,7 @@ SELECT * FROM 'https://github.com/machadouglas/analise-gastos-campanha/releases/
 WHERE NR_CANDIDATO = '12345'
 ```
 
-Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — o site prefere estes e cai para o histórico se faltarem), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet`.
+Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — o site prefere estes e cai para o histórico se faltarem), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`, mesma lógica de preferência), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `bens.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
 
 ## Site público (`site/`)
 

@@ -4,6 +4,10 @@ Os Parquet publicados são consultáveis remotamente por qualquer pessoa com
 DuckDB, sem baixar o repositório:
 
     SELECT * FROM 'https://github.com/<repo>/releases/download/dados/despesas.parquet'
+
+Antes de publicar, CPFs de pessoas físicas viram códigos pf-… determinísticos
+(src/privacidade.py) — o banco local fica intacto; só a publicação é
+pseudonimizada.
 """
 
 import hashlib
@@ -11,6 +15,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from src import db, privacidade
 from src import resumo as resumo_mod
 from src.carga import filtro_placeholder
 
@@ -24,6 +29,7 @@ EXPORTS = {
     "despesas_pagas.parquet": "v_despesas_pagas",
     "receitas_doador_originario.parquet": "receitas_doador_originario",
     "candidatos.parquet": "candidatos",
+    "bens.parquet": "v_bens",  # patrimônio declarado — conteúdo da ficha sem movimento
     "serie_diaria.parquet": "serie_diaria",
     "benchmark_precos.parquet": "benchmark_precos",
     "benchmark_indicadores.parquet": "benchmark_indicadores",
@@ -45,54 +51,87 @@ EXPORTS_ATUAL = {
     "receitas_atual.parquet": ("hist_receitas", "NR_CPF_CNPJ_DOADOR", "VR_RECEITA"),
 }
 
+# Removidas prontas: o backend já sabe o que sumiu (v_removidas_*); publicar o
+# resultado evita que cada visitante refaça o anti-join histórico×atual no
+# navegador (site/src/lib/duckdb.ts cai para a derivação se estes faltarem).
+EXPORTS_REMOVIDAS = {
+    "despesas_removidas.parquet": ("v_removidas_despesas_contratadas", "VR_DESPESA_CONTRATADA"),
+    "receitas_removidas.parquet": ("v_removidas_receitas", "VR_RECEITA"),
+}
 
-def exportar(con) -> list[Path]:
+
+def _copiar(con, sql_origem: str, destino: Path) -> None:
+    con.execute(f"COPY ({sql_origem}) TO '{destino.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+    print(f"[exportado] {destino} ({destino.stat().st_size / 1e6:.1f} MB)")
+
+
+def _md5_arquivo(caminho: Path) -> str:
+    h = hashlib.md5(usedforsecurity=False)
+    with open(caminho, "rb") as f:
+        for bloco in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloco)
+    return h.hexdigest()
+
+
+def exportar(con) -> tuple[list[Path], dict[str, str]]:
+    """Gera todos os Parquet + resumo.json em data/export/.
+
+    Retorna (arquivos, hashes-por-nome). O hash de cada parquet vai também
+    dentro do resumo.json (chave "arquivos") — é o cache-buster por arquivo do
+    site: só o que mudou é rebaixado pelos visitantes.
+    """
+    sal_cpf = privacidade.sal()
     DIR_EXPORT.mkdir(parents=True, exist_ok=True)
     gerados = []
     for nome, (origem, contraparte, valor) in EXPORTS_ATUAL.items():
-        existe = con.execute(
-            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [origem]
-        ).fetchone()[0]
-        if not existe:
+        if not _existe(con, origem):
             print(f"[aviso] {origem} não existe — pulando {nome}")
             continue
         destino = DIR_EXPORT / nome
-        con.execute(f"""
-            COPY (
-                SELECT *, TRY_CAST(REPLACE({valor}, ',', '.') AS DOUBLE) * qt_linhas AS valor
-                FROM {origem}
-                WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM {origem})
-                  AND {filtro_placeholder(contraparte, valor)}
-            ) TO '{destino.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)
-        """)
-        print(f"[exportado] {destino} ({destino.stat().st_size / 1e6:.1f} MB)")
+        selecao = privacidade.selecao_publicavel(con, origem, sal_cpf)
+        _copiar(con, f"""
+            SELECT {selecao},
+                   TRY_CAST(REPLACE({valor}, ',', '.') AS DOUBLE) * qt_linhas AS valor
+            FROM {origem}
+            WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM {origem})
+              AND {filtro_placeholder(contraparte, valor)}
+        """, destino)
+        gerados.append(destino)
+    for nome, (origem, valor) in EXPORTS_REMOVIDAS.items():
+        if not _existe(con, origem):
+            print(f"[aviso] {origem} não existe — pulando {nome}")
+            continue
+        destino = DIR_EXPORT / nome
+        selecao = privacidade.selecao_publicavel(con, origem, sal_cpf)
+        _copiar(con, f"""
+            SELECT {selecao},
+                   TRY_CAST(REPLACE({valor}, ',', '.') AS DOUBLE) * qt_linhas AS valor
+            FROM {origem}
+        """, destino)
         gerados.append(destino)
     for nome, origem in EXPORTS.items():
-        existe = con.execute("""
-            SELECT count(*) FROM information_schema.tables WHERE table_name = ?
-            UNION ALL SELECT count(*) FROM duckdb_views() WHERE view_name = ?
-        """, [origem, origem]).fetchall()
-        if not any(r[0] for r in existe):
+        if not _existe(con, origem):
             print(f"[aviso] {origem} não existe — pulando {nome}")
             continue
         destino = DIR_EXPORT / nome
-        con.execute(f"""
-            COPY (SELECT * FROM {origem}) TO '{destino.as_posix()}'
-            (FORMAT PARQUET, COMPRESSION ZSTD)
-        """)
-        print(f"[exportado] {destino} ({destino.stat().st_size / 1e6:.1f} MB)")
+        selecao = privacidade.selecao_publicavel(con, origem, sal_cpf)
+        _copiar(con, f"SELECT {selecao} FROM {origem}", destino)
         gerados.append(destino)
 
+    hashes = {p.name: _md5_arquivo(p) for p in gerados}
+
     destino = DIR_EXPORT / "resumo.json"
-    destino.write_text(json.dumps(resumo_mod.gerar(con), ensure_ascii=False), encoding="utf-8")
+    conteudo = resumo_mod.gerar(con)
+    conteudo["arquivos"] = hashes
+    destino.write_text(json.dumps(conteudo, ensure_ascii=False), encoding="utf-8")
     print(f"[exportado] {destino} ({destino.stat().st_size / 1e3:.0f} kB)")
     gerados.append(destino)
-    return gerados
+    return gerados, hashes
 
 
 # o que entra no "estado publicável": se nada disso mudou, republicar só
-# forçaria os visitantes a rebaixar parquet idênticos (o site usa o carimbo de
-# publicação como cache-buster). dt_consulta fica de fora de propósito: uma
+# forçaria os visitantes a rebaixar parquet idênticos (o site usa o hash de
+# cada arquivo como cache-buster). dt_consulta fica de fora de propósito: uma
 # reconsulta de CNPJ que não muda o cadastro não é mudança visível.
 CONSULTAS_FINGERPRINT = {
     "hist_despesas_contratadas":
@@ -111,11 +150,7 @@ CONSULTAS_FINGERPRINT = {
 }
 
 
-def _existe(con, nome: str) -> bool:
-    return bool(con.execute("""
-        SELECT (SELECT count(*) FROM information_schema.tables WHERE table_name = ?)
-             + (SELECT count(*) FROM duckdb_views() WHERE view_name = ?)
-    """, [nome, nome]).fetchone()[0])
+_existe = db.existe
 
 
 def fingerprint(con) -> str:
@@ -124,7 +159,7 @@ def fingerprint(con) -> str:
     partes = []
     for nome, sql in CONSULTAS_FINGERPRINT.items():
         partes.append(str(con.execute(sql).fetchone()) if _existe(con, nome) else "ausente")
-    return hashlib.md5("|".join(partes).encode("utf-8")).hexdigest()
+    return hashlib.md5("|".join(partes).encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def ultima_publicacao(con) -> str | None:
@@ -135,18 +170,46 @@ def ultima_publicacao(con) -> str | None:
     return linha[0] if linha else None
 
 
-def registrar_publicacao(con, fp: str) -> None:
+def hashes_publicados(con) -> dict[str, str] | None:
+    """Hashes por arquivo da última publicação (None se nunca publicou ou se o
+    registro é de uma versão antiga do esquema)."""
+    if not _existe(con, "publicacoes"):
+        return None
+    try:
+        linha = con.execute("SELECT arquivos FROM publicacoes").fetchone()
+    except Exception:
+        return None  # esquema antigo, sem a coluna — trata como primeira publicação
+    return json.loads(linha[0]) if linha and linha[0] else None
+
+
+def registrar_publicacao(con, fp: str, hashes: dict[str, str] | None = None) -> None:
     """Guarda o estado da última publicação (uma linha só — o histórico de
     publicações já fica no log da rotina e no próprio release)."""
     con.execute("""
-        CREATE TABLE IF NOT EXISTS publicacoes (dt_publicacao TIMESTAMP, fingerprint VARCHAR)
+        CREATE OR REPLACE TABLE publicacoes
+            (dt_publicacao TIMESTAMP, fingerprint VARCHAR, arquivos VARCHAR)
     """)
-    con.execute("DELETE FROM publicacoes")
-    con.execute("INSERT INTO publicacoes VALUES (now(), ?)", [fp])
+    con.execute("INSERT INTO publicacoes VALUES (now(), ?, ?)",
+                [fp, json.dumps(hashes) if hashes else None])
 
 
-def publicar(arquivos: list[Path]) -> None:
-    """Sobe os Parquet para o release rolling 'dados' do repositório (via gh CLI)."""
+def publicar(
+    arquivos: list[Path],
+    hashes: dict[str, str] | None = None,
+    anteriores: dict[str, str] | None = None,
+) -> None:
+    """Sobe os Parquet para o release rolling 'dados' do repositório (via gh CLI).
+
+    Com os hashes da publicação anterior em mãos, sobe apenas o que mudou
+    (resumo.json sempre sobe — carrega o mapa de hashes/cache-buster do site).
+    """
+    if hashes and anteriores:
+        mudados = [a for a in arquivos
+                   if a.name == "resumo.json" or anteriores.get(a.name) != hashes.get(a.name)]
+        pulados = len(arquivos) - len(mudados)
+        if pulados:
+            print(f"[publicar] {pulados} arquivos idênticos à última publicação — upload pulado")
+        arquivos = mudados
     if not arquivos:
         print("[aviso] nada para publicar")
         return
@@ -159,7 +222,8 @@ def publicar(arquivos: list[Path]) -> None:
              "--title", "Dados extraídos (atualização contínua)",
              "--notes", "Parquet com histórico de extrações da prestação de contas do TSE. "
                         "Colunas dt_primeira_extracao/dt_ultima_extracao registram quando cada linha "
-                        "apareceu e até quando permaneceu declarada. Consulte direto da URL com DuckDB."],
+                        "apareceu e até quando permaneceu declarada. CPFs de pessoas físicas são "
+                        "pseudonimizados (códigos pf-…). Consulte direto da URL com DuckDB."],
             check=True)
     subprocess.run(
         ["gh", "release", "upload", TAG_RELEASE, "--clobber",

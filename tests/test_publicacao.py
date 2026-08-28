@@ -3,7 +3,6 @@ mudou — o fingerprint precisa reagir a dado novo e ignorar ruído (reconsulta
 de CNPJ que não mudou nada)."""
 
 import sys
-from datetime import date
 from pathlib import Path
 
 import pytest

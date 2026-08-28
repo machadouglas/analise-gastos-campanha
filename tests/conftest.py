@@ -9,7 +9,14 @@ import duckdb
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src import carga, historico  # noqa: E402
+from src import carga, historico, privacidade  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def sal_cpf_de_teste(monkeypatch):
+    """Exportar/resumo exigem o sal da pseudonimização de CPF (RADAR_SAL_CPF);
+    nos testes usamos um valor fixo para os códigos pf- serem determinísticos."""
+    monkeypatch.setenv(privacidade.VARIAVEL, "sal-de-teste")
 
 COLS_DESPESAS = [
     "DT_GERACAO", "HH_GERACAO", "SQ_PRESTADOR_CONTAS", "SQ_CANDIDATO",

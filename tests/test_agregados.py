@@ -75,8 +75,8 @@ def test_benchmark_exige_minimo_de_notas_e_ordena_quantis(banco):
     ).df()
     assert set(linhas["DS_ORIGEM_DESPESA"]) == {"Publicidade por materiais impressos"}
     assert set(linhas["SG_UF"]) == {"XX", "BR-TODAS"}  # âmbito UF + nacional
-    for _, l in linhas.iterrows():
-        assert l["p25"] <= l["mediana"] <= l["p75"] <= l["p95"] <= l["maximo"]
+    for _, linha in linhas.iterrows():
+        assert linha["p25"] <= linha["mediana"] <= linha["p75"] <= linha["p95"] <= linha["maximo"]
 
 
 def test_indicadores_concentracao_sem_nota_e_pessoa_fisica(banco):
@@ -321,7 +321,7 @@ def test_benchmark_categorias_compara_total_por_candidato_no_grupo(banco):
         SELECT DS_ORIGEM_DESPESA, SG_UF, candidatos, maximo
         FROM benchmark_categorias ORDER BY SG_UF
     """).fetchall()
-    assert [(l[0], l[1], l[2]) for l in linhas] == [
+    assert [(li[0], li[1], li[2]) for li in linhas] == [
         ("Publicidade por materiais impressos", "BR-TODAS", 20),
         ("Publicidade por materiais impressos", "XX", 20),
     ]

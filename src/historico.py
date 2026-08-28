@@ -60,7 +60,7 @@ def _colunas(con, tabela):
 def versionar(con) -> None:
     """Aplica a extração corrente (tabelas brutas) sobre as tabelas hist_*."""
     con.execute("CREATE TABLE IF NOT EXISTS extracoes (dt_extracao DATE)")
-    for tabela, sq in TABELAS.items():
+    for tabela in TABELAS:
         hist = f"hist_{tabela}"
         cols = _colunas(con, tabela)
         lista = ", ".join(cols)

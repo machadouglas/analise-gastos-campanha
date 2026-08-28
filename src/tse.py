@@ -21,17 +21,32 @@ CONJUNTOS = {
 }
 
 
-def baixar_conjunto(conjunto: str, ano: int, forcar: bool = False) -> Path:
-    """Baixa um conjunto de dados do TSE para data/raw/{ano}/. Retorna o caminho do zip."""
+def baixar_conjunto(
+    conjunto: str, ano: int, forcar: bool = False, condicional: bool = False
+) -> tuple[Path, bool]:
+    """Baixa um conjunto de dados do TSE para data/raw/{ano}/.
+
+    Com `condicional=True` e o zip já em disco, pergunta ao CDN via
+    If-Modified-Since se há versão nova — um 304 evita rebaixar dezenas de MB
+    quando o TSE ainda serve a mesma extração. Retorna (caminho, baixou_novo).
+    """
     url = CONJUNTOS[conjunto].format(ano=ano)
     destino = DIR_RAW / str(ano) / url.rsplit("/", 1)[-1]
-    if destino.exists() and not forcar:
+    marca = destino.with_suffix(destino.suffix + ".lastmod")
+    if destino.exists() and not forcar and not condicional:
         print(f"[ok] {destino} já existe (use --forcar para rebaixar)")
-        return destino
+        return destino, False
     destino.parent.mkdir(parents=True, exist_ok=True)
+    cabecalhos = {}
+    if condicional and destino.exists() and marca.exists():
+        cabecalhos["If-Modified-Since"] = marca.read_text(encoding="utf-8").strip()
     print(f"[baixando] {url}")
     inicio = time.time()
-    r = requests.get(url, impersonate="chrome", timeout=600, stream=True)
+    r = requests.get(url, impersonate="chrome", timeout=600, stream=True, headers=cabecalhos)
+    if r.status_code == 304:
+        r.close()
+        print(f"[ok] {destino.name}: TSE ainda serve a mesma versão (304) — download pulado")
+        return destino, False
     if r.status_code != 200:
         r.close()
         raise RuntimeError(f"HTTP {r.status_code} ao baixar {url}")
@@ -47,5 +62,8 @@ def baixar_conjunto(conjunto: str, ano: int, forcar: bool = False) -> Path:
                 marco = baixado
                 print(f"[baixando] {destino.name}: {baixado / 1e6:.0f} MB...")
     parcial.replace(destino)
+    ultima_modificacao = r.headers.get("Last-Modified")
+    if ultima_modificacao:
+        marca.write_text(ultima_modificacao, encoding="utf-8")
     print(f"[ok] {destino} ({baixado / 1e6:.1f} MB em {time.time() - inicio:.0f}s)")
-    return destino
+    return destino, True
