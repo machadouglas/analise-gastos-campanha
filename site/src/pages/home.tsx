@@ -224,8 +224,6 @@ export function Home() {
   // a Home mostra só os maiores casos — o trabalho de busca é do Explorar
   const removidas = (resumo.despesas_removidas ?? []).slice(0, 5);
   const removidasReceitas = (resumo.receitas_removidas ?? []).slice(0, 5);
-  const qtdRemovidas = m?.despesas_removidas_qtd ?? removidas.length;
-  const qtdRemovidasReceitas = m?.receitas_removidas_qtd ?? removidasReceitas.length;
 
   return (
     <div className="mx-auto max-w-7xl px-6 pb-24">
@@ -267,10 +265,12 @@ export function Home() {
         descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Abaixo, só as maiores de cada lado — a busca completa, com filtros por UF, cargo, partido ou candidato, é sua no Explorar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
         verTudo={{
           href: '/explorar?visao=removidas',
-          rotulo: `Explorar as ${num.format(qtdRemovidas)} remoções com filtros`,
+          rotulo: m
+            ? `Explorar as ${num.format(m.despesas_removidas_qtd)} remoções com filtros`
+            : 'Explorar todas as remoções com filtros',
         }}
       >
-        {qtdRemovidas === 0 && qtdRemovidasReceitas === 0 ? (
+        {removidas.length === 0 && removidasReceitas.length === 0 ? (
           <Card>
             <CardContent className="flex items-center gap-3 p-5 text-sm text-muted-foreground">
               <CheckCircle2 className="h-5 w-5 shrink-0 text-[#264E9B]" />
@@ -284,8 +284,10 @@ export function Home() {
             {removidas.length > 0 && (
               <div>
                 <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="h-4 w-4" /> Despesas removidas: {num.format(qtdRemovidas)}
-                  {m && <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span>}
+                  <AlertTriangle className="h-4 w-4" />
+                  {m
+                    ? <>Despesas removidas: {num.format(m.despesas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span></>
+                    : <>Despesas removidas — as {removidas.length} maiores:</>}
                 </p>
                 <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
               </div>
@@ -293,8 +295,10 @@ export function Home() {
             {removidasReceitas.length > 0 && (
               <div>
                 <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="h-4 w-4" /> Receitas removidas: {num.format(qtdRemovidasReceitas)}
-                  {m && <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span>}
+                  <AlertTriangle className="h-4 w-4" />
+                  {m
+                    ? <>Receitas removidas: {num.format(m.receitas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span></>
+                    : <>Receitas removidas — as {removidasReceitas.length} maiores:</>}
                 </p>
                 <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
               </div>
