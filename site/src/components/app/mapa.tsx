@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { brl } from '@/lib/format';
 
 /* Cartograma de tiles do Brasil: cada UF é um quadrado de mesma área numa
@@ -26,7 +26,8 @@ export interface ValorUF {
   valor: number;
 }
 
-export function MapaBrasil({
+// memo: os inputs do Explorar re-renderizam a página a cada tecla
+export const MapaBrasil = memo(function MapaBrasil({
   dados,
   selecionada = '',
   aoClicar,
@@ -88,4 +89,4 @@ export function MapaBrasil({
       </p>
     </div>
   );
-}
+});

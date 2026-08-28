@@ -20,18 +20,20 @@ TABELAS DISPONÍVEIS:
 
 1. despesas — gastos declarados, uma linha por conteúdo único (qt_linhas = quantas vezes o item se repetia).
    Candidato: NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, SQ_CANDIDATO
-   Fornecedor: NM_FORNECEDOR, NM_FORNECEDOR_RFB, NR_CPF_CNPJ_FORNECEDOR, DS_CNAE_FORNECEDOR, DS_TIPO_FORNECEDOR (PESSOA FÍSICA/JURÍDICA)
+   Fornecedor: NM_FORNECEDOR, NM_FORNECEDOR_RFB, NR_CPF_CNPJ_FORNECEDOR (CNPJ com 14 dígitos; pessoa física aparece como código pseudonimizado 'pf-…' — o CPF não é publicado), DS_CNAE_FORNECEDOR, DS_TIPO_FORNECEDOR (PESSOA FÍSICA/JURÍDICA)
    Gasto: DS_ORIGEM_DESPESA (categoria), DS_DESPESA (descrição), DS_TIPO_DOCUMENTO, VR_DESPESA_CONTRATADA (texto com vírgula decimal), DT_DESPESA (texto DD/MM/AAAA)
    Histórico: qt_linhas, dt_primeira_extracao, dt_ultima_extracao
 
 2. receitas — doações recebidas. Mesmas colunas de candidato e histórico, mais:
-   NM_DOADOR, NM_DOADOR_RFB, NR_CPF_CNPJ_DOADOR, DS_FONTE_RECEITA (FUNDO ESPECIAL / FUNDO PARTIDARIO / OUTROS RECURSOS — dinheiro público = fonte que começa com FUNDO), DS_ORIGEM_RECEITA (recursos de partido político, pessoas físicas, recursos próprios...), DS_ESPECIE_RECEITA (PIX, estimável...), VR_RECEITA, DT_RECEITA
+   NM_DOADOR, NM_DOADOR_RFB, NR_CPF_CNPJ_DOADOR (pessoa física vira código 'pf-…'), DS_FONTE_RECEITA (FUNDO ESPECIAL / FUNDO PARTIDARIO / OUTROS RECURSOS — dinheiro público = fonte que começa com FUNDO), DS_ORIGEM_RECEITA (recursos de partido político, pessoas físicas, recursos próprios...), DS_ESPECIE_RECEITA (PIX, estimável...), VR_RECEITA, DT_RECEITA
 
 3. despesas_pagas — pagamentos efetivados (liga aos candidatos por SQ_PRESTADOR_CONTAS, presente também em despesas/receitas)
 
 4. receitas_doador_originario — quem doou originalmente quando o dinheiro passou por partido
 
-5. candidatos — registro de candidaturas: NM_CANDIDATO, NM_URNA_CANDIDATO, NR_CANDIDATO, DS_CARGO, SG_PARTIDO, SG_UF, SQ_CANDIDATO
+5. candidatos — registro de candidaturas (TODAS, mesmo sem movimento financeiro): NM_CANDIDATO, NM_URNA_CANDIDATO, NR_CANDIDATO, DS_CARGO, SG_PARTIDO, SG_UF, SQ_CANDIDATO
+
+5b. bens — patrimônio declarado no registro: SQ_CANDIDATO, DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, VR (DOUBLE, valor do bem)
 
 6. indicadores — scorecard pronto por candidato (1 linha cada): SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens, total_receitas, total_pago, pct_pago, razao_gasto_receita, fundos_publicos, pct_fundos_publicos, recursos_proprios, total_bens (patrimônio declarado), pct_maior_fornecedor, n_fornecedores, fornecedores_cnpj, fornecedores_consultados, valor_sem_nota, pct_sem_nota, valor_pessoa_fisica, pct_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos
 
@@ -56,7 +58,8 @@ REGRAS OBRIGATÓRIAS:
 - Em despesas/receitas (históricas), converta valores assim: TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas
 - Datas declaradas: STRPTIME(DT_DESPESA, '%d/%m/%Y')
 - Declarações removidas: use a view despesas_removidas (o filtro cru por dt_ultima_extracao inclui retransmissões renumeradas e placeholders — evite).
-- Nulos do TSE: '#NULO' (vazio), '-1' (sem id), '-4' (CPF anonimizado) — filtre quando relevante.
+- Nulos do TSE: '#NULO' (vazio), '-1' (sem id), '-4' (anonimizado) — filtre quando relevante.
+- CPFs de pessoa física NÃO são publicados: as colunas de CPF/CNPJ trazem 'pf-' + 16 hex no lugar (código estável — dá para agrupar/juntar pelo código, mas não recuperar o CPF). Pessoa jurídica: 14 dígitos.
 - Nomes estão em MAIÚSCULAS e sem padronização: busque com ILIKE '%TERMO%'.
 - Nome de fornecedor: COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)
 - SQ_DESPESA/SQ_RECEITA NÃO são únicos (repetem por item de nota) — nunca use como chave.

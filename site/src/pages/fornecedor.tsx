@@ -8,8 +8,8 @@ import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
-import { CONDICAO_SEM_NOTA } from '@/lib/consultas';
-import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { CONDICAO_SEM_NOTA, escSQL } from '@/lib/consultas';
+import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface CadastroRFB {
   razaoSocial: string | null;
@@ -50,16 +50,18 @@ interface DadosFornecedor {
   notas: unknown[][];
 }
 
-function esc(s: string) {
-  return s.replaceAll("'", "''");
-}
+const esc = escSQL;
 
-/** Resolve o identificador da URL para o CPF/CNPJ real: ids `pf-<hash>` são
- *  opacos (o CPF não viaja na URL) e voltam ao valor via md5 no próprio banco. */
+/** Resolve o identificador da URL para o id usado nos dados. Nos Parquet novos
+ *  o próprio `pf-<hash>` É o valor da coluna (pseudonimizado no backend); em
+ *  publicações antigas a coluna traz o CPF cru e o hash é revertido via md5. */
 async function resolverId(param: string): Promise<string | null> {
   if (/^\d{6,14}$/.test(param)) return param;
   const m = /^pf-([0-9a-f]{16})$/.exec(param);
   if (!m) return null;
+  const direto = await executarSQL(`
+      SELECT 1 FROM despesas_atual WHERE NR_CPF_CNPJ_FORNECEDOR = 'pf-${m[1]}' LIMIT 1`);
+  if (direto.total) return `pf-${m[1]}`;
   const r = await executarSQL(`
       SELECT DISTINCT NR_CPF_CNPJ_FORNECEDOR FROM despesas_atual
       WHERE LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 11
@@ -70,7 +72,11 @@ async function resolverId(param: string): Promise<string | null> {
 async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
   const w = `NR_CPF_CNPJ_FORNECEDOR = '${esc(id)}'`;
 
-  const perfilRes = await executarSQL(`
+  // consultas independentes disparadas juntas: o ganho é o pipeline das
+  // leituras parciais dos parquet (rede), não paralelismo de CPU no worker
+  const [perfilRes, rfbRes, doacaoAgg, removidasAgg, candidatos, categorias, porDia, notas, doacoes, removidasRes] =
+    await Promise.all([
+      executarSQL(`
       SELECT ANY_VALUE(COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)),
              ANY_VALUE(NULLIF(DS_TIPO_FORNECEDOR, '#NULO')),
              ANY_VALUE(NULLIF(DS_CNAE_FORNECEDOR, '#NULO')),
@@ -81,17 +87,64 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
              -- mesma régua do backend (src/analises.py): sem nota fiscal, fora
              -- das categorias em que a nota não é o documento próprio
              ROUND(SUM(valor) FILTER (WHERE ${CONDICAO_SEM_NOTA}), 2)
-      FROM despesas_atual WHERE ${w}`);
-  const l = perfilRes.linhas[0] ?? [];
-  if (!Number(l[4])) return null;
-  const semNota = Number(l[9] ?? 0);
-
-  const rfbRes = tabelasDisponiveis.has('fornecedores')
-    ? await executarSQL(`
+      FROM despesas_atual WHERE ${w}`),
+      tabelasDisponiveis.has('fornecedores')
+        ? executarSQL(`
         SELECT razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal,
                NULLIF(municipio || '/' || uf, '/') AS sede, capital_social, socios
         FROM fornecedores WHERE cnpj = '${esc(id)}'`)
-    : { linhas: [] as unknown[][] };
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+      executarSQL(`
+      SELECT ROUND(SUM(valor), 2), COUNT(DISTINCT SQ_CANDIDATO)
+      FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'`),
+      tabelasDisponiveis.has('despesas_removidas')
+        ? executarSQL(`
+        SELECT COUNT(*), ROUND(SUM(valor), 2)
+        FROM despesas_removidas WHERE ${w}`)
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+      executarSQL(`
+      SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(DS_CARGO),
+             ANY_VALUE(SG_PARTIDO), ANY_VALUE(SG_UF),
+             COUNT(*) AS itens, ROUND(SUM(valor), 2) AS total
+      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 50`),
+      executarSQL(`
+      SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
+      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
+      executarSQL(`
+      SELECT STRFTIME(STRPTIME(DT_DESPESA, '%d/%m/%Y'), '%d/%m') AS dia,
+             MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor), 2) AS total
+      FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
+      GROUP BY 1 ORDER BY ord`),
+      executarSQL(`
+      SELECT DT_DESPESA AS "Data", SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
+             DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
+             NULLIF(DS_TIPO_DOCUMENTO, '#NULO') AS "Documento",
+             ROUND(valor, 2) AS "Valor"
+      FROM despesas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`),
+      executarSQL(`
+        SELECT SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
+               SG_PARTIDO || '/' || SG_UF AS "Partido/UF", DT_RECEITA AS "Data",
+               DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
+               ROUND(valor, 2) AS "Valor"
+        FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'
+        ORDER BY valor DESC LIMIT 30`).then((x) => x.linhas),
+      tabelasDisponiveis.has('despesas_removidas')
+        ? executarSQL(`
+        SELECT NM_CANDIDATO AS "Candidato", SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
+               DS_DESPESA AS "Descrição",
+               ROUND(valor, 2) AS "Valor",
+               STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
+               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
+               SQ_CANDIDATO AS "_sq"
+        FROM despesas_removidas
+        WHERE ${w}
+        ORDER BY 4 DESC LIMIT 30`).then((x) => x.linhas)
+        : Promise.resolve([] as unknown[][]),
+    ]);
+
+  const l = perfilRes.linhas[0] ?? [];
+  if (!Number(l[4])) return null;
+  const semNota = Number(l[9] ?? 0);
   const r = rfbRes.linhas[0];
   const rfb: CadastroRFB | null = r
     ? {
@@ -107,20 +160,12 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       }
     : null;
 
-  const doacaoAgg = await executarSQL(`
-      SELECT ROUND(SUM(valor), 2), COUNT(DISTINCT SQ_CANDIDATO)
-      FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'`);
   const totalDoado = Number(doacaoAgg.linhas[0]?.[0] ?? 0);
-
   // MESMA régua do resto do site (view despesas_removidas): retransmissões
   // renumeradas pelo TSE e linhas-placeholder não contam como remoção — a
   // consulta crua em `despesas` contava e contradizia a Metodologia
-  const removidasAgg = tabelasDisponiveis.has('despesas_removidas')
-    ? await executarSQL(`
-        SELECT COUNT(*), ROUND(SUM(valor), 2)
-        FROM despesas_removidas WHERE ${w}`)
-    : { linhas: [] as unknown[][] };
   const valorRemovido = Number(removidasAgg.linhas[0]?.[1] ?? 0);
+  const removidas = valorRemovido > 0 ? removidasRes : [];
 
   const flags: string[] = [];
   const nCandidatos = Number(l[4]);
@@ -147,52 +192,6 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
     itens: Number(l[8] ?? 0),
     flags,
   };
-
-  const candidatos = await executarSQL(`
-      SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(DS_CARGO),
-             ANY_VALUE(SG_PARTIDO), ANY_VALUE(SG_UF),
-             COUNT(*) AS itens, ROUND(SUM(valor), 2) AS total
-      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 50`);
-
-  const categorias = await executarSQL(`
-      SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
-      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`);
-
-  const porDia = await executarSQL(`
-      SELECT STRFTIME(STRPTIME(DT_DESPESA, '%d/%m/%Y'), '%d/%m') AS dia,
-             MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor), 2) AS total
-      FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
-      GROUP BY 1 ORDER BY ord`);
-
-  const doacoes = totalDoado > 0
-    ? (await executarSQL(`
-        SELECT SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
-               SG_PARTIDO || '/' || SG_UF AS "Partido/UF", DT_RECEITA AS "Data",
-               DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
-               ROUND(valor, 2) AS "Valor"
-        FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'
-        ORDER BY valor DESC LIMIT 30`)).linhas
-    : [];
-
-  const removidas = valorRemovido > 0
-    ? (await executarSQL(`
-        SELECT NM_CANDIDATO AS "Candidato", SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
-               DS_DESPESA AS "Descrição",
-               ROUND(valor, 2) AS "Valor",
-               STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
-               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
-               SQ_CANDIDATO AS "_sq"
-        FROM despesas_removidas
-        WHERE ${w}
-        ORDER BY 4 DESC LIMIT 30`)).linhas
-    : [];
-
-  const notas = await executarSQL(`
-      SELECT DT_DESPESA AS "Data", SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
-             DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
-             NULLIF(DS_TIPO_DOCUMENTO, '#NULO') AS "Documento",
-             ROUND(valor, 2) AS "Valor"
-      FROM despesas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`);
 
   // grafo: candidatos que pagam (despesa) e que recebem doação deste CNPJ/CPF;
   // quem faz as duas coisas com a mesma contraparte ganha o anel do "dinheiro que volta"
@@ -337,11 +336,11 @@ export function Fornecedor() {
       })
       .then((d) => setDados(d))
       .catch(() => setDados('nao-encontrado'));
-  }, [id]);
+  }, [id, navigate]);
 
   // Ficha de pessoa física fica fora dos buscadores (minimização de exposição)
   useEffect(() => {
-    if (!idReal || idReal.length !== 11) return;
+    if (!idReal || !ePessoaFisica(idReal)) return;
     const meta = document.createElement('meta');
     meta.name = 'robots';
     meta.content = 'noindex';

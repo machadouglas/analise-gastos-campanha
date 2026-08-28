@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { cn } from '@/lib/utils';
 
 interface Coluna {
@@ -5,7 +6,8 @@ interface Coluna {
   numerica?: boolean;
 }
 
-export function Tabela({
+// memo: os inputs do Explorar re-renderizam a página a cada tecla
+export const Tabela = memo(function Tabela({
   colunas,
   children,
   className,
@@ -38,7 +40,7 @@ export function Tabela({
       </table>
     </div>
   );
-}
+});
 
 /** Célula numérica; com `frac` (0–1, valor ÷ maior da coluna) desenha uma
  *  micro-barra proporcional atrás do número — a coluna vira legível de relance,

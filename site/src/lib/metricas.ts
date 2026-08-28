@@ -1,7 +1,8 @@
 import { brl } from '@/lib/format';
 
 /** Métricas comparáveis por grupo (cargo×UF) — mesmos nomes das linhas de
- *  benchmark_indicadores e dos sinais do resumo.json (src/agregados.py). */
+ *  benchmark_indicadores (src/agregados.py) e dos sinais do resumo.json
+ *  (METRICAS_SINAL em src/resumo.py). */
 
 export interface MetricaInfo {
   rotulo: string;

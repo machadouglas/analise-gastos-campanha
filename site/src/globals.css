@@ -48,3 +48,23 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
+
+/* Entrada dos cartões da Home (fade + subida). Substitui o framer-motion —
+   esta era a única animação JS do site; escalone com animation-delay inline. */
+@keyframes entrada-suave {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@layer utilities {
+  .animar-entrada {
+    /* fill-mode both: invisível durante o delay escalonado */
+    animation: entrada-suave 0.4s ease-out both;
+  }
+}

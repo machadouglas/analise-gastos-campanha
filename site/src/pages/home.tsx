@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import {
   AlertTriangle, ArrowRight, Bot, Building2, CheckCircle2, EyeOff, Megaphone,
   Scale, Search, Wallet, type LucideIcon,
@@ -121,11 +120,7 @@ function Cartao({ rotulo, valor, indice, serie }: {
   serie?: number[];
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: indice * 0.06, ease: 'easeOut' }}
-    >
+    <div className="animar-entrada" style={{ animationDelay: `${indice * 0.06}s` }}>
       <Card>
         <CardContent className="p-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -141,7 +136,7 @@ function Cartao({ rotulo, valor, indice, serie }: {
           )}
         </CardContent>
       </Card>
-    </motion.div>
+    </div>
   );
 }
 

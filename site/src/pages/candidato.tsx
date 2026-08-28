@@ -19,6 +19,7 @@ import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
+import { escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
@@ -63,8 +64,68 @@ interface DadosCandidato {
   removidas: unknown[][];
 }
 
-function esc(s: string) {
-  return s.replaceAll("'", "''");
+const esc = escSQL;
+
+/** Ficha mínima de quem se registrou mas não declarou nenhuma despesa/receita:
+ *  72% das candidaturas no início da campanha. A ausência de movimento é, em
+ *  si, a informação da página. */
+interface FichaRegistro {
+  registroSemMovimento: true;
+  nomeUrna: string;
+  nome: string;
+  numero: string;
+  partido: string;
+  cargo: string;
+  uf: string;
+  situacao: string | null;
+  cdEleicao: string | null;
+  sgUe: string | null;
+  dtExtracao: string | null;
+  totalBens: number | null;
+  bens: { tipo: string; descricao: string; valor: number }[];
+}
+
+async function carregarRegistro(sq: string): Promise<FichaRegistro | null> {
+  if (!tabelasDisponiveis.has('candidatos')) return null;
+  const w = `SQ_CANDIDATO = '${esc(sq)}'`;
+  const [reg, extracao, bensRes] = await Promise.all([
+    executarSQL(`
+        SELECT ANY_VALUE(NM_URNA_CANDIDATO), ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
+               ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF),
+               ANY_VALUE(NULLIF(NULLIF(DS_SITUACAO_CANDIDATURA, '#NE'), '#NULO')),
+               ANY_VALUE(CD_ELEICAO), ANY_VALUE(SG_UE)
+        FROM candidatos WHERE ${w}`),
+    tabelasDisponiveis.has('serie_diaria')
+      ? executarSQL(`SELECT STRFTIME(MAX(dt_extracao), '%d/%m/%Y') FROM serie_diaria`)
+      : Promise.resolve({ linhas: [] as unknown[][] }),
+    tabelasDisponiveis.has('bens')
+      ? executarSQL(`
+          SELECT DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, ROUND(VR, 2)
+          FROM bens WHERE ${w} ORDER BY VR DESC LIMIT 30`)
+      : Promise.resolve({ linhas: [] as unknown[][] }),
+  ]);
+  const l = reg.linhas[0];
+  if (!l || l[0] == null) return null;
+  const bens = bensRes.linhas.map((b) => ({
+    tipo: String(b[0] ?? ''),
+    descricao: String(b[1] ?? ''),
+    valor: Number(b[2] ?? 0),
+  }));
+  return {
+    registroSemMovimento: true,
+    nomeUrna: String(l[0]),
+    nome: String(l[1]),
+    numero: String(l[2] ?? ''),
+    partido: String(l[3] ?? ''),
+    cargo: String(l[4] ?? ''),
+    uf: String(l[5] ?? ''),
+    situacao: l[6] == null ? null : String(l[6]),
+    cdEleicao: l[7] == null ? null : String(l[7]),
+    sgUe: l[8] == null ? null : String(l[8]),
+    dtExtracao: extracao.linhas[0]?.[0] == null ? null : String(extracao.linhas[0][0]),
+    totalBens: bens.length ? bens.reduce((s, b) => s + b.valor, 0) : null,
+    bens,
+  };
 }
 
 /** Amostra dos indicadores do grupo de comparação para o beeswarm — uma linha
@@ -95,8 +156,81 @@ async function amostraGrupo(cargo: string, uf: string | null): Promise<Record<st
 
 async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   const w = `SQ_CANDIDATO = '${esc(sq)}'`;
+  const temForn = tabelasDisponiveis.has('fornecedores');
 
-  const ind = await executarSQL(`SELECT * FROM indicadores WHERE ${w}`);
+  // 1ª onda: tudo que não depende de resultado anterior, junto — o ganho é o
+  // pipeline das leituras parciais dos parquet, o gargalo real da ficha
+  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, faixasRes, receitas, removidas] =
+    await Promise.all([
+      executarSQL(`SELECT * FROM indicadores WHERE ${w}`),
+      tabelasDisponiveis.has('candidatos')
+        ? executarSQL(`SELECT ANY_VALUE(CD_ELEICAO), ANY_VALUE(SG_UE) FROM candidatos WHERE ${w}`)
+            .catch(() => ({ linhas: [] as unknown[][] }))
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+      tabelasDisponiveis.has('serie_diaria')
+        ? executarSQL(`
+        SELECT STRFTIME(dt_extracao, '%d/%m') AS dia, total_contratado, total_receitas
+        FROM serie_diaria WHERE ${w} ORDER BY dt_extracao`)
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+      executarSQL(`
+      SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
+      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
+      executarSQL(`
+      SELECT DS_ORIGEM_RECEITA, ROUND(SUM(valor), 2) AS total
+      FROM receitas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC`),
+      executarSQL(`
+      SELECT COALESCE(NULLIF(d.NM_FORNECEDOR_RFB, '#NULO'), NULLIF(d.NM_FORNECEDOR, '#NULO'),
+                      'Não identificado (declarado sem contraparte)') AS "Fornecedor",
+             d.NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
+             ROUND(SUM(d.valor), 2) AS "Total",
+             COUNT(*) AS "Itens"
+             ${temForn ? `, ANY_VALUE(f.data_abertura) AS "Empresa aberta em",
+             ANY_VALUE(f.municipio || '/' || f.uf) AS "Sede"` : ''}
+      FROM despesas_atual d
+      ${temForn ? 'LEFT JOIN fornecedores f ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj' : ''}
+      WHERE d.${w} GROUP BY 1, 2 ORDER BY "Total" DESC LIMIT 30`),
+      executarSQL(`
+      SELECT NR_CPF_CNPJ_DOADOR,
+             COALESCE(NULLIF(NM_DOADOR_RFB, '#NULO'), NULLIF(NM_DOADOR, '#NULO'),
+                      'Doador não identificado') AS nome,
+             ROUND(SUM(valor), 2) AS total
+      FROM receitas_atual WHERE ${w}
+      GROUP BY 1, 2 ORDER BY total DESC LIMIT 12`),
+      tabelasDisponiveis.has('benchmark_precos')
+        ? executarSQL(`
+        WITH notas AS (
+          SELECT DS_ORIGEM_DESPESA, SG_UF, SUM(valor) AS valor, MIN(DS_DESPESA) AS descricao
+          FROM despesas_atual WHERE ${w} AND SQ_DESPESA <> '-1'
+          GROUP BY DS_ORIGEM_DESPESA, SG_UF, SQ_DESPESA
+          UNION ALL
+          SELECT DS_ORIGEM_DESPESA, SG_UF, valor, DS_DESPESA
+          FROM despesas_atual WHERE ${w} AND SQ_DESPESA = '-1')
+        SELECT n.DS_ORIGEM_DESPESA, b.p25, b.mediana, b.p75, b.p95, n.valor, n.descricao
+        FROM notas n
+        JOIN benchmark_precos b
+          ON b.DS_ORIGEM_DESPESA = n.DS_ORIGEM_DESPESA AND b.SG_UF = n.SG_UF
+        WHERE n.valor IS NOT NULL AND n.valor > 0
+        ORDER BY b.mediana DESC, n.valor DESC LIMIT 200`)
+        : Promise.resolve({ colunas: [] as string[], linhas: [] as unknown[][] }),
+      executarSQL(`
+      SELECT DT_RECEITA AS "Data", NM_DOADOR AS "Doador", DS_ORIGEM_RECEITA AS "Origem",
+             DS_ESPECIE_RECEITA AS "Espécie", ROUND(valor, 2) AS "Valor"
+      FROM receitas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`),
+      // mesma régua do backend: sem retransmissões renumeradas, sem placeholders
+      tabelasDisponiveis.has('despesas_removidas')
+        ? executarSQL(`
+        SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NULLIF(NM_FORNECEDOR, '#NULO'),
+                        'Não identificado (declarado sem contraparte)') AS "Fornecedor",
+               DS_DESPESA AS "Descrição",
+               ROUND(valor, 2) AS "Valor",
+               STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
+               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
+               NR_CPF_CNPJ_FORNECEDOR AS "_cnpj"
+        FROM despesas_removidas
+        WHERE ${w}
+        ORDER BY 3 DESC LIMIT 30`)
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+    ]);
   if (!ind.total) return null;
   const linha = Object.fromEntries(ind.colunas.map((c, i) => [c, ind.linhas[0][i]])) as Record<string, unknown>;
 
@@ -128,22 +262,9 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   // foto oficial: precisa de CD_ELEICAO/SG_UE do registro de candidaturas
   // (parquet antigo pode não ter as colunas — a ficha degrada para iniciais)
-  let cdEleicao: string | null = null;
-  let sgUe: string | null = null;
-  if (tabelasDisponiveis.has('candidatos')) {
-    try {
-      const r = await executarSQL(
-        `SELECT ANY_VALUE(CD_ELEICAO), ANY_VALUE(SG_UE) FROM candidatos WHERE ${w}`,
-      );
-      const l = r.linhas[0];
-      if (l && l[0] != null && l[1] != null) {
-        cdEleicao = String(l[0]);
-        sgUe = String(l[1]);
-      }
-    } catch {
-      // sem as colunas no parquet publicado — segue sem foto
-    }
-  }
+  const foto = fotoRes.linhas[0];
+  const cdEleicao = foto?.[0] == null ? null : String(foto[0]);
+  const sgUe = foto?.[1] == null ? null : String(foto[1]);
 
   const perfil: Perfil = {
     nome: String(linha.NM_CANDIDATO),
@@ -209,42 +330,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     }
   }
 
-  const serie = tabelasDisponiveis.has('serie_diaria')
-    ? await executarSQL(`
-        SELECT STRFTIME(dt_extracao, '%d/%m') AS dia, total_contratado, total_receitas
-        FROM serie_diaria WHERE ${w} ORDER BY dt_extracao`)
-    : { linhas: [] as unknown[][] };
-
-  const categorias = await executarSQL(`
-      SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
-      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`);
-
-  const origens = await executarSQL(`
-      SELECT DS_ORIGEM_RECEITA, ROUND(SUM(valor), 2) AS total
-      FROM receitas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC`);
-
-  const temForn = tabelasDisponiveis.has('fornecedores');
-  const fornecedores = await executarSQL(`
-      SELECT COALESCE(NULLIF(d.NM_FORNECEDOR_RFB, '#NULO'), NULLIF(d.NM_FORNECEDOR, '#NULO'),
-                      'Não identificado (declarado sem contraparte)') AS "Fornecedor",
-             d.NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
-             ROUND(SUM(d.valor), 2) AS "Total",
-             COUNT(*) AS "Itens"
-             ${temForn ? `, ANY_VALUE(f.data_abertura) AS "Empresa aberta em",
-             ANY_VALUE(f.municipio || '/' || f.uf) AS "Sede"` : ''}
-      FROM despesas_atual d
-      ${temForn ? 'LEFT JOIN fornecedores f ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj' : ''}
-      WHERE d.${w} GROUP BY 1, 2 ORDER BY "Total" DESC LIMIT 30`);
-
   // grafo de conexões: maiores fornecedores + maiores doadores, com destaque
   // para quem aparece nos dois papéis (red flag nº 4, "dinheiro que volta")
-  const doadores = await executarSQL(`
-      SELECT NR_CPF_CNPJ_DOADOR,
-             COALESCE(NULLIF(NM_DOADOR_RFB, '#NULO'), NULLIF(NM_DOADOR, '#NULO'),
-                      'Doador não identificado') AS nome,
-             ROUND(SUM(valor), 2) AS total
-      FROM receitas_atual WHERE ${w}
-      GROUP BY 1, 2 ORDER BY total DESC LIMIT 12`);
   const conexoes = new Map<string, NoConexao>();
   for (const l of fornecedores.linhas.slice(0, 12)) {
     const id = String(l[1]);
@@ -300,23 +387,6 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   // a unidade é a nota (soma dos itens de mesma SQ_DESPESA), como no benchmark;
   // SQ_DESPESA = '-1' não permite reagrupar e cada linha conta como uma nota
-  const faixasRes = tabelasDisponiveis.has('benchmark_precos')
-    ? await executarSQL(`
-        WITH notas AS (
-          SELECT DS_ORIGEM_DESPESA, SG_UF, SUM(valor) AS valor, MIN(DS_DESPESA) AS descricao
-          FROM despesas_atual WHERE ${w} AND SQ_DESPESA <> '-1'
-          GROUP BY DS_ORIGEM_DESPESA, SG_UF, SQ_DESPESA
-          UNION ALL
-          SELECT DS_ORIGEM_DESPESA, SG_UF, valor, DS_DESPESA
-          FROM despesas_atual WHERE ${w} AND SQ_DESPESA = '-1')
-        SELECT n.DS_ORIGEM_DESPESA, b.p25, b.mediana, b.p75, b.p95, n.valor, n.descricao
-        FROM notas n
-        JOIN benchmark_precos b
-          ON b.DS_ORIGEM_DESPESA = n.DS_ORIGEM_DESPESA AND b.SG_UF = n.SG_UF
-        WHERE n.valor IS NOT NULL AND n.valor > 0
-        ORDER BY b.mediana DESC, n.valor DESC LIMIT 200`)
-    : { colunas: [] as string[], linhas: [] as unknown[][] };
-
   const faixasPorCategoria = new Map<string, FaixaPreco>();
   for (const l of faixasRes.linhas) {
     const cat = String(l[0]);
@@ -332,26 +402,6 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     }
     faixasPorCategoria.get(cat)!.notas.push({ valor: Number(l[5]), descricao: String(l[6] ?? '') });
   }
-
-  const receitas = await executarSQL(`
-      SELECT DT_RECEITA AS "Data", NM_DOADOR AS "Doador", DS_ORIGEM_RECEITA AS "Origem",
-             DS_ESPECIE_RECEITA AS "Espécie", ROUND(valor, 2) AS "Valor"
-      FROM receitas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`);
-
-  // mesma régua do backend: sem retransmissões renumeradas, sem placeholders
-  const removidas = tabelasDisponiveis.has('despesas_removidas')
-    ? await executarSQL(`
-        SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NULLIF(NM_FORNECEDOR, '#NULO'),
-                        'Não identificado (declarado sem contraparte)') AS "Fornecedor",
-               DS_DESPESA AS "Descrição",
-               ROUND(valor, 2) AS "Valor",
-               STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
-               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
-               NR_CPF_CNPJ_FORNECEDOR AS "_cnpj"
-        FROM despesas_removidas
-        WHERE ${w}
-        ORDER BY 3 DESC LIMIT 30`)
-    : { linhas: [] as unknown[][] };
 
   // marca na linha do tempo: último dia em que cada conteúdo removido esteve visível
   const serieRotulos = serie.linhas.map((l) => String(l[0]));
@@ -405,10 +455,79 @@ function Secao({ titulo, descricao, children }: { titulo: string; descricao: str
   );
 }
 
+function FichaSemMovimento({ ficha, sq }: { ficha: FichaRegistro; sq: string }) {
+  return (
+    <div className="mx-auto max-w-4xl space-y-6 px-6 py-12">
+      <div className="flex flex-wrap items-start gap-5">
+        <FotoCandidato
+          cdEleicao={ficha.cdEleicao}
+          sq={sq}
+          sgUe={ficha.sgUe}
+          nome={ficha.nomeUrna}
+          className="h-24 w-24 text-2xl"
+        />
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do candidato</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{ficha.nomeUrna}</h1>
+          <p className="mt-2 text-muted-foreground">
+            {ficha.nome} · nº {ficha.numero} · {ficha.cargo} · {ficha.partido}/{ficha.uf}
+            {ficha.situacao && <> · registro: {ficha.situacao.toLowerCase()}</>}
+          </p>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-6">
+          <p className="text-lg font-semibold text-[#10244A]">
+            Nenhuma despesa ou receita declarada ao TSE
+            {ficha.dtExtracao && <> até a extração de {ficha.dtExtracao}</>}.
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            A candidatura está registrada, mas a prestação de contas ainda não traz nenhum
+            movimento financeiro — nem gasto contratado, nem doação recebida. Durante a
+            campanha os dados são atualizados diariamente; quando algo for declarado (ou
+            declarado e depois removido), aparece aqui. Ausência de movimento a esta altura
+            não é irregularidade — é um fato datado, registrado por esta página.
+          </p>
+        </CardContent>
+      </Card>
+
+      {ficha.totalBens != null && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Patrimônio declarado no registro</CardTitle>
+            <CardDescription>
+              Bens declarados pelo próprio candidato ao registrar a candidatura —{' '}
+              {brl.format(ficha.totalBens)} no total.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Tabela colunas={[{ titulo: 'Tipo' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }]}>
+              {ficha.bens.map((b, i) => (
+                <tr key={i}>
+                  <td className="whitespace-nowrap text-muted-foreground">{b.tipo}</td>
+                  <CelulaTexto>{b.descricao}</CelulaTexto>
+                  <CelulaNum>{brl.format(b.valor)}</CelulaNum>
+                </tr>
+              ))}
+            </Tabela>
+          </CardContent>
+        </Card>
+      )}
+
+      <p className="text-sm text-muted-foreground">
+        <Link to="/explorar" className="text-[#264E9B] underline-offset-4 hover:underline">
+          Explorar quem já declarou movimentação
+        </Link>
+      </p>
+    </div>
+  );
+}
+
 export function Candidato() {
   const { sq } = useParams<{ sq: string }>();
   const navigate = useNavigate();
-  const [dados, setDados] = useState<DadosCandidato | null | 'carregando' | 'nao-encontrado'>('carregando');
+  const [dados, setDados] = useState<DadosCandidato | FichaRegistro | null | 'carregando' | 'nao-encontrado'>('carregando');
   const [gerandoCartao, setGerandoCartao] = useState(false);
 
   useEffect(() => {
@@ -417,8 +536,10 @@ export function Candidato() {
       return;
     }
     setDados('carregando');
+    // sem movimento declarado a ficha não morre: cai para o registro de
+    // candidatura — a ausência de despesas/receitas é a informação da página
     carregarCandidato(sq)
-      .then((d) => setDados(d ?? 'nao-encontrado'))
+      .then(async (d) => setDados(d ?? (await carregarRegistro(sq)) ?? 'nao-encontrado'))
       .catch(() => setDados('nao-encontrado'));
   }, [sq]);
 
@@ -432,10 +553,13 @@ export function Candidato() {
   if (dados === 'nao-encontrado' || dados === null) {
     return (
       <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-muted-foreground">
-        <p>Candidato não encontrado (ou ainda sem movimentação declarada).</p>
+        <p>Candidato não encontrado no registro de candidaturas desta eleição.</p>
         <Link to="/explorar" className="text-[#264E9B] underline underline-offset-4">Voltar ao Explorar</Link>
       </div>
     );
+  }
+  if ('registroSemMovimento' in dados) {
+    return <FichaSemMovimento ficha={dados} sq={sq!} />;
   }
 
   const p = dados.perfil;

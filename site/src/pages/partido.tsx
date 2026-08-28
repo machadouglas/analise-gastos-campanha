@@ -5,6 +5,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
+import { escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface DadosPartido {
@@ -20,59 +21,58 @@ interface DadosPartido {
 }
 
 async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
-  const w = `SG_PARTIDO = '${sigla.replaceAll("'", "''")}'`;
+  // siglas reais são curtas e alfanuméricas — qualquer outra coisa nem consulta
+  if (!/^[A-Za-zÀ-ÿ0-9 .-]{1,30}$/.test(sigla)) return null;
+  const w = `SG_PARTIDO = '${escSQL(sigla)}'`;
 
-  const kpis = await executarSQL(`
+  // as oito consultas são independentes; juntas, o pipeline de leitura dos
+  // parquet não fica serializado atrás de cada round-trip
+  const [kpis, rec, comp, serie, origens, doadores, compartilhados, candidatos] = await Promise.all([
+    executarSQL(`
       SELECT COUNT(DISTINCT SQ_CANDIDATO),
              ROUND(SUM(valor), 2),
              COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR)
-      FROM despesas_atual WHERE ${w}`);
-  const [nCand, contratado, nForn] = kpis.linhas[0] ?? [0, 0, 0];
-  if (!Number(nCand)) return null;
-
-  const rec = await executarSQL(`SELECT ROUND(SUM(valor), 2) FROM receitas_atual WHERE ${w}`);
-
-  // mesma régua de src/analises.py: dinheiro público pela FONTE oficial
-  // (FUNDO%), recursos próprios pela origem declarada
-  const comp = await executarSQL(`
+      FROM despesas_atual WHERE ${w}`),
+    executarSQL(`SELECT ROUND(SUM(valor), 2) FROM receitas_atual WHERE ${w}`),
+    // mesma régua de src/analises.py: dinheiro público pela FONTE oficial
+    // (FUNDO%), recursos próprios pela origem declarada
+    executarSQL(`
       SELECT ROUND(SUM(CASE WHEN DS_FONTE_RECEITA ILIKE 'FUNDO%' THEN valor ELSE 0 END), 2),
              ROUND(SUM(CASE WHEN DS_ORIGEM_RECEITA ILIKE '%pr_prio%' THEN valor ELSE 0 END), 2),
              ROUND(SUM(valor), 2)
-      FROM receitas_atual WHERE ${w}`);
-
-  const serie = tabelasDisponiveis.has('serie_diaria')
-    ? await executarSQL(`
+      FROM receitas_atual WHERE ${w}`),
+    tabelasDisponiveis.has('serie_diaria')
+      ? executarSQL(`
         SELECT STRFTIME(dt_extracao, '%d/%m') AS dia,
                ROUND(SUM(total_contratado), 2), ROUND(SUM(total_receitas), 2)
         FROM serie_diaria WHERE ${w} GROUP BY dt_extracao, dia ORDER BY dt_extracao`)
-    : { linhas: [] as unknown[][] };
-
-  const origens = await executarSQL(`
+      : Promise.resolve({ linhas: [] as unknown[][] }),
+    executarSQL(`
       SELECT DS_ORIGEM_RECEITA, ROUND(SUM(valor), 2) AS total
-      FROM receitas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 8`);
-
-  const doadores = tabelasDisponiveis.has('rede')
-    ? await executarSQL(`
+      FROM receitas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 8`),
+    tabelasDisponiveis.has('rede')
+      ? executarSQL(`
         SELECT contraparte, ROUND(SUM(valor), 2) AS total
         FROM rede WHERE tipo = 'doacao_originaria' AND ${w}
         GROUP BY 1 ORDER BY total DESC LIMIT 10`)
-    : { linhas: [] as unknown[][] };
-
-  const compartilhados = await executarSQL(`
+      : Promise.resolve({ linhas: [] as unknown[][] }),
+    executarSQL(`
       SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS "Fornecedor",
              NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
              COUNT(DISTINCT SQ_CANDIDATO) AS "Candidatos",
              ROUND(SUM(valor), 2) AS "Total"
       FROM despesas_atual WHERE ${w} AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
       GROUP BY 1, 2 HAVING "Candidatos" > 1
-      ORDER BY "Total" DESC LIMIT 15`);
-
-  const candidatos = await executarSQL(`
+      ORDER BY "Total" DESC LIMIT 15`),
+    executarSQL(`
       WITH r AS (SELECT SQ_CANDIDATO, ROUND(SUM(valor), 2) AS receitas FROM receitas_atual GROUP BY 1)
       SELECT d.SQ_CANDIDATO, ANY_VALUE(d.NM_CANDIDATO), ANY_VALUE(d.DS_CARGO), ANY_VALUE(d.SG_UF),
              ROUND(SUM(d.valor), 2) AS contratado, ANY_VALUE(r.receitas)
       FROM despesas_atual d LEFT JOIN r USING (SQ_CANDIDATO)
-      WHERE d.${w} GROUP BY 1 ORDER BY contratado DESC LIMIT 50`);
+      WHERE d.${w} GROUP BY 1 ORDER BY contratado DESC LIMIT 50`),
+  ]);
+  const [nCand, contratado, nForn] = kpis.linhas[0] ?? [0, 0, 0];
+  if (!Number(nCand)) return null;
 
   return {
     nome: sigla,

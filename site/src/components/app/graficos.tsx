@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { brl } from '@/lib/format';
 
 /* Gráficos em série única no matiz da marca (#264E9B), specs do padrão de dataviz:
@@ -14,7 +14,8 @@ export interface ItemBarra {
   detalhe?: string;
 }
 
-export function BarrasHorizontais({
+// memo: os inputs do Explorar re-renderizam a página a cada tecla
+export const BarrasHorizontais = memo(function BarrasHorizontais({
   dados,
   formatar = (v: number) => brl.format(v),
 }: {
@@ -52,7 +53,7 @@ export function BarrasHorizontais({
       ))}
     </div>
   );
-}
+});
 
 export interface PontoLinha {
   rotulo: string;
@@ -313,7 +314,8 @@ export interface FaixaPreco {
   formatar?: (v: number) => string;
 }
 
-export function FaixasDePreco({
+// memo: os inputs do Explorar re-renderizam a página a cada tecla
+export const FaixasDePreco = memo(function FaixasDePreco({
   faixas,
   rotuloPontos = 'notas deste recorte',
   rotuloGrupo = 'demais candidatos do grupo',
@@ -386,7 +388,7 @@ export function FaixasDePreco({
       </p>
     </div>
   );
-}
+});
 
 /* Sparkline: miniatura de série para dentro dos cartões KPI — só a forma da
    tendência, sem eixos (o número grande do cartão é o valor). */

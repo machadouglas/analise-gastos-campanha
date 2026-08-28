@@ -109,11 +109,15 @@ export function Metodologia() {
 
       <Bloco titulo="Privacidade">
         <p>
-          CPFs de candidatos já chegam anonimizados pelo próprio TSE. CPFs de pessoas físicas que
-          aparecem como fornecedoras ou doadoras são públicos nos arquivos oficiais, mas aqui são
-          exibidos <strong>mascarados</strong> e suas fichas ficam fora dos buscadores — pessoa
-          física não é figura pública, e mostramos apenas o necessário para conferência (princípio
-          da minimização). CNPJs de empresas são dados públicos plenos e aparecem completos.
+          Os arquivos oficiais do TSE trazem o CPF completo de pessoas físicas que aparecem como
+          doadoras ou fornecedoras. Pessoa física não é figura pública: nos dados que republicamos
+          (Parquet e resumo), cada CPF é substituído por um <strong>código pseudonimizado</strong>{' '}
+          (<code>pf-</code> + 16 caracteres), estável entre publicações — as análises, junções e
+          contagens continuam possíveis, mas o número em si não é recuperável a partir dos nossos
+          dados (a transformação usa um segredo que não é publicado). O site nunca exibe CPF e as
+          fichas de pessoa física ficam fora dos buscadores (princípio da minimização). Quem
+          precisar do dado bruto encontra na fonte primária, o próprio TSE. CNPJs de empresas são
+          dados públicos plenos e aparecem completos.
         </p>
       </Bloco>
 

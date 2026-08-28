@@ -13,7 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
-import { executarSQL, type ResultadoConsulta } from '@/lib/duckdb';
+import { executarSQL, garantirTabelasCompletas, type ResultadoConsulta } from '@/lib/duckdb';
 import { PROMPT_IA, IAS_SUGERIDAS } from '@/lib/prompt';
 import { celula, brl, num } from '@/lib/format';
 import { BarrasHorizontais, LinhaTemporal } from '@/components/app/graficos';
@@ -205,6 +205,8 @@ export function Consultar() {
     setExecutando(true);
     setErro(null);
     try {
+      // o boot só registra o que as páginas usam; o console precisa de tudo
+      await garantirTabelasCompletas();
       const r = await executarSQL(consulta);
       setResultado(r);
     } catch (e) {

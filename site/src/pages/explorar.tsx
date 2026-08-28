@@ -16,8 +16,9 @@ import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 import {
-  FILTROS_VAZIOS, SINAIS_CTE, SINAIS_FILTRO, condUF, cteCategoria, eVisaoReceitas,
-  whereDaVisao, whereIndicadores,
+  FILTROS_VAZIOS, SINAIS_FILTRO, eVisaoReceitas, eVisaoRemocao,
+  sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlRegistrosSemMovimento, sqlTabelaDaVisao,
+  whereDaVisao,
   type Filtros, type SinalFiltro, type Visao,
 } from '@/lib/consultas';
 
@@ -94,6 +95,8 @@ interface CandidatoFora {
 interface Dados {
   kpis: { contratado: number; candidatos: number; fornecedores: number; itens: number };
   encontrados: CandidatoEncontrado[];
+  /** registros de candidatura que batem com a busca mas ainda sem movimento */
+  registrados: CandidatoEncontrado[];
   categorias: ItemBarra[];
   candidatos: ItemBarra[];
   porDia: PontoLinha[];
@@ -102,28 +105,6 @@ interface Dados {
   foraDaCurva: CandidatoFora[] | null;
   linhas: unknown[][];
   colunas: string[];
-}
-
-/** SQL dos cards fora-da-curva: um candidato por linha, sinais agregados de
- *  forma legível por máquina (metrica~valor~p95;...) e, quando o parquet de
- *  candidatos traz CD_ELEICAO/SG_UE, os metadados da foto oficial. */
-function sqlForaDaCurva(f: Filtros, s: SinalFiltro, pag: number, comFoto: boolean): string {
-  return `WITH ${SINAIS_CTE}${comFoto ? `,
-    foto AS (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd, ANY_VALUE(SG_UE) AS ue
-             FROM candidatos GROUP BY 1)` : ''}
-    SELECT i.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO || '/' || i.SG_UF AS partido_uf,
-           i.DS_CARGO, ROUND(i.total_contratado, 2) AS contratado,
-           ROUND(i.total_receitas, 2) AS arrecadado,
-           ${comFoto ? 'ANY_VALUE(c.cd) AS cd, ANY_VALUE(c.ue) AS ue,' : 'NULL AS cd, NULL AS ue,'}
-           ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 4) AS sinal_sel,` : 'NULL AS sinal_sel,'}
-           COUNT(*) AS n_sinais,
-           STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais
-    FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
-    ${comFoto ? 'LEFT JOIN foto c USING (SQ_CANDIDATO)' : ''}
-    WHERE ${whereIndicadores(f)}
-    GROUP BY ALL
-    ${s ? 'HAVING sinal_sel IS NOT NULL ORDER BY sinal_sel DESC' : 'ORDER BY n_sinais DESC, contratado DESC'}
-    LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`;
 }
 
 const LIMITE_DISPERSAO = 1500;
@@ -136,19 +117,9 @@ async function consultarDispersao(f: Filtros): Promise<PontoDispersao[] | null> 
   // página, checaria um Set ainda vazio — aguarde a conexão antes de decidir.
   await obterConexao();
   if (!tabelasDisponiveis.has('indicadores')) return null;
-  if (f.candidato.trim() || f.fornecedor.trim() || f.descricao.trim()) return null;
-  const esc = (s: string) => s.replaceAll("'", "''");
-  const partes = ['(total_contratado > 0 OR COALESCE(total_receitas, 0) > 0)'];
-  const uf = condUF(f.uf);
-  if (uf) partes.push(uf);
-  if (f.cargo) partes.push(`DS_CARGO ILIKE '${esc(f.cargo)}'`);
-  if (f.partido) partes.push(`SG_PARTIDO = '${esc(f.partido)}'`);
-  const r = await executarSQL(`
-      SELECT SQ_CANDIDATO, NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')',
-             COALESCE(total_receitas, 0), total_contratado
-      FROM indicadores WHERE ${partes.join(' AND ')}
-      ORDER BY total_contratado + COALESCE(total_receitas, 0) DESC
-      LIMIT ${LIMITE_DISPERSAO}`);
+  const sql = sqlDispersao(f, LIMITE_DISPERSAO);
+  if (!sql) return null;
+  const r = await executarSQL(sql);
   return r.linhas.map((l) => ({
     sq: String(l[0]),
     rotulo: String(l[1]),
@@ -212,83 +183,34 @@ export function Explorar() {
     setErro(null);
     try {
       const { base, where: w } = whereDaVisao(v, f, s, cat);
-      const encontrados = v === 'atual' && f.candidato.trim()
-        ? await executarSQL(`
+      const buscando = v === 'atual' && Boolean(f.candidato.trim());
+      const [encontrados, registrados] = await Promise.all([
+        buscando
+          ? executarSQL(`
             SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
                    ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF),
                    ROUND(SUM(valor), 2) AS total
             FROM despesas_atual
             WHERE ${w}
             GROUP BY 1 ORDER BY total DESC LIMIT 100`)
-        : { linhas: [] as unknown[][] };
-      const colunaExtra =
-        v === 'sem-nota'
-          ? 'DS_TIPO_DOCUMENTO AS "Documento",'
-          : v === 'removidas'
-            ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
-            : '';
-      const tabelaSQL =
-        v === 'removidas-receitas'
-          ? `SELECT SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
-                    DT_RECEITA AS "Data", NM_CANDIDATO AS "Candidato",
-                    SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
-                    COALESCE(NULLIF(NM_DOADOR_RFB,'#NULO'), NULLIF(NM_DOADOR,'#NULO'),
-                             'Não identificado (declarado sem contraparte)') AS "Doador",
-                    DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
-                    STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Visível até",
-                    ROUND(valor, 2) AS "Valor"
-             FROM ${base} WHERE ${w}
-             ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
-          : v === 'fora-da-curva' && cat
-          ? `WITH ${cteCategoria(cat)}
-             SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
-                    i.NM_CANDIDATO AS "Candidato",
-                    i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
-                    i.DS_CARGO AS "Cargo",
-                    ROUND(e.total, 2) AS "Neste tipo de gasto",
-                    ROUND(e.p95, 2) AS "p95 do grupo",
-                    ROUND(i.total_contratado, 2) AS "Contratado",
-                    ROUND(i.total_receitas, 2) AS "Arrecadado"
-             FROM estouro e JOIN indicadores i USING (SQ_CANDIDATO)
-             WHERE ${whereIndicadores(f)}
-             ORDER BY "Neste tipo de gasto" DESC
-             LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
-          : v === 'fora-da-curva'
-          ? '' // sem categoria, a visão vira cards (consulta própria abaixo)
-          : v === 'compartilhados'
-          ? `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
-                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
-                    NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
-                    COUNT(DISTINCT SQ_CANDIDATO) AS "Candidatos",
-                    COUNT(DISTINCT SG_PARTIDO) AS "Partidos",
-                    STRING_AGG(DISTINCT SG_UF, ', ') AS "UFs",
-                    ROUND(SUM(valor), 2) AS "Total"
-             FROM ${base} WHERE ${w}
-             GROUP BY ALL ORDER BY "Total" DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`
-          : `SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
-                    DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
-                    SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
-                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NULLIF(NM_FORNECEDOR,'#NULO'),
-                             'Não identificado (declarado sem contraparte)') AS "Fornecedor",
-                    DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
-                    ${colunaExtra}
-                    ROUND(valor, 2) AS "Valor"
-             FROM ${base} WHERE ${w}
-             ORDER BY valor DESC LIMIT ${POR_PAGINA} OFFSET ${pag * POR_PAGINA}`;
-      // a visão de receitas removidas anda sobre receitas: contraparte, categoria
-      // e data vêm das colunas de doação
-      const colContraparte = eVisaoReceitas(v) ? 'NR_CPF_CNPJ_DOADOR' : 'NR_CPF_CNPJ_FORNECEDOR';
-      const colCategoria = eVisaoReceitas(v) ? 'DS_ORIGEM_RECEITA' : 'DS_ORIGEM_DESPESA';
-      const colData = eVisaoReceitas(v) ? 'DT_RECEITA' : 'DT_DESPESA';
+          : Promise.resolve({ linhas: [] as unknown[][] }),
+        // quem se registrou mas nunca declarou nada não existe em despesas_atual;
+        // sem esta consulta a busca "não encontra" 72% das candidaturas
+        buscando && tabelasDisponiveis.has('candidatos')
+          ? executarSQL(sqlRegistrosSemMovimento(f, 100)).catch(() => ({ linhas: [] as unknown[][] }))
+          : Promise.resolve({ linhas: [] as unknown[][] }),
+      ]);
+      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA);
+      const painel = sqlPainel(base, w, v);
       // cards do fora-da-curva: tenta com os metadados da foto; parquet de
       // candidatos antigo (sem CD_ELEICAO/SG_UE) cai na variante sem foto
       const consultarForaDaCurva = async (): Promise<CandidatoFora[]> => {
         await obterConexao();
         let r;
         try {
-          r = await executarSQL(sqlForaDaCurva(f, s, pag, tabelasDisponiveis.has('candidatos')));
+          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, tabelasDisponiveis.has('candidatos')));
         } catch {
-          r = await executarSQL(sqlForaDaCurva(f, s, pag, false));
+          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, false));
         }
         return r.linhas.map((l) => ({
           sq: String(l[0]),
@@ -310,20 +232,11 @@ export function Explorar() {
       };
       const eCards = v === 'fora-da-curva' && !cat;
       const [kpis, categorias, candidatos, porDia, mapa, tabela, dispersao, foraDaCurva] = await Promise.all([
-        executarSQL(`SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
-                            COUNT(DISTINCT ${colContraparte}), COUNT(*)
-                     FROM ${base} WHERE ${w}`),
-        executarSQL(`SELECT ${colCategoria}, ROUND(SUM(valor),2) AS total
-                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
-        executarSQL(`SELECT NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
-                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
-        executarSQL(`SELECT STRFTIME(STRPTIME(${colData}, '%d/%m/%Y'), '%d/%m') AS dia,
-                            MIN(STRPTIME(${colData}, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
-                     FROM ${base} WHERE ${w} AND ${colData} <> '#NULO'
-                     GROUP BY 1 ORDER BY ord`),
-        executarSQL(`SELECT SG_UF, ROUND(SUM(valor),2) AS total
-                     FROM ${base} WHERE ${w} AND SG_UF NOT IN ('#NULO', 'BR')
-                     GROUP BY 1`),
+        executarSQL(painel.kpis),
+        executarSQL(painel.categorias),
+        executarSQL(painel.candidatos),
+        executarSQL(painel.porDia),
+        executarSQL(painel.mapa),
         eCards ? Promise.resolve({ colunas: [] as string[], linhas: [] as unknown[][] }) : executarSQL(tabelaSQL),
         v === 'atual' ? consultarDispersao(f) : Promise.resolve(null),
         eCards ? consultarForaDaCurva() : Promise.resolve(null),
@@ -338,6 +251,15 @@ export function Explorar() {
           cargo: String(l[4]),
           uf: String(l[5]),
           contratado: Number(l[6] ?? 0),
+        })),
+        registrados: registrados.linhas.map((l) => ({
+          sq: String(l[0]),
+          nome: `${l[1]}${l[2] && l[2] !== l[1] ? ` (${l[2]})` : ''}`,
+          numero: String(l[3] ?? ''),
+          partido: String(l[4] ?? ''),
+          cargo: String(l[5] ?? ''),
+          uf: String(l[6] ?? ''),
+          contratado: 0,
         })),
         kpis: {
           contratado: Number(contratado ?? 0),
@@ -592,133 +514,153 @@ export function Explorar() {
                     </Tabela>
                   </div>
                 )}
+                {dados.registrados.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                      Registrados sem movimento declarado ({dados.registrados.length})
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Candidaturas registradas que ainda não declararam nenhuma despesa ou receita —
+                      a ficha registra esse fato.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {dados.registrados.map((c) => (
+                        <Link
+                          key={c.sq}
+                          to={`/candidato/${c.sq}`}
+                          className="rounded-full border px-3 py-1 text-xs text-[#264E9B] underline-offset-4 hover:underline"
+                        >
+                          {c.nome} · {c.cargo} · {c.partido}/{c.uf}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
-          <>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {[
-                  // os rótulos acompanham a visão: em "removidas" os números são
-                  // o que SAIU da declaração, não o que está contratado hoje
-                  {
-                    rotulo: visao === 'removidas' || visao === 'removidas-receitas'
-                      ? 'Valor removido' : 'Despesas contratadas',
-                    valor: brl.format(dados.kpis.contratado),
-                  },
-                  { rotulo: 'Candidatos', valor: num.format(dados.kpis.candidatos) },
-                  {
-                    rotulo: eVisaoReceitas(visao) ? 'Doadores' : 'Fornecedores',
-                    valor: num.format(dados.kpis.fornecedores),
-                  },
-                  {
-                    rotulo: visao === 'removidas' || visao === 'removidas-receitas'
-                      ? 'Itens removidos' : 'Itens declarados',
-                    valor: num.format(dados.kpis.itens),
-                  },
-                ].map((k) => (
-                  <Card key={k.rotulo}>
-                    <CardContent className="p-5">
-                      <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{k.rotulo}</p>
-                      <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">{k.valor}</p>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-
-              <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">
-                      {eVisaoReceitas(visao) ? 'De onde vinha o dinheiro' : 'Para onde vai o dinheiro'}
-                    </CardTitle>
-                    <CardDescription>
-                      {eVisaoReceitas(visao)
-                        ? 'Origens das receitas removidas, pelo valor.'
-                        : 'Categorias de gasto, pelo total contratado.'}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent><BarrasHorizontais dados={dados.categorias} /></CardContent>
-                </Card>
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">
-                      {visao === 'removidas' || visao === 'removidas-receitas'
-                        ? 'Candidatos com mais valor removido'
-                        : 'Quem mais contratou'}
-                    </CardTitle>
-                    <CardDescription>
-                      {visao === 'removidas' || visao === 'removidas-receitas'
-                        ? 'Os dez candidatos com mais valor removido no recorte.'
-                        : 'Os dez candidatos com maior despesa no recorte.'}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent><BarrasHorizontais dados={dados.candidatos} /></CardContent>
-                </Card>
-              </div>
-
-              <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <CardTitle className="text-base">
-                          {visao === 'removidas' || visao === 'removidas-receitas'
-                            ? 'Onde houve remoção'
-                            : 'Onde está o dinheiro'}
-                        </CardTitle>
-                        <CardDescription className="mt-1.5">
-                          Distribuição do recorte pelas UFs — clique nos estados para filtrar
-                          (a seleção acumula).
-                        </CardDescription>
-                      </div>
-                      {filtros.uf && (
-                        <Button variant="outline" size="sm" onClick={() => mudar({ uf: '' })}>
-                          Limpar seleção ({filtros.uf.split(',').filter(Boolean).length})
-                        </Button>
-                      )}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <MapaBrasil
-                      dados={dados.mapa}
-                      selecionada={filtros.uf}
-                      aoClicar={alternarUF}
-                      rotuloValor={visao === 'removidas' || visao === 'removidas-receitas'
-                        ? 'valor removido' : 'valor do recorte'}
-                    />
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                // os rótulos acompanham a visão: em "removidas" os números são
+                // o que SAIU da declaração, não o que está contratado hoje
+                {
+                  rotulo: eVisaoRemocao(visao)
+                    ? 'Valor removido' : 'Despesas contratadas',
+                  valor: brl.format(dados.kpis.contratado),
+                },
+                { rotulo: 'Candidatos', valor: num.format(dados.kpis.candidatos) },
+                {
+                  rotulo: eVisaoReceitas(visao) ? 'Doadores' : 'Fornecedores',
+                  valor: num.format(dados.kpis.fornecedores),
+                },
+                {
+                  rotulo: eVisaoRemocao(visao)
+                    ? 'Itens removidos' : 'Itens declarados',
+                  valor: num.format(dados.kpis.itens),
+                },
+              ].map((k) => (
+                <Card key={k.rotulo}>
+                  <CardContent className="p-5">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{k.rotulo}</p>
+                    <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">{k.valor}</p>
                   </CardContent>
                 </Card>
-                {/* gráficos secundários recolhidos: quem quiser expande — a página
-                    não vira um paredão de visualizações */}
-                <div className="space-y-6">
+              ))}
+            </div>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    {eVisaoReceitas(visao) ? 'De onde vinha o dinheiro' : 'Para onde vai o dinheiro'}
+                  </CardTitle>
+                  <CardDescription>
+                    {eVisaoReceitas(visao)
+                      ? 'Origens das receitas removidas, pelo valor.'
+                      : 'Categorias de gasto, pelo total contratado.'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent><BarrasHorizontais dados={dados.categorias} /></CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    {eVisaoRemocao(visao)
+                      ? 'Candidatos com mais valor removido'
+                      : 'Quem mais contratou'}
+                  </CardTitle>
+                  <CardDescription>
+                    {eVisaoRemocao(visao)
+                      ? 'Os dez candidatos com mais valor removido no recorte.'
+                      : 'Os dez candidatos com maior despesa no recorte.'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent><BarrasHorizontais dados={dados.candidatos} /></CardContent>
+              </Card>
+            </div>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">
+                        {eVisaoRemocao(visao)
+                          ? 'Onde houve remoção'
+                          : 'Onde está o dinheiro'}
+                      </CardTitle>
+                      <CardDescription className="mt-1.5">
+                        Distribuição do recorte pelas UFs — clique nos estados para filtrar
+                        (a seleção acumula).
+                      </CardDescription>
+                    </div>
+                    {filtros.uf && (
+                      <Button variant="outline" size="sm" onClick={() => mudar({ uf: '' })}>
+                        Limpar seleção ({filtros.uf.split(',').filter(Boolean).length})
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <MapaBrasil
+                    dados={dados.mapa}
+                    selecionada={filtros.uf}
+                    aoClicar={alternarUF}
+                    rotuloValor={eVisaoRemocao(visao)
+                      ? 'valor removido' : 'valor do recorte'}
+                  />
+                </CardContent>
+              </Card>
+              {/* gráficos secundários recolhidos: quem quiser expande — a página
+                  não vira um paredão de visualizações */}
+              <div className="space-y-6">
+                <SecaoRecolhivel
+                  titulo={eVisaoReceitas(visao)
+                    ? 'Receita declarada por dia da doação'
+                    : 'Gasto declarado por dia da despesa'}
+                  descricao={eVisaoReceitas(visao)
+                    ? 'Soma dos valores pela data em que a doação foi recebida.'
+                    : 'Soma dos valores pela data em que a despesa foi realizada.'}
+                >
+                  <LinhaTemporal pontos={dados.porDia} />
+                </SecaoRecolhivel>
+                {dados.dispersao && dados.dispersao.length >= 3 && (
                   <SecaoRecolhivel
-                    titulo={eVisaoReceitas(visao)
-                      ? 'Receita declarada por dia da doação'
-                      : 'Gasto declarado por dia da despesa'}
-                    descricao={eVisaoReceitas(visao)
-                      ? 'Soma dos valores pela data em que a doação foi recebida.'
-                      : 'Soma dos valores pela data em que a despesa foi realizada.'}
+                    titulo="Arrecadado × contratado, candidato a candidato"
+                    descricao={`Cada ponto é um candidato do recorte${
+                      dados.dispersao.length >= LIMITE_DISPERSAO
+                        ? ` (os ${num.format(LIMITE_DISPERSAO)} de maior movimentação)`
+                        : ''
+                    }. Acima da linha tracejada, contratou mais do que declarou arrecadar. Clique num ponto para abrir a ficha.`}
                   >
-                    <LinhaTemporal pontos={dados.porDia} />
+                    <Dispersao
+                      pontos={dados.dispersao}
+                      aoClicar={(p) => p.sq && navigate(`/candidato/${p.sq}`)}
+                    />
                   </SecaoRecolhivel>
-                  {dados.dispersao && dados.dispersao.length >= 3 && (
-                    <SecaoRecolhivel
-                      titulo="Arrecadado × contratado, candidato a candidato"
-                      descricao={`Cada ponto é um candidato do recorte${
-                        dados.dispersao.length >= LIMITE_DISPERSAO
-                          ? ` (os ${num.format(LIMITE_DISPERSAO)} de maior movimentação)`
-                          : ''
-                      }. Acima da linha tracejada, contratou mais do que declarou arrecadar. Clique num ponto para abrir a ficha.`}
-                    >
-                      <Dispersao
-                        pontos={dados.dispersao}
-                        aoClicar={(p) => p.sq && navigate(`/candidato/${p.sq}`)}
-                      />
-                    </SecaoRecolhivel>
-                  )}
-                </div>
+                )}
               </div>
-          </>
+            </div>
 
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between">

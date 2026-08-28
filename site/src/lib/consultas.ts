@@ -37,6 +37,9 @@ export type Visao =
  *  é o doador e a categoria é a origem da receita, não a do gasto. */
 export const eVisaoReceitas = (v: Visao) => v === 'removidas-receitas';
 
+/** Visões de conteúdo removido (despesas ou receitas) — mudam rótulos e colunas. */
+export const eVisaoRemocao = (v: Visao) => v === 'removidas' || v === 'removidas-receitas';
+
 // manter em sincronia com CATEGORIAS_SEM_NOTA_ESPERADA em src/analises.py
 // (teste automático em tests/test_sincronia_site.py)
 export const CATEGORIAS_SEM_NOTA_ESPERADA = [
@@ -48,7 +51,7 @@ export const CATEGORIAS_SEM_NOTA_ESPERADA = [
   'Despesas com pessoal',
 ];
 
-export const SQL_CATEGORIAS_SEM_NOTA = CATEGORIAS_SEM_NOTA_ESPERADA
+const SQL_CATEGORIAS_SEM_NOTA = CATEGORIAS_SEM_NOTA_ESPERADA
   .map((c) => `'${escSQL(c)}'`)
   .join(', ');
 
@@ -94,14 +97,6 @@ export const SINAIS_FILTRO = [
   'pct_pessoa_fisica',
 ] as const;
 export type SinalFiltro = (typeof SINAIS_FILTRO)[number] | '';
-
-export const ROTULO_SINAL_SQL = `CASE s.metrica
-  WHEN 'total_contratado' THEN 'gasto total'
-  WHEN 'razao_gasto_receita' THEN 'gasto ÷ arrecadado'
-  WHEN 'pct_maior_fornecedor' THEN 'concentração no maior fornecedor'
-  WHEN 'pct_sem_nota' THEN '% sem nota fiscal'
-  WHEN 'pct_pessoa_fisica' THEN '% a pessoas físicas'
-  ELSE s.metrica END`;
 
 /** Condição de UF: o filtro aceita várias UFs separadas por vírgula (seleção
  *  múltipla no mapa) — uma vira igualdade, várias viram IN. */
@@ -229,4 +224,169 @@ export function whereDaVisao(
     };
   }
   return { base: 'despesas_atual', where: w };
+}
+
+/* ------------------------------------------------------------------------- *
+ * Construtores das consultas do Explorar. Vivem aqui (e não na página) para
+ * serem testáveis no vitest junto das regras espelhadas que eles usam.
+ * ------------------------------------------------------------------------- */
+
+/** SQL dos cards fora-da-curva: um candidato por linha, sinais agregados de
+ *  forma legível por máquina (metrica~valor~p95;...) e, quando o parquet de
+ *  candidatos traz CD_ELEICAO/SG_UE, os metadados da foto oficial. */
+export function sqlForaDaCurvaCards(
+  f: Filtros,
+  s: SinalFiltro,
+  pag: number,
+  porPagina: number,
+  comFoto: boolean,
+): string {
+  return `WITH ${SINAIS_CTE}${comFoto ? `,
+    foto AS (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd, ANY_VALUE(SG_UE) AS ue
+             FROM candidatos GROUP BY 1)` : ''}
+    SELECT i.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO || '/' || i.SG_UF AS partido_uf,
+           i.DS_CARGO, ROUND(i.total_contratado, 2) AS contratado,
+           ROUND(i.total_receitas, 2) AS arrecadado,
+           ${comFoto ? 'ANY_VALUE(c.cd) AS cd, ANY_VALUE(c.ue) AS ue,' : 'NULL AS cd, NULL AS ue,'}
+           ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 4) AS sinal_sel,` : 'NULL AS sinal_sel,'}
+           COUNT(*) AS n_sinais,
+           STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais
+    FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
+    ${comFoto ? 'LEFT JOIN foto c USING (SQ_CANDIDATO)' : ''}
+    WHERE ${whereIndicadores(f)}
+    GROUP BY ALL
+    ${s ? 'HAVING sinal_sel IS NOT NULL ORDER BY sinal_sel DESC' : 'ORDER BY n_sinais DESC, contratado DESC'}
+    LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
+}
+
+/** SQL da tabela de resultados de cada visão ('' quando a visão vira cards). */
+export function sqlTabelaDaVisao(
+  v: Visao,
+  base: string,
+  w: string,
+  f: Filtros,
+  cat: string,
+  pag: number,
+  porPagina: number,
+): string {
+  const paginacao = `LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
+  if (v === 'removidas-receitas')
+    return `SELECT SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
+                    DT_RECEITA AS "Data", NM_CANDIDATO AS "Candidato",
+                    SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
+                    COALESCE(NULLIF(NM_DOADOR_RFB,'#NULO'), NULLIF(NM_DOADOR,'#NULO'),
+                             'Não identificado (declarado sem contraparte)') AS "Doador",
+                    DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
+                    STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Visível até",
+                    ROUND(valor, 2) AS "Valor"
+             FROM ${base} WHERE ${w}
+             ORDER BY valor DESC ${paginacao}`;
+  if (v === 'fora-da-curva' && cat)
+    return `WITH ${cteCategoria(cat)}
+             SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
+                    i.NM_CANDIDATO AS "Candidato",
+                    i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
+                    i.DS_CARGO AS "Cargo",
+                    ROUND(e.total, 2) AS "Neste tipo de gasto",
+                    ROUND(e.p95, 2) AS "p95 do grupo",
+                    ROUND(i.total_contratado, 2) AS "Contratado",
+                    ROUND(i.total_receitas, 2) AS "Arrecadado"
+             FROM estouro e JOIN indicadores i USING (SQ_CANDIDATO)
+             WHERE ${whereIndicadores(f)}
+             ORDER BY "Neste tipo de gasto" DESC
+             ${paginacao}`;
+  if (v === 'fora-da-curva') return ''; // sem categoria, a visão vira cards
+  if (v === 'compartilhados')
+    return `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
+                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
+                    NR_CPF_CNPJ_FORNECEDOR AS "CNPJ/CPF",
+                    COUNT(DISTINCT SQ_CANDIDATO) AS "Candidatos",
+                    COUNT(DISTINCT SG_PARTIDO) AS "Partidos",
+                    STRING_AGG(DISTINCT SG_UF, ', ') AS "UFs",
+                    ROUND(SUM(valor), 2) AS "Total"
+             FROM ${base} WHERE ${w}
+             GROUP BY ALL ORDER BY "Total" DESC ${paginacao}`;
+  const colunaExtra =
+    v === 'sem-nota'
+      ? 'DS_TIPO_DOCUMENTO AS "Documento",'
+      : v === 'removidas'
+        ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
+        : '';
+  return `SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
+                    DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
+                    SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
+                    COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NULLIF(NM_FORNECEDOR,'#NULO'),
+                             'Não identificado (declarado sem contraparte)') AS "Fornecedor",
+                    DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
+                    ${colunaExtra}
+                    ROUND(valor, 2) AS "Valor"
+             FROM ${base} WHERE ${w}
+             ORDER BY valor DESC ${paginacao}`;
+}
+
+/** As cinco consultas do painel (KPIs, categorias, candidatos, série, mapa) —
+ *  colunas de contraparte/categoria/data trocam quando a visão é de receitas. */
+export function sqlPainel(base: string, w: string, v: Visao) {
+  const colContraparte = eVisaoReceitas(v) ? 'NR_CPF_CNPJ_DOADOR' : 'NR_CPF_CNPJ_FORNECEDOR';
+  const colCategoria = eVisaoReceitas(v) ? 'DS_ORIGEM_RECEITA' : 'DS_ORIGEM_DESPESA';
+  const colData = eVisaoReceitas(v) ? 'DT_RECEITA' : 'DT_DESPESA';
+  return {
+    kpis: `SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
+                            COUNT(DISTINCT ${colContraparte}), COUNT(*)
+                     FROM ${base} WHERE ${w}`,
+    categorias: `SELECT ${colCategoria}, ROUND(SUM(valor),2) AS total
+                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
+    candidatos: `SELECT NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
+                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
+    porDia: `SELECT STRFTIME(STRPTIME(${colData}, '%d/%m/%Y'), '%d/%m') AS dia,
+                            MIN(STRPTIME(${colData}, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
+                     FROM ${base} WHERE ${w} AND ${colData} <> '#NULO'
+                     GROUP BY 1 ORDER BY ord`,
+    mapa: `SELECT SG_UF, ROUND(SUM(valor),2) AS total
+                     FROM ${base} WHERE ${w} AND SG_UF NOT IN ('#NULO', 'BR')
+                     GROUP BY 1`,
+  };
+}
+
+/** Dispersão arrecadado×contratado sobre `indicadores` — null quando há filtro
+ *  de texto (candidato/fornecedor/descrição recortam despesas, não candidatos). */
+export function sqlDispersao(f: Filtros, limite: number): string | null {
+  if (f.candidato.trim() || f.fornecedor.trim() || f.descricao.trim()) return null;
+  const partes = ['(total_contratado > 0 OR COALESCE(total_receitas, 0) > 0)'];
+  const uf = condUF(f.uf);
+  if (uf) partes.push(uf);
+  if (f.cargo) partes.push(`DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
+  if (f.partido) partes.push(`SG_PARTIDO = '${escSQL(f.partido)}'`);
+  return `
+      SELECT SQ_CANDIDATO, NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')',
+             COALESCE(total_receitas, 0), total_contratado
+      FROM indicadores WHERE ${partes.join(' AND ')}
+      ORDER BY total_contratado + COALESCE(total_receitas, 0) DESC
+      LIMIT ${limite}`;
+}
+
+/** Registros de candidatura que batem com a busca por nome/número mas ainda não
+ *  declararam NENHUMA despesa ou receita — 72% das candidaturas no início da
+ *  campanha; sem isso a busca do site simplesmente não os encontra. */
+export function sqlRegistrosSemMovimento(f: Filtros, limite: number): string {
+  const partes = ['1=1'];
+  const uf = condUF(f.uf);
+  if (uf) partes.push(uf);
+  if (f.cargo) partes.push(`DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
+  if (f.partido) partes.push(`SG_PARTIDO = '${escSQL(f.partido)}'`);
+  const cand = f.candidato.trim();
+  if (cand) {
+    partes.push(
+      /^\d+$/.test(cand)
+        ? `NR_CANDIDATO = '${cand}'`
+        : `(NM_CANDIDATO ILIKE '%${escSQL(cand)}%' OR NM_URNA_CANDIDATO ILIKE '%${escSQL(cand)}%')`,
+    );
+  }
+  return `
+      SELECT SQ_CANDIDATO, ANY_VALUE(NM_URNA_CANDIDATO), ANY_VALUE(NM_CANDIDATO),
+             ANY_VALUE(NR_CANDIDATO), ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF)
+      FROM candidatos
+      WHERE ${partes.join(' AND ')}
+        AND SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM indicadores)
+      GROUP BY 1 ORDER BY 2 LIMIT ${limite}`;
 }

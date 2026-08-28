@@ -83,6 +83,11 @@ export interface PontoSerieNacional {
 
 export interface Resumo {
   gerado_em: string;
+  /** carimbo por publicação (resumos antigos podem não trazer) */
+  publicado_em?: string;
+  /** hash de conteúdo de cada parquet publicado ('despesas.parquet' → md5) —
+   *  cache-buster por arquivo; resumos antigos não trazem */
+  arquivos?: Record<string, string>;
   primeira_extracao: boolean;
   totais: Totais;
   mudancas?: TotaisMudancas;
@@ -96,12 +101,19 @@ export interface Resumo {
   serie_nacional?: PontoSerieNacional[];
 }
 
-export async function carregarResumo(): Promise<Resumo | null> {
-  try {
-    const r = await fetch('/dados/resumo.json');
-    if (r.ok) return (await r.json()) as Resumo;
-  } catch {
-    /* segue para o retorno nulo */
-  }
-  return null;
+let promessa: Promise<Resumo | null> | null = null;
+
+/** Busca única por sessão: Home e DuckDB compartilham a mesma promessa
+ *  (sem invalidação — recarregar a página é o que atualiza). */
+export function carregarResumo(): Promise<Resumo | null> {
+  promessa ??= (async () => {
+    try {
+      const r = await fetch('/dados/resumo.json', { cache: 'no-cache' });
+      if (r.ok) return (await r.json()) as Resumo;
+    } catch {
+      /* segue para o retorno nulo */
+    }
+    return null;
+  })();
+  return promessa;
 }

@@ -1,7 +1,7 @@
 /* MD5 compacto (RFC 1321) para gerar identificadores opacos de URL.
    Uso não-criptográfico: só evita expor CPF em endereços e logs. */
 
-/* eslint-disable no-bitwise */
+ 
 function rotl(x: number, c: number): number {
   return (x << c) | (x >>> (32 - c));
 }

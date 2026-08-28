@@ -1,11 +1,10 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
+import { carregarResumo } from '@/lib/resumo';
 
 // Os Parquet são servidos pela mesma origem via Pages Function (/dados/*).
-export const TABELAS = [
-  'despesas',
-  'receitas',
-  'despesas_pagas',
-  'receitas_doador_originario',
+// O boot registra só o que as páginas consomem; o restante (tabelas que só o
+// console SQL usa) entra sob demanda via garantirTabelasCompletas().
+const TABELAS_BOOT = [
   'candidatos',
   'serie_diaria',
   'benchmark_precos',
@@ -14,12 +13,69 @@ export const TABELAS = [
   'indicadores',
   'rede',
   'fornecedores',
+  'bens',
+] as const;
+const TABELAS_SOB_DEMANDA = ['despesas_pagas', 'receitas_doador_originario'] as const;
+export const TABELAS = [
+  'despesas',
+  'receitas',
+  ...TABELAS_BOOT,
+  ...TABELAS_SOB_DEMANDA,
 ] as const;
 
 /** Tabelas que de fato conseguiram registrar (um parquet pode ainda não existir no release). */
 export const tabelasDisponiveis = new Set<string>();
 
 let conexao: Promise<duckdb.AsyncDuckDBConnection> | null = null;
+
+// Preenchidos no boot a partir do resumo.json (compartilhado com a Home via
+// carregarResumo — uma busca só por sessão).
+let arquivosPublicados: Record<string, string> | null = null;
+let urlParquet = (nome: string) => `${window.location.origin}/dados/${nome}.parquet`;
+
+/** Registra a view 1:1 sobre o parquet homônimo; false se o arquivo não existe
+ *  no release (o mapa `arquivos` evita até a tentativa de rede). Idempotente. */
+async function registrarParquet(
+  con: duckdb.AsyncDuckDBConnection,
+  nome: string,
+): Promise<boolean> {
+  if (tabelasDisponiveis.has(nome)) return true;
+  if (arquivosPublicados && !(`${nome}.parquet` in arquivosPublicados)) return false;
+  try {
+    await con.query(
+      `CREATE OR REPLACE VIEW ${nome} AS SELECT * FROM read_parquet('${urlParquet(nome)}')`,
+    );
+    tabelasDisponiveis.add(nome);
+    return true;
+  } catch {
+    // parquet ainda não publicado — a página degrada sem essa visão
+    return false;
+  }
+}
+
+/** Cria as views em UM statement múltiplo (menos round-trips JS↔worker). Só é
+ *  seguro em lote quando o mapa `arquivos` diz quais parquet existem; sem o
+ *  mapa (publicação antiga), cai no caminho um-a-um com try/catch. */
+async function registrarLote(con: duckdb.AsyncDuckDBConnection, nomes: readonly string[]) {
+  if (arquivosPublicados) {
+    const presentes = nomes.filter(
+      (n) => `${n}.parquet` in arquivosPublicados! && !tabelasDisponiveis.has(n),
+    );
+    if (presentes.length === 0) return;
+    try {
+      await con.query(
+        presentes
+          .map((n) => `CREATE OR REPLACE VIEW ${n} AS SELECT * FROM read_parquet('${urlParquet(n)}')`)
+          .join(';\n'),
+      );
+      for (const n of presentes) tabelasDisponiveis.add(n);
+      return;
+    } catch {
+      // lote falhou (parcialmente aplicado, talvez) — repete um-a-um abaixo
+    }
+  }
+  for (const n of nomes) await registrarParquet(con, n);
+}
 
 async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   // O motor (~10 MB gzip) vem do CDN oficial do duckdb-wasm em runtime:
@@ -34,32 +90,28 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   const con = await db.connect();
 
   const origem = window.location.origin;
-  // Cache-buster: o carimbo de publicação (resumo.json, cache curto) entra na
-  // URL dos parquet — publicação nova = URL nova, sem servir arquivo velho do
-  // cache de 1h nem misturar arquivos de publicações diferentes.
-  let versao = '';
-  try {
-    const r = await fetch(`${origem}/dados/resumo.json`, { cache: 'no-cache' });
-    if (r.ok) {
-      const j = await r.json();
-      // publicado_em (carimbo por publicação); gerado_em (data da extração)
-      // cobre resumos antigos que ainda não trazem o carimbo
-      versao = String(j.publicado_em ?? j.gerado_em ?? '');
-    }
-  } catch {
-    // sem resumo, segue sem versão — os parquet ainda funcionam
-  }
-  const sufixo = versao ? `?v=${encodeURIComponent(versao)}` : '';
-  for (const t of TABELAS) {
-    try {
-      await con.query(
-        `CREATE VIEW ${t} AS SELECT * FROM read_parquet('${origem}/dados/${t}.parquet${sufixo}')`,
-      );
-      tabelasDisponiveis.add(t);
-    } catch {
-      // parquet ainda não publicado — a página degrada sem essa visão
-    }
-  }
+  // Cache-buster por arquivo: o hash de conteúdo (resumo.arquivos) entra na URL
+  // de cada parquet — arquivo novo = URL nova, sem servir versão velha do cache
+  // de 1h nem misturar arquivos de publicações diferentes. Resumos antigos sem
+  // o mapa caem no carimbo global de publicação (comportamento anterior).
+  const resumo = await carregarResumo();
+  arquivosPublicados = resumo?.arquivos ?? null;
+  // publicado_em (carimbo por publicação); gerado_em (data da extração)
+  // cobre resumos antigos que ainda não trazem o carimbo
+  const carimbo = String(resumo?.publicado_em ?? resumo?.gerado_em ?? '');
+  urlParquet = (nome) => {
+    const versao = arquivosPublicados?.[`${nome}.parquet`] ?? carimbo;
+    return `${origem}/dados/${nome}.parquet${versao ? `?v=${encodeURIComponent(versao)}` : ''}`;
+  };
+
+  await registrarLote(con, [
+    ...TABELAS_BOOT,
+    'despesas_atual',
+    'receitas_atual',
+    'despesas_removidas',
+    'receitas_removidas',
+  ]);
+
   // Atalhos com o estado atual das declarações e valor numérico pronto.
   // Preferimos o parquet dedicado (despesas_atual.parquet/receitas_atual.parquet,
   // gerado por src/exportar.py com os mesmos filtros — bem menor que o histórico);
@@ -69,6 +121,7 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   const atuais = [
     {
       nome: 'despesas_atual',
+      base: 'despesas',
       derivada: `
         SELECT *, TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas AS valor
         FROM despesas
@@ -78,6 +131,7 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
     },
     {
       nome: 'receitas_atual',
+      base: 'receitas',
       derivada: `
         SELECT *, TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE) * qt_linhas AS valor
         FROM receitas
@@ -85,63 +139,58 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
           AND NOT (NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
                    AND COALESCE(TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)`,
     },
-  ];
-  for (const { nome, derivada } of atuais) {
-    try {
-      await con.query(
-        `CREATE VIEW ${nome} AS SELECT * FROM read_parquet('${origem}/dados/${nome}.parquet${sufixo}')`,
-      );
-    } catch {
-      try {
-        await con.query(`CREATE VIEW ${nome} AS ${derivada}`);
-      } catch {
-        // nem o parquet dedicado nem o histórico publicados — a página degrada
-      }
-    }
-  }
-  try {
     // Remoções com o MESMO critério do backend: retransmitir a prestação
     // renumera as notas, então só é remoção o conteúdo sem correspondente de
     // mesma essência no estado atual (sincronia com ESSENCIA em src/historico.py).
-    await con.query(`
-      CREATE VIEW despesas_removidas AS
-      SELECT d.*, TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * d.qt_linhas AS valor
-      FROM despesas d
-      WHERE d.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
-        AND NOT (d.NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
-                 AND COALESCE(TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
-        AND NOT EXISTS (
-          SELECT 1 FROM despesas_atual v
-          WHERE v.SQ_CANDIDATO = d.SQ_CANDIDATO
-            AND v.NR_CPF_CNPJ_FORNECEDOR = d.NR_CPF_CNPJ_FORNECEDOR
-            AND v.DS_DESPESA = d.DS_DESPESA
-            AND v.VR_DESPESA_CONTRATADA = d.VR_DESPESA_CONTRATADA
-            AND v.DT_DESPESA = d.DT_DESPESA)
-    `);
-    tabelasDisponiveis.add('despesas_removidas');
-  } catch {
-    // sem o parquet de despesas a visão não existe — as páginas degradam
-  }
-  try {
+    // Também aqui preferimos o parquet dedicado (despesas_removidas.parquet),
+    // já filtrado no backend com esta mesma régua; a derivação abaixo é o
+    // fallback para publicações que ainda não o trazem.
+    {
+      nome: 'despesas_removidas',
+      base: 'despesas',
+      derivada: `
+        SELECT d.*, TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * d.qt_linhas AS valor
+        FROM despesas d
+        WHERE d.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
+          AND NOT (d.NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
+                   AND COALESCE(TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
+          AND NOT EXISTS (
+            SELECT 1 FROM despesas_atual v
+            WHERE v.SQ_CANDIDATO = d.SQ_CANDIDATO
+              AND v.NR_CPF_CNPJ_FORNECEDOR = d.NR_CPF_CNPJ_FORNECEDOR
+              AND v.DS_DESPESA = d.DS_DESPESA
+              AND v.VR_DESPESA_CONTRATADA = d.VR_DESPESA_CONTRATADA
+              AND v.DT_DESPESA = d.DT_DESPESA)`,
+    },
     // mesma régua para receitas: sincronia com ESSENCIA['receitas'] em src/historico.py
-    await con.query(`
-      CREATE VIEW receitas_removidas AS
-      SELECT r.*, TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE) * r.qt_linhas AS valor
-      FROM receitas r
-      WHERE r.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM receitas)
-        AND NOT (r.NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
-                 AND COALESCE(TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
-        AND NOT EXISTS (
-          SELECT 1 FROM receitas_atual v
-          WHERE v.SQ_CANDIDATO = r.SQ_CANDIDATO
-            AND v.NR_CPF_CNPJ_DOADOR = r.NR_CPF_CNPJ_DOADOR
-            AND v.DS_ORIGEM_RECEITA = r.DS_ORIGEM_RECEITA
-            AND v.VR_RECEITA = r.VR_RECEITA
-            AND v.DT_RECEITA = r.DT_RECEITA)
-    `);
-    tabelasDisponiveis.add('receitas_removidas');
-  } catch {
-    // sem o parquet de receitas a visão não existe — as páginas degradam
+    {
+      nome: 'receitas_removidas',
+      base: 'receitas',
+      derivada: `
+        SELECT r.*, TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE) * r.qt_linhas AS valor
+        FROM receitas r
+        WHERE r.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM receitas)
+          AND NOT (r.NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
+                   AND COALESCE(TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
+          AND NOT EXISTS (
+            SELECT 1 FROM receitas_atual v
+            WHERE v.SQ_CANDIDATO = r.SQ_CANDIDATO
+              AND v.NR_CPF_CNPJ_DOADOR = r.NR_CPF_CNPJ_DOADOR
+              AND v.DS_ORIGEM_RECEITA = r.DS_ORIGEM_RECEITA
+              AND v.VR_RECEITA = r.VR_RECEITA
+              AND v.DT_RECEITA = r.DT_RECEITA)`,
+    },
+  ];
+  // ordem importa: as removidas derivadas referenciam a view *_atual
+  for (const { nome, base, derivada } of atuais) {
+    if (await registrarParquet(con, nome)) continue;
+    await registrarParquet(con, base);
+    try {
+      await con.query(`CREATE OR REPLACE VIEW ${nome} AS ${derivada}`);
+      tabelasDisponiveis.add(nome);
+    } catch {
+      // nem o parquet dedicado nem o histórico publicados — a página degrada
+    }
   }
   return con;
 }
@@ -149,6 +198,20 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
 export function obterConexao(): Promise<duckdb.AsyncDuckDBConnection> {
   conexao ??= iniciar();
   return conexao;
+}
+
+let completas: Promise<void> | null = null;
+
+/** Registra as tabelas que só o console SQL usa (histórico bruto incluso, se o
+ *  boot resolveu tudo pelos parquet dedicados). Chamar antes da 1ª consulta livre. */
+export function garantirTabelasCompletas(): Promise<void> {
+  completas ??= (async () => {
+    const con = await obterConexao();
+    for (const nome of ['despesas', 'receitas', ...TABELAS_SOB_DEMANDA]) {
+      await registrarParquet(con, nome);
+    }
+  })();
+  return completas;
 }
 
 const PERMITIDOS = /^\s*(select|with|describe|summarize|show|from|pivot|unpivot)\b/i;
@@ -166,7 +229,9 @@ export async function executarSQL(sql: string): Promise<ResultadoConsulta> {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .trim();
   if (!PERMITIDOS.test(semComentarios)) {
-    throw new Error('Apenas consultas de leitura (SELECT/WITH/DESCRIBE/SUMMARIZE) são permitidas.');
+    throw new Error(
+      'Apenas consultas de leitura (SELECT/WITH/DESCRIBE/SUMMARIZE/SHOW/FROM/PIVOT/UNPIVOT) são permitidas.',
+    );
   }
   const con = await obterConexao();
   const inicio = performance.now();

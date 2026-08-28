@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
 /** Seção recolhível no estilo dos Cards: com muitos gráficos por página, cada
  *  bloco declara se abre por padrão — o leitor expande o que quiser sem a
  *  página virar um paredão. Usa <details> nativo (acessível, sem JS): o
  *  atributo open só é aplicado quando `aberta` (default), e o toggle do
- *  usuário fica com o navegador — o React não o sobrescreve em re-render. */
+ *  usuário fica com o navegador — o React não o sobrescreve em re-render.
+ *  O conteúdo só monta na primeira abertura (gráficos densos não pagam custo
+ *  de render enquanto a seção nunca foi aberta) e depois permanece montado. */
 export function SecaoRecolhivel({
   titulo,
   descricao,
@@ -19,8 +22,15 @@ export function SecaoRecolhivel({
   aberta?: boolean;
   children: React.ReactNode;
 }) {
+  const [jaAbriu, setJaAbriu] = useState(aberta);
   return (
-    <details {...(aberta && { open: true })} className="group rounded-xl border bg-card shadow-sm">
+    <details
+      {...(aberta && { open: true })}
+      onToggle={(e) => {
+        if (e.currentTarget.open) setJaAbriu(true);
+      }}
+      className="group rounded-xl border bg-card shadow-sm"
+    >
       <summary className="flex cursor-pointer select-none items-start justify-between gap-4 rounded-xl p-6 transition-colors hover:bg-muted/30 [&::-webkit-details-marker]:hidden">
         <div className="min-w-0">
           <p className="font-semibold leading-snug">
@@ -35,7 +45,7 @@ export function SecaoRecolhivel({
         </div>
         <ChevronDown className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
-      <div className="px-6 pb-6">{children}</div>
+      <div className="px-6 pb-6">{jaAbriu && children}</div>
     </details>
   );
 }
