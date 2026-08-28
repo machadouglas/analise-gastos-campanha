@@ -38,13 +38,14 @@ Tabelas brutas (todas as colunas VARCHAR, nomes originais do TSE):
 
 - `despesas_contratadas` — cada despesa contratada por candidato: candidato (SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF), fornecedor (NR_CPF_CNPJ_FORNECEDOR, NM_FORNECEDOR, NM_FORNECEDOR_RFB, CD/DS_CNAE_FORNECEDOR, tipo PF/PJ, município), despesa (SQ_DESPESA, DT_DESPESA, DS_ORIGEM_DESPESA, DS_DESPESA, VR_DESPESA_CONTRATADA), documento fiscal (DS_TIPO_DOCUMENTO, NR_DOCUMENTO).
 - `despesas_pagas` — pagamentos efetivados (VR_PAGTO_DESPESA, fonte do recurso).
-- `receitas` — doações: doador (NR_CPF_CNPJ_DOADOR, NM_DOADOR, NM_DOADOR_RFB, CNAE), origem (DS_ORIGEM_RECEITA: Fundo Especial, Fundo Partidário, pessoas físicas, recursos próprios...), espécie (PIX, transferência, estimável), VR_RECEITA, DT_RECEITA.
+- `receitas` — doações: doador (NR_CPF_CNPJ_DOADOR, NM_DOADOR, NM_DOADOR_RFB, CNAE), fonte (DS_FONTE_RECEITA: FUNDO ESPECIAL / FUNDO PARTIDARIO / OUTROS RECURSOS — **dinheiro público se mede aqui**, não na origem), origem (DS_ORIGEM_RECEITA: recursos de partido político, pessoas físicas, recursos próprios...), espécie (PIX, transferência, estimável), VR_RECEITA, DT_RECEITA.
 - `receitas_doador_originario` — quem doou originalmente quando o dinheiro passou por partido/outro candidato (rastreio da origem real).
 - `candidatos` — registro de candidaturas (consulta_cand): SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO, NM_URNA_CANDIDATO, cargo, partido, coligação, situação do registro.
+- `bens` — patrimônio declarado no registro (bem_candidato): SQ_CANDIDATO, DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, VR_BEM_CANDIDATO.
 
 Views tipadas (use nas análises — valores `VR` são DOUBLE, datas `DT` são DATE):
 
-- `v_despesas` (de despesas_contratadas), `v_despesas_pagas`, `v_receitas` — mesmas colunas + `VR` e `DT` convertidos.
+- `v_despesas` (de despesas_contratadas), `v_despesas_pagas`, `v_receitas`, `v_bens` — mesmas colunas + `VR` e `DT` convertidos.
 
 Histórico de extrações (`src/historico.py`, alimentado automaticamente pelo `carregar`):
 
@@ -58,11 +59,12 @@ Valores originais usam vírgula decimal e datas `DD/MM/AAAA`; as views já conve
 Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas exportadas em Parquet):
 
 - `extracoes` — registro de cada dia de extração já visto (alimenta a série).
-- `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens (reconstruída das janelas do histórico — "como estava declarado naquele dia").
-- `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
-- `indicadores` — scorecard por candidato: totais, razao_gasto_receita, pct_maior_fornecedor, valor_sem_nota, valor_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos.
+- `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
+- `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
+- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
+- `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo) do site e do `resumo.json`.
 - `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
-- `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário; completa aos poucos).
+- `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário; completa aos poucos). CNPJ 404 na base pública vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (não reconsulta).
 
 ## Testes e verificação
 
@@ -79,10 +81,11 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 | 4 | Doador que também é fornecedor | dinheiro que "volta" |
 | 5 | CNAE incompatível | ex.: loja de roupas fornecendo carro de som |
 | 6 | Fornecedor pessoa física | serviços relevantes prestados por PF |
-| 7 | Valores redondos/repetidos | notas fracionadas ou combinadas |
+| 7 | Valores redondos/repetidos | notas fracionadas (indicador exige mesmo fornecedor + 3 notas distintas) |
 | 8 | Fornecedor que é candidato | negócio entre candidatos |
-| 9 | Despesas sem documento fiscal | DS_TIPO_DOCUMENTO vazio/recibo |
-| 10 | CNPJ recém-aberto (via `enriquecer`) | empresa criada às vésperas da eleição |
+| 9 | Despesas sem documento fiscal | DS_TIPO_DOCUMENTO vazio/recibo, fora das categorias sem NF esperada (transferências, tributos, aluguel de imóvel, pessoal) |
+| 10 | CNPJ recém-aberto (via `enriquecer`) | empresa criada às vésperas da eleição (reportar sempre com a cobertura: fornecedores_consultados/fornecedores_cnpj) |
+| 11 | Fora da curva do grupo | métrica acima do p95 dos candidatos ao mesmo cargo na mesma UF (`benchmark_indicadores`) |
 
 Para análises novas, prefira `gastos.py sql` — e se a consulta for útil de forma recorrente, adicione-a em `src/analises.py`.
 

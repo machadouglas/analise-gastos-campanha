@@ -90,11 +90,47 @@ def test_valores_repetidos_exige_notas_distintas(banco):
 def test_sem_nota_ignora_categorias_sem_documento_esperado(banco):
     inserir_despesa(banco, SQ_DESPESA="1", DS_TIPO_DOCUMENTO="#NULO",
                     DS_ORIGEM_DESPESA="Doações financeiras a outros candidatos/partidos")
+    # aluguel de imóvel e pessoal não têm nota fiscal por natureza
+    inserir_despesa(banco, SQ_DESPESA="4", DS_TIPO_DOCUMENTO="Recibo",
+                    DS_ORIGEM_DESPESA="Locação/cessão de bens imóveis",
+                    VR_DESPESA_CONTRATADA="900,00")
+    inserir_despesa(banco, SQ_DESPESA="5", DS_TIPO_DOCUMENTO="#NULO",
+                    DS_ORIGEM_DESPESA="Despesas com pessoal",
+                    VR_DESPESA_CONTRATADA="700,00")
     inserir_despesa(banco, SQ_DESPESA="2", DS_TIPO_DOCUMENTO="Recibo",
                     VR_DESPESA_CONTRATADA="100,00")
     df = _resultado(analises.executar_todas(banco), "Despesas sem nota fiscal")
     assert len(df) == 1
     assert df.iloc[0]["total"] == pytest.approx(100.0)
+
+
+def test_resumo_financeiro_conta_dinheiro_publico_pela_fonte(banco):
+    """O fundo chega ao candidato como 'Recursos de partido político' na origem;
+    a fonte (DS_FONTE_RECEITA) é quem diz se é dinheiro público."""
+    banco.execute(
+        "INSERT INTO candidatos VALUES ('160001', '12345', 'FULANO', 'FULANO', "
+        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO')"
+    )
+    inserir_receita(banco, SQ_RECEITA="1", DS_FONTE_RECEITA="FUNDO ESPECIAL",
+                    DS_ORIGEM_RECEITA="Recursos de partido político", VR_RECEITA="8000,00")
+    inserir_receita(banco, SQ_RECEITA="2", DS_FONTE_RECEITA="FUNDO PARTIDARIO",
+                    DS_ORIGEM_RECEITA="Recursos de partido político", VR_RECEITA="1000,00")
+    inserir_receita(banco, SQ_RECEITA="3", DS_FONTE_RECEITA="OUTROS RECURSOS",
+                    VR_RECEITA="500,00")
+    df = _resultado(analises.executar_todas(banco), "Resumo financeiro")
+    assert df.iloc[0]["receita_total"] == pytest.approx(9500.0)
+    assert df.iloc[0]["fundos_publicos"] == pytest.approx(9000.0)
+
+
+def test_fornecedor_que_e_candidato_aparece_apenas_quando_ha_vinculo(banco):
+    inserir_despesa(banco, SQ_DESPESA="1")  # fornecedor comum: fica de fora
+    inserir_despesa(banco, SQ_DESPESA="2", NR_CPF_CNPJ_FORNECEDOR="98765432100",
+                    NM_FORNECEDOR="CANDIDATO FORNECEDOR",
+                    SQ_CANDIDATO_FORNECEDOR="160099", SG_PARTIDO_FORNECEDOR="ABC",
+                    DS_CARGO_FORNECEDOR="Vereador", VR_DESPESA_CONTRATADA="800,00")
+    df = _resultado(analises.executar_todas(banco), "Fornecedor que também é candidato")
+    assert list(df["NM_FORNECEDOR"]) == ["CANDIDATO FORNECEDOR"]
+    assert df.iloc[0]["total"] == pytest.approx(800.0)
 
 
 def test_filtro_por_numero_e_uf_limita_o_recorte(banco):

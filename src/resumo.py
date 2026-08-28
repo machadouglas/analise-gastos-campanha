@@ -16,6 +16,78 @@ def _registros(con, sql) -> list[dict]:
     return json.loads(df.to_json(orient="records"))
 
 
+# métricas que contam como "sinal" no fora da curva: fatos em que estar muito
+# acima do grupo merece pergunta (arrecadar muito, por si, não é indício)
+METRICAS_SINAL = [
+    ("total_contratado", "total_contratado", "total_contratado > 0"),
+    ("razao_gasto_receita", "razao_gasto_receita", "razao_gasto_receita IS NOT NULL"),
+    ("pct_maior_fornecedor", "pct_maior_fornecedor", "n_fornecedores > 1"),
+    ("pct_sem_nota", "pct_sem_nota", "total_contratado > 0"),
+    ("pct_pessoa_fisica", "pct_pessoa_fisica", "total_contratado > 0"),
+]
+
+
+def _existe(con, tabela: str) -> bool:
+    return bool(con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [tabela]
+    ).fetchone()[0])
+
+
+def _fora_da_curva(con, limite: int = 10) -> list[dict]:
+    """Candidatos com mais métricas estritamente acima do p95 do próprio grupo
+    de comparação (cargo×UF; nacional quando o grupo local é pequeno).
+    Cada sinal carrega o valor, a mediana e o p95 do grupo — fatos conferíveis."""
+    if not (_existe(con, "indicadores") and _existe(con, "benchmark_indicadores")):
+        return []
+    unioes = " UNION ALL ".join(
+        f"SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, '{nome}' AS metrica, {expr} AS valor "
+        f"FROM indicadores WHERE {filtro}"
+        for nome, expr, filtro in METRICAS_SINAL
+    )
+    df = con.execute(f"""
+        WITH m AS ({unioes}),
+        ref AS (
+            SELECT m.*,
+                   COALESCE(buf.mediana, bbr.mediana) AS mediana,
+                   COALESCE(buf.p95, bbr.p95) AS p95,
+                   COALESCE(buf.candidatos, bbr.candidatos) AS grupo_n,
+                   CASE WHEN buf.metrica IS NOT NULL THEN m.SG_UF ELSE 'BR-TODAS' END AS grupo_ambito
+            FROM m
+            LEFT JOIN benchmark_indicadores buf
+              ON buf.DS_CARGO = m.DS_CARGO AND buf.SG_UF = m.SG_UF AND buf.metrica = m.metrica
+            LEFT JOIN benchmark_indicadores bbr
+              ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica)
+        SELECT r.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO, i.DS_CARGO, i.SG_UF,
+               i.total_contratado, i.total_receitas,
+               r.metrica, ROUND(r.valor, 2) AS valor, r.mediana, r.p95, r.grupo_n, r.grupo_ambito
+        FROM ref r JOIN indicadores i USING (SQ_CANDIDATO)
+        WHERE r.p95 IS NOT NULL AND r.valor > r.p95
+        ORDER BY r.SQ_CANDIDATO
+    """).df()
+    if df.empty:
+        return []
+    saida = []
+    for sq, grupo in df.groupby("SQ_CANDIDATO", sort=False):
+        primeiro = grupo.iloc[0]
+        saida.append({
+            "SQ_CANDIDATO": str(sq),
+            "NM_CANDIDATO": primeiro["NM_CANDIDATO"],
+            "SG_PARTIDO": primeiro["SG_PARTIDO"],
+            "DS_CARGO": primeiro["DS_CARGO"],
+            "SG_UF": primeiro["SG_UF"],
+            "total_contratado": float(primeiro["total_contratado"] or 0),
+            "total_receitas": None if pd.isna(primeiro["total_receitas"]) else float(primeiro["total_receitas"]),
+            "sinais": [
+                {"metrica": s["metrica"], "valor": float(s["valor"]),
+                 "mediana": float(s["mediana"]), "p95": float(s["p95"]),
+                 "grupo_n": int(s["grupo_n"]), "grupo_ambito": s["grupo_ambito"]}
+                for _, s in grupo.iterrows()
+            ],
+        })
+    saida.sort(key=lambda c: (-len(c["sinais"]), -c["total_contratado"]))
+    return saida[:limite]
+
+
 def gerar(con) -> dict:
     dt_extracao, dt_inicio = con.execute(
         "SELECT MAX(dt_ultima_extracao), MIN(dt_primeira_extracao) FROM hist_despesas_contratadas"
@@ -91,4 +163,5 @@ def gerar(con) -> dict:
         "receitas_removidas": removidas_receitas,
         "fornecedores_compartilhados": compartilhados,
         "top_candidatos": top_candidatos,
+        "fora_da_curva": _fora_da_curva(con),
     }

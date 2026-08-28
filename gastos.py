@@ -189,7 +189,7 @@ def principal():
     r = sub.add_parser("rotina", help="pipeline diário: baixar + carregar + verificar + exportar + publicar")
     r.add_argument("--ano", type=int, default=2026)
     r.add_argument("--sem-publicar", action="store_true")
-    r.add_argument("--limite-cnpj", type=int, default=250, help="máx. de CNPJs a enriquecer por execução")
+    r.add_argument("--limite-cnpj", type=int, default=500, help="máx. de CNPJs a enriquecer por execução")
     r.set_defaults(func=cmd_rotina)
 
     v = sub.add_parser("verificar", help="checagens de integridade dos dados carregados")

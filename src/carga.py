@@ -15,12 +15,14 @@ TABELAS = {
     "receitas": "receitas_candidatos_{ano}_BRASIL.csv",
     "receitas_doador_originario": "receitas_candidatos_doador_originario_{ano}_BRASIL.csv",
     "candidatos": "consulta_cand_{ano}_BRASIL.csv",  # consolidado (há também _BR e um por UF)
+    "bens": "bem_candidato_{ano}_BRASIL.csv",  # patrimônio declarado no registro
 }
 
 # views tipadas: (view, tabela, coluna de valor, coluna de data)
 VIEWS_VALOR = [
     ("v_despesas", "despesas_contratadas", "VR_DESPESA_CONTRATADA", "DT_DESPESA"),
     ("v_receitas", "receitas", "VR_RECEITA", "DT_RECEITA"),
+    ("v_bens", "bens", "VR_BEM_CANDIDATO", "DT_ULT_ATUAL_BEM_CANDIDATO"),
 ]
 
 # despesas_pagas não traz colunas do candidato — liga pelo SQ_PRESTADOR_CONTAS

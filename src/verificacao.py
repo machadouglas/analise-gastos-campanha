@@ -5,6 +5,29 @@ Cada checagem devolve (nome, ok, detalhe).
 """
 
 TOLERANCIA = 0.01  # centavos de diferença por arredondamento
+QUEDA_MAXIMA_PCT = 20.0  # retrato encolher mais que isso = suspeita de arquivo truncado
+
+
+def queda_de_volume(con, tabela: str, limite_pct: float = QUEDA_MAXIMA_PCT) -> tuple[bool, str]:
+    """Compara o retrato atual com o da extração anterior. Prestação de contas
+    cresce ao longo da campanha; uma queda brusca no arquivo inteiro indica
+    download truncado — e viraria uma enxurrada de falsas 'remoções'."""
+    hist = f"hist_{tabela}"
+    anterior = con.execute("""
+        SELECT MAX(dt_extracao) FROM extracoes
+        WHERE dt_extracao < (SELECT MAX(dt_extracao) FROM extracoes)
+    """).fetchone()[0]
+    if anterior is None:
+        return True, "primeira extração — sem base de comparação"
+    antes = con.execute(f"""
+        SELECT COALESCE(SUM(qt_linhas), 0) FROM {hist}
+        WHERE dt_primeira_extracao <= ? AND dt_ultima_extracao >= ?
+    """, [anterior, anterior]).fetchone()[0]
+    atual = con.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
+    if antes == 0:
+        return True, f"sem retrato anterior ({atual} linhas hoje)"
+    variacao = 100.0 * (atual - antes) / antes
+    return -variacao <= limite_pct, f"{antes} -> {atual} linhas (variação de {variacao:+.1f}%)"
 
 
 def verificar(con) -> list[str]:
@@ -48,11 +71,27 @@ def verificar(con) -> list[str]:
     brutos = con.execute("SELECT COUNT(*) FROM despesas_contratadas").fetchone()[0]
     checar("histórico vivo == retrato atual (despesas)", vivos == brutos, f"hist={vivos} raw={brutos}")
 
-    janela_invertida = con.execute("""
-        SELECT COUNT(*) FROM hist_despesas_contratadas
-        WHERE dt_primeira_extracao > dt_ultima_extracao
-    """).fetchone()[0]
-    checar("janelas de extração coerentes", janela_invertida == 0, f"{janela_invertida} invertidas")
+    dt_max_rec = con.execute("SELECT MAX(dt_ultima_extracao) FROM hist_receitas").fetchone()[0]
+    vivos_rec = con.execute(
+        "SELECT COALESCE(SUM(qt_linhas), 0) FROM hist_receitas WHERE dt_ultima_extracao = ?",
+        [dt_max_rec],
+    ).fetchone()[0]
+    brutos_rec = con.execute("SELECT COUNT(*) FROM receitas").fetchone()[0]
+    checar("histórico vivo == retrato atual (receitas)", vivos_rec == brutos_rec,
+           f"hist={vivos_rec} raw={brutos_rec}")
+
+    for hist in ("hist_despesas_contratadas", "hist_receitas"):
+        janela_invertida = con.execute(f"""
+            SELECT COUNT(*) FROM {hist}
+            WHERE dt_primeira_extracao > dt_ultima_extracao
+        """).fetchone()[0]
+        checar(f"janelas de extração coerentes ({hist})", janela_invertida == 0,
+               f"{janela_invertida} invertidas")
+
+    # --- retrato não pode encolher bruscamente (arquivo truncado)
+    for tabela in ("despesas_contratadas", "receitas"):
+        ok, detalhe = queda_de_volume(con, tabela)
+        checar(f"sem queda brusca de volume ({tabela})", ok, detalhe)
 
     # --- despesas_pagas: o join com prestadores não pode multiplicar linhas
     pagas_raw = con.execute("SELECT COUNT(*) FROM despesas_pagas").fetchone()[0]
@@ -69,6 +108,16 @@ def verificar(con) -> list[str]:
         checar("serie_diaria (último dia) == total atual", abs((serie or 0) - (fonte or 0)) < TOLERANCIA,
                f"serie={serie} fonte={fonte}")
 
+    if _existe(con, "serie_diaria"):
+        serie_rec, fonte_rec = con.execute("""
+            SELECT (SELECT ROUND(SUM(total_receitas), 2) FROM serie_diaria
+                    WHERE dt_extracao = (SELECT MAX(dt_extracao) FROM serie_diaria)),
+                   (SELECT ROUND(SUM(VR), 2) FROM v_receitas)
+        """).fetchone()
+        checar("serie_diaria receitas (último dia) == total atual",
+               abs((serie_rec or 0) - (fonte_rec or 0)) < TOLERANCIA,
+               f"serie={serie_rec} fonte={fonte_rec}")
+
     if _existe(con, "indicadores"):
         ind, fonte = con.execute("""
             SELECT (SELECT ROUND(SUM(total_contratado), 2) FROM indicadores),
@@ -76,6 +125,24 @@ def verificar(con) -> list[str]:
         """).fetchone()
         checar("indicadores == total atual", abs((ind or 0) - (fonte or 0)) < TOLERANCIA,
                f"indicadores={ind} fonte={fonte}")
+        ind_rec, fonte_rec = con.execute("""
+            SELECT (SELECT ROUND(SUM(total_receitas), 2) FROM indicadores),
+                   (SELECT ROUND(SUM(VR), 2) FROM v_receitas)
+        """).fetchone()
+        checar("indicadores receitas == total atual", abs((ind_rec or 0) - (fonte_rec or 0)) < TOLERANCIA,
+               f"indicadores={ind_rec} fonte={fonte_rec}")
+        pago_ind, pago_fonte = con.execute("""
+            SELECT (SELECT ROUND(SUM(total_pago), 2) FROM indicadores),
+                   (SELECT ROUND(SUM(VR), 2) FROM v_despesas_pagas WHERE SQ_CANDIDATO IS NOT NULL)
+        """).fetchone()
+        checar("indicadores pago == total atual", abs((pago_ind or 0) - (pago_fonte or 0)) < TOLERANCIA,
+               f"indicadores={pago_ind} fonte={pago_fonte}")
+        fundos_estourados = con.execute("""
+            SELECT COUNT(*) FROM indicadores
+            WHERE fundos_publicos > COALESCE(total_receitas, 0) + 0.01
+        """).fetchone()[0]
+        checar("fundos públicos <= receitas por candidato", fundos_estourados == 0,
+               f"{fundos_estourados} candidatos com fundo maior que a receita")
 
     if _existe(con, "rede"):
         rede, fonte = con.execute("""
@@ -84,13 +151,20 @@ def verificar(con) -> list[str]:
         """).fetchone()
         checar("rede (despesas) == total atual", abs((rede or 0) - (fonte or 0)) < TOLERANCIA,
                f"rede={rede} fonte={fonte}")
+        rede_rec, fonte_rec = con.execute("""
+            SELECT (SELECT ROUND(SUM(valor), 2) FROM rede WHERE tipo = 'doacao'),
+                   (SELECT ROUND(SUM(VR), 2) FROM v_receitas)
+        """).fetchone()
+        checar("rede (doações) == total atual", abs((rede_rec or 0) - (fonte_rec or 0)) < TOLERANCIA,
+               f"rede={rede_rec} fonte={fonte_rec}")
 
-    if _existe(con, "benchmark_precos"):
-        quebrados = con.execute("""
-            SELECT COUNT(*) FROM benchmark_precos
-            WHERE NOT (p25 <= mediana AND mediana <= p75 AND p75 <= p95 AND p95 <= maximo)
-        """).fetchone()[0]
-        checar("benchmark: quantis ordenados", quebrados == 0, f"{quebrados} inconsistentes")
+    for benchmark in ("benchmark_precos", "benchmark_indicadores"):
+        if _existe(con, benchmark):
+            quebrados = con.execute(f"""
+                SELECT COUNT(*) FROM {benchmark}
+                WHERE NOT (p25 <= mediana AND mediana <= p75 AND p75 <= p95 AND p95 <= maximo)
+            """).fetchone()[0]
+            checar(f"{benchmark}: quantis ordenados", quebrados == 0, f"{quebrados} inconsistentes")
 
     print(f"[verificacao] {'TUDO OK' if not falhas else f'{len(falhas)} FALHAS: ' + ', '.join(falhas)}")
     return falhas

@@ -24,7 +24,8 @@ COLS_RECEITAS = [
     "DT_GERACAO", "HH_GERACAO", "SQ_PRESTADOR_CONTAS", "SQ_CANDIDATO",
     "NM_CANDIDATO", "NR_CANDIDATO", "SG_PARTIDO", "DS_CARGO", "SG_UF",
     "SQ_RECEITA", "NM_DOADOR", "NM_DOADOR_RFB", "NR_CPF_CNPJ_DOADOR",
-    "DS_ORIGEM_RECEITA", "DS_ESPECIE_RECEITA", "VR_RECEITA", "DT_RECEITA",
+    "DS_FONTE_RECEITA", "DS_ORIGEM_RECEITA", "DS_ESPECIE_RECEITA",
+    "VR_RECEITA", "DT_RECEITA",
 ]
 
 DESPESA_PADRAO = {
@@ -49,6 +50,7 @@ RECEITA_PADRAO = {
     "DS_CARGO": "Deputado Estadual", "SG_UF": "XX",
     "SQ_RECEITA": "1", "NM_DOADOR": "DOADOR DA SILVA", "NM_DOADOR_RFB": "#NULO",
     "NR_CPF_CNPJ_DOADOR": "99888777000166",
+    "DS_FONTE_RECEITA": "OUTROS RECURSOS",
     "DS_ORIGEM_RECEITA": "Recursos de pessoas jurídicas",
     "DS_ESPECIE_RECEITA": "Transferência eletrônica",
     "VR_RECEITA": "1000,00", "DT_RECEITA": "10/08/2026",
@@ -68,6 +70,9 @@ def montar_banco() -> duckdb.DuckDBPyConnection:
         CREATE TABLE candidatos (SQ_CANDIDATO VARCHAR, NR_CANDIDATO VARCHAR,
             NM_CANDIDATO VARCHAR, NM_URNA_CANDIDATO VARCHAR, DS_CARGO VARCHAR,
             SG_PARTIDO VARCHAR, SG_UF VARCHAR, DS_SITUACAO_CANDIDATURA VARCHAR);
+        CREATE TABLE bens (SQ_CANDIDATO VARCHAR, SG_UF VARCHAR,
+            DS_TIPO_BEM_CANDIDATO VARCHAR, DS_BEM_CANDIDATO VARCHAR,
+            VR_BEM_CANDIDATO VARCHAR, DT_ULT_ATUAL_BEM_CANDIDATO VARCHAR);
     """)
     carga.criar_views(con)
     return con
@@ -89,6 +94,20 @@ def inserir_despesa(con, **ajustes):
 
 def inserir_receita(con, **ajustes):
     _inserir(con, "receitas", COLS_RECEITAS, RECEITA_PADRAO, ajustes)
+
+
+def inserir_pagamento(con, valor="100,00", sq_prestador="900001", data="16/08/2026"):
+    con.execute(
+        "INSERT INTO despesas_pagas VALUES ('20/08/2026', ?, 'XX', ?, ?)",
+        [sq_prestador, valor, data],
+    )
+
+
+def inserir_bem(con, valor="50000,00", sq_candidato="160001", tipo="Casa"):
+    con.execute(
+        "INSERT INTO bens VALUES (?, 'XX', ?, 'BEM DECLARADO', ?, '15/07/2026')",
+        [sq_candidato, tipo, valor],
+    )
 
 
 def extrair_dia(con, data, despesas=(), receitas=()):

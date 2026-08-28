@@ -6,13 +6,16 @@ indícios para investigação, nunca prova de irregularidade.
 
 import pandas as pd
 
-# Categorias em que documento fiscal não é esperado (transferências entre
-# campanhas, tributos e tarifas): ficam fora do indicador "sem nota fiscal".
+# Categorias em que documento fiscal não é esperado: transferências entre
+# campanhas, tributos e tarifas; locação de imóvel (não é serviço — não há NF,
+# o documento próprio é o recibo de aluguel); pessoal (RPA/folha, sem NF).
 CATEGORIAS_SEM_NOTA_ESPERADA = (
     "Doações financeiras a outros candidatos/partidos",
     "Encargos financeiros, taxas bancárias e/ou op. cartão de crédito",
     "Encargos sociais",
     "Impostos, contribuições e taxas",
+    "Locação/cessão de bens imóveis",
+    "Despesas com pessoal",
 )
 SQL_CATEGORIAS_SEM_NOTA_ESPERADA = ", ".join(f"'{c}'" for c in CATEGORIAS_SEM_NOTA_ESPERADA)
 
@@ -38,11 +41,12 @@ def executar_todas(con, numeros=None, uf=None):
         resultados.append((titulo, comentario, df))
 
     q("Resumo financeiro por candidato",
-      "Total arrecadado, contratado e pago. Diferenças grandes entre contratado e pago perto do fim da campanha merecem atenção.",
+      "Total arrecadado, contratado e pago. Diferenças grandes entre contratado e pago perto do fim da campanha merecem atenção. "
+      "Dinheiro público = Fundo Especial + Fundo Partidário (coluna DS_FONTE_RECEITA; a origem declarada costuma ser 'Recursos de partido político').",
       f"""
       WITH rec AS (
         SELECT SQ_CANDIDATO, SUM(VR) AS receita,
-               SUM(CASE WHEN DS_ORIGEM_RECEITA ILIKE '%fundo especial%' THEN VR ELSE 0 END) AS fundo_eleitoral,
+               SUM(CASE WHEN DS_FONTE_RECEITA ILIKE 'FUNDO%' THEN VR ELSE 0 END) AS fundos_publicos,
                SUM(CASE WHEN DS_ORIGEM_RECEITA ILIKE '%f_sica%' OR DS_ORIGEM_RECEITA ILIKE '%fisica%' THEN VR ELSE 0 END) AS pessoas_fisicas,
                SUM(CASE WHEN DS_ORIGEM_RECEITA ILIKE '%pr_prio%' THEN VR ELSE 0 END) AS recursos_proprios
         FROM v_receitas WHERE {f} GROUP BY 1),
@@ -52,7 +56,7 @@ def executar_todas(con, numeros=None, uf=None):
                FROM candidatos WHERE {f})
       SELECT c.NM_CANDIDATO, c.NR_CANDIDATO, c.SG_PARTIDO, c.DS_CARGO, c.SG_UF,
              ROUND(COALESCE(r.receita,0),2) AS receita_total,
-             ROUND(COALESCE(r.fundo_eleitoral,0),2) AS fundo_eleitoral,
+             ROUND(COALESCE(r.fundos_publicos,0),2) AS fundos_publicos,
              ROUND(COALESCE(r.pessoas_fisicas,0),2) AS pessoas_fisicas,
              ROUND(COALESCE(r.recursos_proprios,0),2) AS recursos_proprios,
              ROUND(COALESCE(d.contratado,0),2) AS despesa_contratada,
