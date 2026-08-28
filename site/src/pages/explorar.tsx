@@ -637,8 +637,23 @@ export function Explorar() {
       )}
 
       {carregando && !dados ? (
-        <div className="flex min-h-[30vh] items-center justify-center gap-3 text-muted-foreground">
-          <Spinner className="h-5 w-5" /> Preparando o motor de consultas no seu navegador…
+        // esqueleto com a forma da página: a espera do DuckDB-WASM (motor +
+        // parquet) é longa na primeira visita e a tela em branco parecia travada
+        <div aria-hidden className="space-y-6">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <Spinner className="h-4 w-4" /> Preparando o motor de consultas no seu navegador —
+            só na primeira visita, as próximas são rápidas…
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="h-24 animate-pulse rounded-xl border bg-card shadow-sm" />
+            ))}
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="h-64 animate-pulse rounded-xl border bg-card shadow-sm" />
+            <div className="h-64 animate-pulse rounded-xl border bg-card shadow-sm" />
+          </div>
+          <div className="h-72 animate-pulse rounded-xl border bg-card shadow-sm" />
         </div>
       ) : dados ? (
         <div className={carregando ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
