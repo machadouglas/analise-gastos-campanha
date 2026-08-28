@@ -195,8 +195,10 @@ export function Explorar() {
             GROUP BY 1 ORDER BY total DESC LIMIT 100`)
           : Promise.resolve({ linhas: [] as unknown[][] }),
         // quem se registrou mas nunca declarou nada não existe em despesas_atual;
-        // sem esta consulta a busca "não encontra" 72% das candidaturas
-        buscando && tabelasDisponiveis.has('candidatos')
+        // sem esta consulta a busca "não encontra" 72% das candidaturas.
+        // (sem checar tabelasDisponiveis: no primeiro load o Set ainda está
+        // vazio — o executarSQL espera a conexão e o catch cobre parquet ausente)
+        buscando
           ? executarSQL(sqlRegistrosSemMovimento(f, 100)).catch(() => ({ linhas: [] as unknown[][] }))
           : Promise.resolve({ linhas: [] as unknown[][] }),
       ]);
