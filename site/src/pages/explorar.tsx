@@ -859,18 +859,22 @@ export function Explorar() {
                       return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
                     if (col === 'Candidato')
                       return (
-                        <td key={j}>
+                        <td key={j} className="min-w-[13rem]">
                           <Link to={`/candidato/${celula(l[0])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
                             {celula(v)}
                           </Link>
                         </td>
                       );
-                    if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
+                    if (col === 'Fornecedor' || col === 'Doador')
                       return (
-                        <td key={j}>
-                          <Link to={urlFornecedor(celula(l[1]))} className="text-[#264E9B] underline-offset-4 hover:underline">
-                            {celula(v)}
-                          </Link>
+                        <td key={j} className="min-w-[12rem]">
+                          {temFichaFornecedor(celula(l[1])) ? (
+                            <Link to={urlFornecedor(celula(l[1]))} className="text-[#264E9B] underline-offset-4 hover:underline">
+                              {celula(v)}
+                            </Link>
+                          ) : (
+                            celula(v)
+                          )}
                         </td>
                       );
                     return <td key={j}>{celula(v)}</td>;

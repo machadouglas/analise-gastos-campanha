@@ -346,7 +346,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
                DS_DESPESA AS "Descrição",
                ROUND(valor, 2) AS "Valor",
                STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
-               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até"
+               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
+               NR_CPF_CNPJ_FORNECEDOR AS "_cnpj"
         FROM despesas_removidas
         WHERE ${w}
         ORDER BY 3 DESC LIMIT 30`)
@@ -581,7 +582,16 @@ export function Candidato() {
           <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
             {dados.removidas.map((l, i) => (
               <tr key={i}>
-                <td>{celula(l[0])}</td><CelulaTexto>{celula(l[1])}</CelulaTexto>
+                <td className="min-w-[12rem]">
+                  {temFichaFornecedor(celula(l[5])) ? (
+                    <Link to={urlFornecedor(celula(l[5]))} className="text-[#264E9B] underline-offset-4 hover:underline">
+                      {celula(l[0])}
+                    </Link>
+                  ) : (
+                    celula(l[0])
+                  )}
+                </td>
+                <CelulaTexto>{celula(l[1])}</CelulaTexto>
                 <CelulaNum>{brl.format(Number(l[2] ?? 0))}</CelulaNum>
                 <td>{celula(l[3])}</td><td>{celula(l[4])}</td>
               </tr>

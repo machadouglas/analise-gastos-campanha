@@ -184,7 +184,7 @@ function Secao({
 /** Nome do candidato linkado à ficha (quando o resumo traz o SQ) + partido linkado. */
 function CelulaCandidato({ x }: { x: DespesaResumo }) {
   return (
-    <td>
+    <td className="min-w-[13rem]">
       {x.SQ_CANDIDATO ? (
         <Link to={`/candidato/${x.SQ_CANDIDATO}`} className="text-[#264E9B] underline-offset-4 hover:underline">
           {x.NM_CANDIDATO}
@@ -209,14 +209,14 @@ function CelulaFornecedor({ x }: { x: DespesaResumo }) {
   const nome = x.fornecedor ?? x.NM_DOADOR;
   if (temFichaFornecedor(x.NR_CPF_CNPJ_FORNECEDOR)) {
     return (
-      <td>
+      <td className="min-w-[12rem]">
         <Link to={urlFornecedor(x.NR_CPF_CNPJ_FORNECEDOR!)} className="text-[#264E9B] underline-offset-4 hover:underline">
           {nome}
         </Link>
       </td>
     );
   }
-  return <td>{nome}</td>;
+  return <td className="min-w-[12rem]">{nome}</td>;
 }
 
 function TabelaRemovidas({ linhas, quem }: { linhas: DespesaResumo[]; quem: string }) {

@@ -73,7 +73,7 @@ export function CelulaTexto({ children, title }: { children: React.ReactNode; ti
       {/* overflow-wrap:anywhere (e não break-words): só ele entra no cálculo
           de largura mínima da coluna — um token gigante sem espaços deixa de
           ditar a largura da tabela inteira */}
-      <div className="line-clamp-2 max-w-[36rem] [overflow-wrap:anywhere]" title={texto}>
+      <div className="line-clamp-2 max-w-[26rem] [overflow-wrap:anywhere]" title={texto}>
         {children}
       </div>
     </td>

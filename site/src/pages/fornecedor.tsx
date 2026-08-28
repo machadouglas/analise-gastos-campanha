@@ -180,7 +180,8 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
                DS_DESPESA AS "Descrição",
                ROUND(valor, 2) AS "Valor",
                STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
-               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até"
+               STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
+               SQ_CANDIDATO AS "_sq"
         FROM despesas_removidas
         WHERE ${w}
         ORDER BY 4 DESC LIMIT 30`)).linhas
@@ -436,7 +437,12 @@ export function Fornecedor() {
           <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Partido/UF' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
             {dados.removidas.map((l, i) => (
               <tr key={i}>
-                <td>{celula(l[0])}</td><td className="text-muted-foreground">{celula(l[1])}</td>
+                <td className="min-w-[13rem]">
+                  <Link to={`/candidato/${celula(l[6])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                    {celula(l[0])}
+                  </Link>
+                </td>
+                <td className="text-muted-foreground">{celula(l[1])}</td>
                 <CelulaTexto>{celula(l[2])}</CelulaTexto>
                 <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
                 <td>{celula(l[4])}</td><td>{celula(l[5])}</td>
