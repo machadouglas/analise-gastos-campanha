@@ -14,18 +14,42 @@ DIR_CACHE = Path("data/cache/cnpj")
 INTERVALO_SEGUNDOS = 1.5
 
 
+# marcador de cache negativo: CNPJ que a base pública não conhece (404) é fato
+# estável — sem isso, o mesmo CNPJ seria reconsultado em toda rotina diária
+MARCA_NAO_ENCONTRADO = {"nao_encontrado": True}
+
+
+def _caminho_cache(cnpj: str) -> Path:
+    return DIR_CACHE / f"{cnpj}.json"
+
+
+def nao_encontrado(cnpj: str) -> bool:
+    """True se a consulta já foi feita e a base pública respondeu 404."""
+    cache = _caminho_cache(re.sub(r"\D", "", cnpj or ""))
+    if not cache.exists():
+        return False
+    return bool(json.loads(cache.read_text(encoding="utf-8")).get("nao_encontrado"))
+
+
 def consultar(cnpj: str) -> dict | None:
-    """Consulta um CNPJ na BrasilAPI (com cache). Retorna None para CPF/inválido."""
+    """Consulta um CNPJ na BrasilAPI (com cache, inclusive de 404).
+    Retorna None para CPF/inválido, não encontrado ou erro transitório."""
     cnpj = re.sub(r"\D", "", cnpj or "")
     if len(cnpj) != 14:
         return None
     DIR_CACHE.mkdir(parents=True, exist_ok=True)
-    cache = DIR_CACHE / f"{cnpj}.json"
+    cache = _caminho_cache(cnpj)
     if cache.exists():
-        return json.loads(cache.read_text(encoding="utf-8"))
+        dados = json.loads(cache.read_text(encoding="utf-8"))
+        return None if dados.get("nao_encontrado") else dados
     r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", impersonate="chrome", timeout=60)
     time.sleep(INTERVALO_SEGUNDOS)
+    if r.status_code == 404:
+        cache.write_text(json.dumps(MARCA_NAO_ENCONTRADO), encoding="utf-8")
+        print(f"[aviso] CNPJ {cnpj}: não encontrado na base pública (404, não será reconsultado)")
+        return None
     if r.status_code != 200:
+        # erro transitório (rate limit, 5xx): sem cache — tenta de novo amanhã
         print(f"[aviso] CNPJ {cnpj}: HTTP {r.status_code}")
         return None
     dados = json.loads(r.content.decode("utf-8"))
@@ -61,6 +85,15 @@ def enriquecer_em_massa(con, limite: int = 250) -> int:
             print(f"[cnpj] {i}/{len(pendentes)} consultados ({novos} novos até aqui)")
         dados = consultar(numero)
         if not dados:
+            if nao_encontrado(numero):
+                # registro-tombstone: consulta respondida (404) — sai da fila e
+                # conta como CNPJ verificado, sem ocupar vaga nas rotinas seguintes
+                con.execute(
+                    "INSERT INTO fornecedores VALUES (?, NULL, NULL, "
+                    "'NAO ENCONTRADO NA BASE PUBLICA', NULL, NULL, NULL, NULL, NULL, 0, NULL)",
+                    [numero],
+                )
+                novos += 1
             continue
         r = resumir(dados)
         con.execute(
