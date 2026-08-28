@@ -82,9 +82,9 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
 function PerguntasSection() {
   return (
     <section className="mt-4">
-      <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
+      <h2 className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
         O que dá para descobrir
-      </p>
+      </h2>
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {PERGUNTAS.map((p) => {
           const interno = p.href.startsWith('/');

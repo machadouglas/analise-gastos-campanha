@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { BarChart3, Radar, Terminal } from 'lucide-react';
+import { BarChart3, BookOpen, Radar, Terminal } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const REPO = 'https://github.com/machadouglas/analise-gastos-campanha';
@@ -8,6 +8,8 @@ const navegacao = [
   { nome: 'Radar', href: '/', icone: Radar },
   { nome: 'Explorar', href: '/explorar', icone: BarChart3 },
   { nome: 'Consultar (SQL + IA)', href: '/consultar', icone: Terminal },
+  // a tese do site é o método — a metodologia merece porta de entrada no topo
+  { nome: 'Metodologia', href: '/metodologia', icone: BookOpen },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -15,6 +17,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <a
+        href="#conteudo"
+        className="sr-only z-[60] rounded-md bg-[#10244A] px-4 py-2 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+      >
+        Pular para o conteúdo
+      </a>
       <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <nav className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
           <Link to="/" className="transition-opacity hover:opacity-80">
@@ -45,7 +53,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
 
-      <main className="flex-1">{children}</main>
+      <main id="conteudo" className="flex-1">{children}</main>
 
       <footer className="border-t bg-muted/30">
         <div className="mx-auto max-w-7xl px-6 py-12 text-sm text-muted-foreground">
