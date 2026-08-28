@@ -461,6 +461,14 @@ export function Explorar() {
     setFiltros((f) => ({ ...f, ...parcial }));
   }
 
+  function limparFiltros() {
+    setPagina(0);
+    setSinal('');
+    setCategoria('');
+    setDigitado({ candidato: '', fornecedor: '', descricao: '' });
+    setFiltros(FILTROS_VAZIOS);
+  }
+
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-6 py-12">
       <div>
@@ -648,10 +656,18 @@ export function Explorar() {
           <>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                  { rotulo: 'Despesas contratadas', valor: brl.format(dados.kpis.contratado) },
+                  // os rótulos acompanham a visão: em "removidas" os números são
+                  // o que SAIU da declaração, não o que está contratado hoje
+                  {
+                    rotulo: visao === 'removidas' ? 'Valor removido' : 'Despesas contratadas',
+                    valor: brl.format(dados.kpis.contratado),
+                  },
                   { rotulo: 'Candidatos', valor: num.format(dados.kpis.candidatos) },
                   { rotulo: 'Fornecedores', valor: num.format(dados.kpis.fornecedores) },
-                  { rotulo: 'Itens declarados', valor: num.format(dados.kpis.itens) },
+                  {
+                    rotulo: visao === 'removidas' ? 'Itens removidos' : 'Itens declarados',
+                    valor: num.format(dados.kpis.itens),
+                  },
                 ].map((k) => (
                   <Card key={k.rotulo}>
                     <CardContent className="p-5">
@@ -737,6 +753,16 @@ export function Explorar() {
                 </Button>
               </div>
             </div>
+            {dados.linhas.length === 0 && !carregando ? (
+              <div className="rounded-xl border bg-card p-8 text-center shadow-sm">
+                <p className="text-sm text-muted-foreground">
+                  Nada encontrado com esses filtros neste recorte — o que também é uma informação.
+                </p>
+                <Button variant="outline" size="sm" className="mt-4" onClick={limparFiltros}>
+                  Limpar filtros
+                </Button>
+              </div>
+            ) : (
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
               numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'Neste tipo de gasto', 'p95 do grupo'].includes(c),
@@ -779,6 +805,7 @@ export function Explorar() {
                 </tr>
               ))}
             </Tabela>
+            )}
           </div>
         </div>
       ) : null}
