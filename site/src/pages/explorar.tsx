@@ -9,7 +9,7 @@ import {
   BarrasHorizontais, Dispersao, LinhaTemporal,
   type ItemBarra, type PontoDispersao, type PontoLinha,
 } from '@/components/app/graficos';
-import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 
@@ -258,6 +258,10 @@ const LIMITE_DISPERSAO = 1500;
 /** Dispersão só faz sentido no recorte por UF/cargo/partido — filtros de texto
  *  (candidato, fornecedor, descrição) recortam despesas, não candidatos. */
 async function consultarDispersao(f: Filtros): Promise<PontoDispersao[] | null> {
+  // tabelasDisponiveis só é populado quando o motor termina de iniciar; esta
+  // função roda em paralelo com as demais consultas e, no primeiro load da
+  // página, checaria um Set ainda vazio — aguarde a conexão antes de decidir.
+  await obterConexao();
   if (!tabelasDisponiveis.has('indicadores')) return null;
   if (f.candidato.trim() || f.fornecedor.trim() || f.descricao.trim()) return null;
   const esc = (s: string) => s.replaceAll("'", "''");
