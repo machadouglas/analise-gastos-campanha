@@ -46,6 +46,12 @@ interface Perfil {
   flags: string[];
 }
 
+interface Bem {
+  tipo: string;
+  descricao: string;
+  valor: number;
+}
+
 interface DadosCandidato {
   perfil: Perfil;
   serieRotulos: string[];
@@ -62,6 +68,7 @@ interface DadosCandidato {
   receitas: unknown[][];
   colunasReceitas: string[];
   removidas: unknown[][];
+  bens: Bem[];
 }
 
 const esc = escSQL;
@@ -82,13 +89,27 @@ interface FichaRegistro {
   sgUe: string | null;
   dtExtracao: string | null;
   totalBens: number | null;
-  bens: { tipo: string; descricao: string; valor: number }[];
+  bens: Bem[];
+}
+
+/** Bens declarados ao registrar a candidatura — usados tanto na ficha completa
+ *  quanto na ficha sem movimento. */
+async function carregarBens(w: string): Promise<Bem[]> {
+  if (!tabelasDisponiveis.has('bens')) return [];
+  const r = await executarSQL(`
+      SELECT DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, ROUND(VR, 2)
+      FROM bens WHERE ${w} ORDER BY VR DESC LIMIT 30`);
+  return r.linhas.map((b) => ({
+    tipo: String(b[0] ?? ''),
+    descricao: String(b[1] ?? ''),
+    valor: Number(b[2] ?? 0),
+  }));
 }
 
 async function carregarRegistro(sq: string): Promise<FichaRegistro | null> {
   if (!tabelasDisponiveis.has('candidatos')) return null;
   const w = `SQ_CANDIDATO = '${esc(sq)}'`;
-  const [reg, extracao, bensRes] = await Promise.all([
+  const [reg, extracao, bens] = await Promise.all([
     executarSQL(`
         SELECT ANY_VALUE(NM_URNA_CANDIDATO), ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
                ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF),
@@ -98,19 +119,10 @@ async function carregarRegistro(sq: string): Promise<FichaRegistro | null> {
     tabelasDisponiveis.has('serie_diaria')
       ? executarSQL(`SELECT STRFTIME(MAX(dt_extracao), '%d/%m/%Y') FROM serie_diaria`)
       : Promise.resolve({ linhas: [] as unknown[][] }),
-    tabelasDisponiveis.has('bens')
-      ? executarSQL(`
-          SELECT DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, ROUND(VR, 2)
-          FROM bens WHERE ${w} ORDER BY VR DESC LIMIT 30`)
-      : Promise.resolve({ linhas: [] as unknown[][] }),
+    carregarBens(w),
   ]);
   const l = reg.linhas[0];
   if (!l || l[0] == null) return null;
-  const bens = bensRes.linhas.map((b) => ({
-    tipo: String(b[0] ?? ''),
-    descricao: String(b[1] ?? ''),
-    valor: Number(b[2] ?? 0),
-  }));
   return {
     registroSemMovimento: true,
     nomeUrna: String(l[0]),
@@ -160,7 +172,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   // 1ª onda: tudo que não depende de resultado anterior, junto — o ganho é o
   // pipeline das leituras parciais dos parquet, o gargalo real da ficha
-  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, faixasRes, receitas, removidas] =
+  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, faixasRes, receitas, removidas, bens] =
     await Promise.all([
       executarSQL(`SELECT * FROM indicadores WHERE ${w}`),
       tabelasDisponiveis.has('candidatos')
@@ -230,6 +242,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
         WHERE ${w}
         ORDER BY 3 DESC LIMIT 30`)
         : Promise.resolve({ linhas: [] as unknown[][] }),
+      carregarBens(w),
     ]);
   if (!ind.total) return null;
   const linha = Object.fromEntries(ind.colunas.map((c, i) => [c, ind.linhas[0][i]])) as Record<string, unknown>;
@@ -440,6 +453,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     colunasReceitas: receitas.colunas,
     receitas: receitas.linhas,
     removidas: removidas.linhas,
+    bens,
   };
 }
 
@@ -452,6 +466,20 @@ function Secao({ titulo, descricao, children }: { titulo: string; descricao: str
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
+  );
+}
+
+function TabelaBens({ bens }: { bens: Bem[] }) {
+  return (
+    <Tabela colunas={[{ titulo: 'Tipo' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }]}>
+      {bens.map((b, i) => (
+        <tr key={i}>
+          <td className="whitespace-nowrap text-muted-foreground">{b.tipo}</td>
+          <CelulaTexto>{b.descricao}</CelulaTexto>
+          <CelulaNum>{brl.format(b.valor)}</CelulaNum>
+        </tr>
+      ))}
+    </Tabela>
   );
 }
 
@@ -502,15 +530,7 @@ function FichaSemMovimento({ ficha, sq }: { ficha: FichaRegistro; sq: string }) 
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Tabela colunas={[{ titulo: 'Tipo' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }]}>
-              {ficha.bens.map((b, i) => (
-                <tr key={i}>
-                  <td className="whitespace-nowrap text-muted-foreground">{b.tipo}</td>
-                  <CelulaTexto>{b.descricao}</CelulaTexto>
-                  <CelulaNum>{brl.format(b.valor)}</CelulaNum>
-                </tr>
-              ))}
-            </Tabela>
+            <TabelaBens bens={ficha.bens} />
           </CardContent>
         </Card>
       )}
@@ -814,6 +834,16 @@ export function Candidato() {
           ))}
         </Tabela>
       </SecaoRecolhivel>
+
+      {dados.bens.length > 0 && (
+        <SecaoRecolhivel
+          titulo="Patrimônio declarado no registro"
+          resumo={brl.format(dados.bens.reduce((s, b) => s + b.valor, 0))}
+          descricao="Bens declarados pelo próprio candidato ao registrar a candidatura. Não é dinheiro de campanha — é o contexto patrimonial de quem gasta e arrecada acima."
+        >
+          <TabelaBens bens={dados.bens} />
+        </SecaoRecolhivel>
+      )}
     </div>
   );
 }
