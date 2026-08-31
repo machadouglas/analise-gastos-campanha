@@ -7,8 +7,11 @@ Tudo é derivado; recriar é sempre seguro.
 
 from src import db
 from src.analises import (
-    ADESAO_MINIMA_NORMA, MIN_LINHAS_NORMA, SQL_CATEGORIAS_SEM_NOTA_ESPERADA,
-    cond_documento_nao_fiscal, cond_sem_documento_fiscal,
+    ADESAO_MINIMA_NORMA,
+    MIN_LINHAS_NORMA,
+    SQL_CATEGORIAS_SEM_NOTA_ESPERADA,
+    cond_documento_nao_fiscal,
+    cond_sem_documento_fiscal,
 )
 from src.carga import filtro_placeholder
 
