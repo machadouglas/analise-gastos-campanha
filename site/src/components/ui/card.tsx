@@ -37,6 +37,11 @@ const CardDescription = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement
 );
 CardDescription.displayName = 'CardDescription';
 
+/**
+ * O padrão zera o topo porque o normal é vir logo abaixo de um CardHeader.
+ * Em cartão sem header, passe a padding NAS DUAS variantes (`p-5 sm:p-5`): só
+ * `p-5` perde para o `sm:pt-0` daqui e o conteúdo cola no topo do quadro.
+ */
 const CardContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
     <div ref={ref} className={cn('p-4 pt-0 sm:p-6 sm:pt-0', className)} {...props} />

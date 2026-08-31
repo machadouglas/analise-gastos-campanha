@@ -8,7 +8,7 @@ import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { CONDICAO_SEM_NOTA, escSQL } from '@/lib/consultas';
+import { SITUACAO_NAO_ENCONTRADA, condicaoSemNota, escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface CadastroRFB {
@@ -21,6 +21,8 @@ interface CadastroRFB {
   sede: string | null;
   capital: number | null;
   socios: string | null;
+  /** data da última consulta à base pública — data o aviso de CNPJ não encontrado */
+  consultadoEm: string | null;
 }
 
 interface Perfil {
@@ -86,14 +88,15 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
                             THEN SQ_CANDIDATO_FORNECEDOR END),
              COUNT(DISTINCT SQ_CANDIDATO), COUNT(DISTINCT SG_PARTIDO), COUNT(DISTINCT SG_UF),
              ROUND(SUM(valor), 2), COUNT(*),
-             -- mesma régua do backend (src/analises.py): sem nota fiscal, fora
-             -- das categorias em que a nota não é o documento próprio
-             ROUND(SUM(valor) FILTER (WHERE ${CONDICAO_SEM_NOTA}), 2)
+             -- mesma régua do backend (cond_sem_documento_fiscal em src/analises.py):
+             -- documento não fiscal + PJ + categoria em que a nota é a norma
+             ROUND(SUM(valor) FILTER (WHERE ${condicaoSemNota(tabelasDisponiveis.has('norma_documento'))}), 2)
       FROM despesas_atual WHERE ${w}`),
       tabelasDisponiveis.has('fornecedores')
         ? executarSQL(`
         SELECT razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal,
-               NULLIF(municipio || '/' || uf, '/') AS sede, capital_social, socios
+               NULLIF(municipio || '/' || uf, '/') AS sede, capital_social, socios,
+               STRFTIME(dt_consulta, '%d/%m/%Y')
         FROM fornecedores WHERE cnpj = '${esc(id)}'`)
         : Promise.resolve({ linhas: [] as unknown[][] }),
       executarSQL(`
@@ -159,6 +162,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
         sede: r[6] == null ? null : String(r[6]),
         capital: r[7] == null ? null : Number(r[7]),
         socios: r[8] ? String(r[8]) : null,
+        consultadoEm: r[9] == null ? null : String(r[9]),
       }
     : null;
 
@@ -176,7 +180,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
     flags.push(`recebe de ${num.format(nCandidatos)} candidatos de ${num.format(nPartidos)} partido${nPartidos > 1 ? 's' : ''}`);
   if (totalDoado > 0) flags.push(`também aparece como doador: ${brl.format(totalDoado)}`);
   if (/f.sica/i.test(String(l[1] ?? ''))) flags.push('pessoa física prestando serviços de campanha');
-  if (semNota > 0) flags.push(`${brl.format(semNota)} sem nota fiscal`);
+  if (semNota > 0) flags.push(`${brl.format(semNota)} sem documento fiscal`);
   if (valorRemovido > 0) flags.push(`${brl.format(valorRemovido)} em declarações removidas`);
   if (rfb?.abertura && rfb.abertura >= '2025-10-01')
     flags.push(`CNPJ aberto em ${dataBR(rfb.abertura)}, às vésperas da eleição`);
@@ -408,7 +412,7 @@ export function Fornecedor() {
           ['Itens declarados', num.format(p.itens)],
         ].map(([r, v]) => (
           <Card key={r}>
-            <CardContent className="p-5">
+            <CardContent className="p-5 sm:p-5">
               <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{r}</p>
               <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">{v}</p>
             </CardContent>
@@ -416,7 +420,32 @@ export function Fornecedor() {
         ))}
       </div>
 
-      {dados.rfb && (
+      {/* 404 na base pública é fato sobre o CADASTRO, não sobre o gasto: sem este
+          aviso o bloco abaixo renderizava só "Situação: NAO ENCONTRADO NA BASE
+          PUBLICA" em caixa alta, sob um título prometendo dados da Receita */}
+      {dados.rfb?.situacao === SITUACAO_NAO_ENCONTRADA ? (
+        <Secao
+          titulo="Cadastro na Receita Federal"
+          descricao="O que a consulta automática encontrou sobre este CNPJ."
+        >
+          <div className="rounded-xl border border-[#B45309]/40 bg-[#B45309]/5 p-5">
+            <p className="flex items-start gap-2 font-semibold text-[#7c3a06]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                CNPJ não encontrado na base pública da Receita Federal
+                {dados.rfb.consultadoEm && <> — consulta de {dados.rfb.consultadoEm}</>}.
+              </span>
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              O número acima está declarado ao TSE, mas não corresponde a nenhum cadastro na
+              base pública consultada. As explicações possíveis vão do trivial ao relevante:
+              erro de digitação na declaração, CNPJ aberto há poucos dias e ainda não
+              replicado, ou número que nunca existiu. O radar reconsulta periodicamente — se
+              o cadastro aparecer, os dados passam a ser exibidos aqui.
+            </p>
+          </div>
+        </Secao>
+      ) : dados.rfb && (
         <Secao titulo="Cadastro na Receita Federal" descricao="Dados públicos do CNPJ (via BrasilAPI), coletados pelo enriquecimento diário.">
           <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
             <CampoRFB rotulo="Razão social" valor={dados.rfb.razaoSocial} />
@@ -430,26 +459,6 @@ export function Fornecedor() {
               <CampoRFB rotulo="Sócios" valor={dados.rfb.socios} />
             </div>
           </div>
-        </Secao>
-      )}
-
-      {dados.removidas.length > 0 && (
-        <Secao titulo="Declarações removidas" descricao="Despesas com este fornecedor que estavam declaradas ao TSE e deixaram de estar. Pode ser correção legítima — é um indício, não uma acusação.">
-          <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Partido/UF' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
-            {dados.removidas.map((l, i) => (
-              <tr key={i}>
-                <td className="min-w-[13rem]">
-                  <Link to={`/candidato/${celula(l[6])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
-                    {celula(l[0])}
-                  </Link>
-                </td>
-                <td className="text-muted-foreground">{celula(l[1])}</td>
-                <CelulaTexto>{celula(l[2])}</CelulaTexto>
-                <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
-                <td>{celula(l[4])}</td><td>{celula(l[5])}</td>
-              </tr>
-            ))}
-          </Tabela>
         </Secao>
       )}
 
@@ -563,6 +572,26 @@ export function Fornecedor() {
           })}
         </Tabela>
       </SecaoRecolhivel>
+      {dados.removidas.length > 0 && (
+        <Secao titulo="Declarações removidas" descricao="Despesas com este fornecedor que estavam declaradas ao TSE e deixaram de estar. Pode ser correção legítima — é um indício, não uma acusação.">
+          <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Partido/UF' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
+            {dados.removidas.map((l, i) => (
+              <tr key={i}>
+                <td className="min-w-[13rem]">
+                  <Link to={`/candidato/${celula(l[6])}`} className="text-[#264E9B] underline-offset-4 hover:underline">
+                    {celula(l[0])}
+                  </Link>
+                </td>
+                <td className="text-muted-foreground">{celula(l[1])}</td>
+                <CelulaTexto>{celula(l[2])}</CelulaTexto>
+                <CelulaNum>{brl.format(Number(l[3] ?? 0))}</CelulaNum>
+                <td>{celula(l[4])}</td><td>{celula(l[5])}</td>
+              </tr>
+            ))}
+          </Tabela>
+        </Secao>
+      )}
+
     </div>
   );
 }

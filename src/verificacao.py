@@ -4,7 +4,7 @@ Rodam na rotina diária ANTES de publicar: se algo falhar, nada sobe.
 Cada checagem devolve (nome, ok, detalhe).
 """
 
-from src import db
+from src import analises, db
 
 TOLERANCIA = 0.01  # centavos de diferença por arredondamento
 QUEDA_MAXIMA_PCT = 20.0  # retrato encolher mais que isso = suspeita de arquivo truncado
@@ -145,6 +145,26 @@ def verificar(con) -> list[str]:
         """).fetchone()[0]
         checar("fundos públicos <= receitas por candidato", fundos_estourados == 0,
                f"{fundos_estourados} candidatos com fundo maior que a receita")
+
+    if _existe(con, "indicadores") and _existe(con, "norma_documento"):
+        # a régua do sem-documento-fiscal vive em analises.py e é aplicada dentro
+        # de uma CTE de indicadores: se as duas divergirem (alguém edita uma e
+        # esquece a outra), o número publicado mente sem quebrar nada
+        ind_sn, fonte_sn = con.execute(f"""
+            SELECT (SELECT ROUND(SUM(valor_sem_nota), 2) FROM indicadores),
+                   (SELECT ROUND(SUM(VR), 2) FROM v_despesas
+                    WHERE {analises.cond_sem_documento_fiscal()})
+        """).fetchone()
+        checar("indicadores sem documento fiscal == régua de analises.py",
+               abs((ind_sn or 0) - (fonte_sn or 0)) < TOLERANCIA,
+               f"indicadores={ind_sn} régua={fonte_sn}")
+        contradicao = con.execute(f"""
+            SELECT COUNT(*) FROM norma_documento
+            WHERE exige_documento
+              AND DS_ORIGEM_DESPESA IN ({analises.SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
+        """).fetchone()[0]
+        checar("norma_documento respeita o piso de categorias sem NF esperada",
+               contradicao == 0, f"{contradicao} categorias do piso marcadas como exigindo nota")
 
     if _existe(con, "rede"):
         rede, fonte = con.execute("""

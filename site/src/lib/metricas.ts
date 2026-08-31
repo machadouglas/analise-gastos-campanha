@@ -17,7 +17,7 @@ export const METRICAS: Record<string, MetricaInfo> = {
   total_receitas: { rotulo: 'Total arrecadado', formatar: (v) => brl.format(v) },
   razao_gasto_receita: { rotulo: 'Gasto ÷ arrecadado', formatar: vezes },
   pct_maior_fornecedor: { rotulo: '% no maior fornecedor', formatar: pct },
-  pct_sem_nota: { rotulo: '% sem nota fiscal', formatar: pct },
+  pct_sem_nota: { rotulo: '% sem documento fiscal', formatar: pct },
   pct_pessoa_fisica: { rotulo: '% pago a pessoas físicas', formatar: pct },
   pct_fundos_publicos: { rotulo: '% de dinheiro público', formatar: pct },
 };

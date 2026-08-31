@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CONDICAO_SEM_NOTA, FILTROS_VAZIOS, SINAIS_FILTRO,
+  FILTROS_VAZIOS, SINAIS_FILTRO, condicaoSemNota,
   condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlPainel,
   sqlRegistrosSemMovimento, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
 } from './consultas';
@@ -21,6 +21,27 @@ describe('montarWhere', () => {
   it('candidato numérico busca por número, texto busca por nome', () => {
     expect(montarWhere(f({ candidato: '12345' }))).toContain("NR_CANDIDATO = '12345'");
     expect(montarWhere(f({ candidato: 'FULANO' }))).toContain("NM_CANDIDATO ILIKE '%FULANO%'");
+  });
+
+  it('nome com várias palavras exige todas, em qualquer ordem (acha "JOSE DA SILVA")', () => {
+    const w = montarWhere(f({ candidato: 'JOSE SILVA' }));
+    expect(w).toContain("NM_CANDIDATO ILIKE '%JOSE%' AND NM_CANDIDATO ILIKE '%SILVA%'");
+  });
+
+  it('descrição tolera plural: "carro de som" acha "Publicidade por carros de som"', () => {
+    const w = montarWhere(f({ descricao: 'carro de som' }));
+    // cada palavra vira um LIKE exigido na MESMA coluna
+    expect(w).toContain("DS_ORIGEM_DESPESA ILIKE '%carro%'");
+    expect(w).toContain("DS_ORIGEM_DESPESA ILIKE '%som%'");
+    expect(w).not.toContain("ILIKE '%de%'"); // conectivo descartado
+    // e o plural do usuário também perde o "s" (4+ letras) para achar o singular
+    expect(montarWhere(f({ descricao: 'carros' }))).toContain("ILIKE '%carro%'");
+    // palavra curta não é mutilada
+    expect(montarWhere(f({ descricao: 'gás' }))).toContain("ILIKE '%gás%'");
+  });
+
+  it('nome próprio não perde o "s" final (SANTOS continua SANTOS)', () => {
+    expect(montarWhere(f({ fornecedor: 'SANTOS' }))).toContain("ILIKE '%SANTOS%'");
   });
 
   it('fornecedor com pontuação de CNPJ busca pelo prefixo só de dígitos', () => {
@@ -44,11 +65,23 @@ describe('montarWhere', () => {
 });
 
 describe('whereDaVisao', () => {
-  it('sem-nota exclui as categorias em que a nota não é esperada', () => {
+  it('sem-nota sem a norma publicada cai na lista fixa de categorias', () => {
     const { base, where } = whereDaVisao('sem-nota', FILTROS_VAZIOS, '', '');
     expect(base).toBe('despesas_atual');
-    expect(where).toContain(CONDICAO_SEM_NOTA);
+    expect(where).toContain(condicaoSemNota(false));
     expect(where).toContain('Despesas com pessoal');
+  });
+
+  it('sem-nota com a norma publicada corta pela categoria medida', () => {
+    const { where } = whereDaVisao('sem-nota', FILTROS_VAZIOS, '', '', true);
+    expect(where).toContain('FROM norma_documento WHERE exige_documento');
+    expect(where).not.toContain('Despesas com pessoal'); // a lista fixa sai de cena
+  });
+
+  it('a régua exige PJ e aceita cupom fiscal como documento fiscal', () => {
+    const c = condicaoSemNota(true);
+    expect(c).toContain('LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14');
+    expect(c).toContain("NOT ILIKE '%cupom fiscal%'");
   });
 
   it('removidas-receitas anda sobre a tabela de receitas', () => {
@@ -95,6 +128,20 @@ describe('sqlTabelaDaVisao', () => {
     expect(monta('removidas-receitas')).toContain('"Doador"');
     expect(monta('compartilhados')).toContain('COUNT(DISTINCT SQ_CANDIDATO)');
     expect(monta('sem-nota')).toContain('"Documento"');
+    expect(monta('ranking')).toContain('GROUP BY 1');
+    expect(monta('ranking')).toContain('ORDER BY "Total" DESC');
+  });
+
+  it('ranking agrega por candidato e junta a receita fora do WHERE ambíguo', () => {
+    const { base, where } = whereDaVisao('ranking', f({ uf: 'MT', descricao: 'carro de som' }), '', '');
+    const sql = sqlTabelaDaVisao('ranking', base, where, FILTROS_VAZIOS, '', 0, 50);
+    // o recorte (UF + descrição) filtra a agregação de despesas...
+    expect(sql).toContain("SG_UF = 'MT'");
+    expect(sql).toContain("DS_DESPESA ILIKE '%carro%'");
+    // ...e a receita entra por CTE separada, sem repetir o WHERE nas duas tabelas
+    expect(sql).toContain('FROM receitas_atual GROUP BY 1');
+    expect(sql.match(/ILIKE '%carro%'/g)).toHaveLength(2); // DS_DESPESA e DS_ORIGEM_DESPESA
+    expect(sql).toContain('"_sq"');
   });
 
   it('fora-da-curva sem categoria vira cards (sem SQL de tabela)', () => {

@@ -24,6 +24,16 @@ def _registros(con, sql) -> list[dict]:
 # acima do grupo merece pergunta (arrecadar muito, por si, não é indício).
 # A razão gasto÷arrecadado só é sinal quando > 1: quem gastou MENOS do que
 # arrecadou não vira sinal só porque o p95 do grupo é ~0 no início da campanha.
+# Métricas percentuais têm teto: quando 5% ou mais do grupo está em 100%, o p95
+# satura no teto e "estritamente acima" vira impossível — o sinal nunca dispara
+# (era o caso de pct_sem_nota em TODOS os grupos). Nesses casos, estar no teto é
+# o máximo que existe e conta como sinal.
+TETO_PERCENTUAL = 100.0
+CONDICAO_SINAL = (
+    "(r.valor > r.p95 OR (r.metrica LIKE 'pct_%' "
+    f"AND r.p95 >= {TETO_PERCENTUAL} AND r.valor >= {TETO_PERCENTUAL}))"
+)
+
 METRICAS_SINAL = [
     ("total_contratado", "total_contratado", "total_contratado > 0"),
     ("razao_gasto_receita", "razao_gasto_receita", "razao_gasto_receita > 1"),
@@ -48,7 +58,7 @@ def _tem_metadados_foto(con) -> bool:
 
 
 def _fora_da_curva(con, limite: int = 10) -> list[dict]:
-    """Candidatos com mais métricas estritamente acima do p95 do próprio grupo
+    """Candidatos com mais métricas acima do p95 do próprio grupo
     de comparação (cargo×UF; nacional quando o grupo local é pequeno).
     Cada sinal carrega o valor, a mediana e o p95 do grupo — fatos conferíveis."""
     if not (_existe(con, "indicadores") and _existe(con, "benchmark_indicadores")):
@@ -84,7 +94,7 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
                r.metrica, ROUND(r.valor, 2) AS valor, r.mediana, r.p95, r.grupo_n, r.grupo_ambito
         FROM ref r JOIN indicadores i USING (SQ_CANDIDATO)
         {foto}
-        WHERE r.p95 IS NOT NULL AND r.valor > r.p95
+        WHERE r.p95 IS NOT NULL AND {CONDICAO_SINAL}
         ORDER BY r.SQ_CANDIDATO
     """).df()
     if df.empty:

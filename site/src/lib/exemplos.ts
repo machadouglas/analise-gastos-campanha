@@ -118,6 +118,38 @@ LIMIT 30`,
         sql: SQL_DOADOR_FORNECEDOR,
       },
       {
+        rotulo: 'Nota fiscal declarada sem número',
+        sql: `-- documento fiscal cujo número não tem um só dígito (ex.: "SN"):
+-- a nota é afirmada, mas não há como localizá-la para conferir.
+SELECT NM_CANDIDATO, SG_PARTIDO || '/' || SG_UF AS partido_uf,
+       NM_FORNECEDOR, NR_DOCUMENTO, DS_ORIGEM_DESPESA,
+       COUNT(*) AS notas, ROUND(SUM(valor), 2) AS total
+FROM despesas_atual
+WHERE (DS_TIPO_DOCUMENTO ILIKE '%nota fiscal%' OR DS_TIPO_DOCUMENTO ILIKE '%cupom fiscal%')
+  AND NOT regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')
+GROUP BY ALL
+ORDER BY total DESC
+LIMIT 30`,
+      },
+      {
+        rotulo: 'Mesmo número de nota em candidatos diferentes',
+        sql: `-- numeração de nota é sequencial por emitente: o mesmo fornecedor declarar
+-- o MESMO número para candidatos diferentes sugere nota reaproveitada — ou erro
+-- de digitação. Monitor contínuo: vem vazio enquanto ninguém repetir um número.
+SELECT NR_CPF_CNPJ_FORNECEDOR, ANY_VALUE(NM_FORNECEDOR) AS fornecedor,
+       NR_DOCUMENTO, COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
+       STRING_AGG(DISTINCT NM_CANDIDATO, ' | ') AS quem,
+       ROUND(SUM(valor), 2) AS total
+FROM despesas_atual
+WHERE (DS_TIPO_DOCUMENTO ILIKE '%nota fiscal%' OR DS_TIPO_DOCUMENTO ILIKE '%cupom fiscal%')
+  AND regexp_full_match(COALESCE(NR_DOCUMENTO, ''), '[0-9]{3,}')
+  AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
+GROUP BY 1, 3
+HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1
+ORDER BY candidatos DESC, total DESC
+LIMIT 30`,
+      },
+      {
         rotulo: 'Situação cadastral alterada',
         sql: `-- fornecedores cujo CNPJ mudou de situação na Receita entre as nossas consultas
 -- (ex.: ATIVA que virou BAIXADA depois de receber da campanha).

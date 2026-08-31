@@ -63,6 +63,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 - `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
 - `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
 - `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal quando > 1×) do site e do `resumo.json`.
+- `norma_documento` — por DS_ORIGEM_DESPESA: quanto do valor é declarado com documento fiscal (só entre fornecedores PJ) e `exige_documento` (a categoria tem nota como norma). É a régua do indicador `valor_sem_nota`: sem ela, marcar "sem nota" pegava metade do dinheiro do país, porque em impulsionamento/honorários/militância quase ninguém emite nota. Categoria com menos de 30 linhas cai na lista fixa de `analises.py` (que é sempre o piso).
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
 - `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
 - `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário). Pendentes novos primeiro (maiores valores); a folga do limite reconsulta os cadastros mais antigos (`dt_consulta`, vencidos há 30+ dias, ciclo de ~30 dias pela base). Mudança de situação cadastral preserva `situacao_anterior`/`dt_situacao_anterior` (base da futura red flag "baixado após receber"). CNPJ 404 vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (reconsultado só no ciclo, como os demais).
@@ -85,9 +86,11 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 | 6 | Fornecedor pessoa física | serviços relevantes prestados por PF |
 | 7 | Valores redondos/repetidos | notas fracionadas (indicador exige mesmo fornecedor + 3 notas distintas) |
 | 8 | Fornecedor que é candidato | negócio entre candidatos |
-| 9 | Despesas sem documento fiscal | DS_TIPO_DOCUMENTO vazio/recibo, fora das categorias sem NF esperada (transferências, tributos, aluguel de imóvel, pessoal) |
+| 9 | Despesas sem documento fiscal | documento não fiscal (nem nota nem cupom) + fornecedor PJ + categoria em que a nota é a norma (`norma_documento`); a lista fixa de categorias sem NF esperada é o piso |
 | 10 | CNPJ recém-aberto (via `enriquecer`) | empresa criada às vésperas da eleição (reportar sempre com a cobertura: fornecedores_consultados/fornecedores_cnpj) |
 | 11 | Fora da curva do grupo | métrica acima do p95 dos candidatos ao mesmo cargo na mesma UF (`benchmark_indicadores`) |
+| 12 | Nota fiscal sem número | documento fiscal cujo `NR_DOCUMENTO` não tem um dígito (ex.: 'SN') — nota afirmada e não localizável |
+| 13 | Mesmo nº de nota em candidatos diferentes | mesmo fornecedor declarando o mesmo `NR_DOCUMENTO` (3+ dígitos) para 2+ candidatos — nota reaproveitada ou erro |
 
 Para análises novas, prefira `gastos.py sql` — e se a consulta for útil de forma recorrente, adicione-a em `src/analises.py`.
 
@@ -109,7 +112,7 @@ SELECT * FROM 'https://github.com/machadouglas/analise-gastos-campanha/releases/
 WHERE NR_CANDIDATO = '12345'
 ```
 
-Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — o site prefere estes e cai para o histórico se faltarem), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`, mesma lógica de preferência), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `bens.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
+Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — o site prefere estes e cai para o histórico se faltarem), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`, mesma lógica de preferência), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `bens.parquet`, `norma_documento.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
 
 ## Site público (`site/`)
 
@@ -132,7 +135,9 @@ graciosa se algum ainda não foi publicado.
 
 Regras espelhadas do backend vivem centralizadas em `site/src/lib/consultas.ts`
 (categorias sem NF ↔ `src/analises.py`; SINAIS_CTE/SINAIS_FILTRO ↔ `METRICAS_SINAL` em
-`src/resumo.py`) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
+`src/resumo.py`; SITUACAO_NAO_ENCONTRADA ↔ `SITUACAO_NAO_ENCONTRADO` em `src/cnpj.py` —
+a lápide de CNPJ que a Receita respondeu 404, que vira aviso na ficha do fornecedor e
+marca a linha na tabela de fornecedores do candidato) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
 `despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);
 `tests/test_sincronia_site.py` cobre essa sincronia — remoções NUNCA se calculam "na unha"
 nas páginas, sempre pelas views. Componentes de visualização: `components/app/graficos.tsx`

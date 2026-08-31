@@ -58,6 +58,15 @@ export function Metodologia() {
           notas ao receber uma retransmissão, o fato (candidato, fornecedor, descrição, valor e
           data) continua declarado — e não contamos como remoção.
         </p>
+        <p>
+          Por que isso importa — e até onde. A Justiça Eleitoral trata a omissão de informação na
+          prestação de contas como o caminho típico de ocultar contabilidade paralela (o “caixa 2”,
+          art. 30-A da Lei 9.504/97), e classifica como falha grave a divergência não explicada
+          entre o que foi declarado antes e depois de uma retificadora. Mas retificar é legítimo e
+          corriqueiro: quando a correção é justificada, sem má-fé e sem prejuízo à fiscalização, os
+          tribunais a tratam como falha formal ou simples ressalva. Por isso uma remoção isolada é
+          só um ponto de partida — o que pesa é o volume, o valor e a explicação.
+        </p>
       </Bloco>
 
       <Bloco titulo="O que as palavras significam">
@@ -83,14 +92,19 @@ export function Metodologia() {
           quando o grupo local tem menos de 20 candidatos). Nunca comparamos um candidato a
           presidente com um a deputado estadual, nem um número absoluto com um limiar inventado —
           cada sinal informa o valor do candidato, a mediana e o p95 do grupo, todos conferíveis
-          na página Consultar.
+          na página Consultar. Uma exceção necessária: métricas em porcentagem têm teto de 100%, e
+          quando um vigésimo do grupo já está no teto o próprio p95 vai a 100 — aí "acima do p95"
+          seria impossível por definição, e passamos a contar quem está <em>no</em> teto.
         </p>
         <p>
           Detalhes de cálculo que evitam falsos positivos: <strong>preços</strong> são comparados
           por <em>nota</em> (soma dos itens de uma mesma nota), não por item, para que notas
-          fatiadas não distorçam a régua; <strong>"sem nota fiscal"</strong> exclui categorias em
-          que a nota não é o documento próprio (transferências, tributos, tarifas, aluguel de
-          imóveis, pessoal); <strong>valores repetidos</strong> só contam quando aparecem em 3+
+          fatiadas não distorçam a régua; <strong>"sem documento fiscal"</strong> só marca gasto com
+          empresa, sem nota nem cupom fiscal, em tipo de gasto que costuma ter documento fiscal —
+          a régua sai dos próprios dados (categoria em que menos da metade do valor tem nota,
+          como impulsionamento ou honorários, não vira indício), e categorias em que a nota nunca
+          é o documento próprio (transferências, tributos, tarifas, aluguel, pessoal) ficam
+          sempre de fora; <strong>valores repetidos</strong> só contam quando aparecem em 3+
           notas distintas <em>do mesmo fornecedor</em>; a razão{' '}
           <strong>gasto ÷ arrecadado</strong> só conta como sinal quando o candidato contratou
           mais do que declarou arrecadar (razão acima de 1×) — no início da campanha o p95 de
@@ -103,7 +117,11 @@ export function Metodologia() {
           já foi olhado. O cadastro também é <strong>reconsultado continuamente</strong> (os
           registros mais antigos primeiro, num ciclo de ~30 dias): se a situação cadastral de um
           fornecedor mudar — uma empresa ativa que é baixada, por exemplo —, a situação anterior e
-          a data da mudança ficam registradas nos dados publicados.
+          a data da mudança ficam registradas nos dados publicados. Quando o CNPJ declarado ao TSE
+          não corresponde a <strong>nenhum cadastro</strong> na base pública consultada, a ficha do
+          fornecedor diz isso explicitamente, com a data da consulta: pode ser erro de digitação na
+          declaração, empresa aberta há poucos dias e ainda não replicada, ou número que nunca
+          existiu — e o radar reconsulta periodicamente.
         </p>
       </Bloco>
 

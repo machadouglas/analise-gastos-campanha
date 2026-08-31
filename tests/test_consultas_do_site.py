@@ -95,6 +95,7 @@ def con():
 # de situação cadastral entre duas consultas à Receita). Vazio é resposta
 # legítima — o SQL declara isso num comentário para o visitante.
 MONITORES = {"Situação cadastral alterada",
+              "Mesmo número de nota em candidatos diferentes",
              "Algum fornecedor teve o CNPJ baixado na Receita depois de começar a receber da campanha?"}
 
 

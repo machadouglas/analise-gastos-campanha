@@ -8,6 +8,7 @@ indícios para investigação, nunca prova de irregularidade.
 # Categorias em que documento fiscal não é esperado: transferências entre
 # campanhas, tributos e tarifas; locação de imóvel (não é serviço — não há NF,
 # o documento próprio é o recibo de aluguel); pessoal (RPA/folha, sem NF).
+# Piso de segurança: valem SEMPRE, mesmo que a norma medida diga o contrário.
 CATEGORIAS_SEM_NOTA_ESPERADA = (
     "Doações financeiras a outros candidatos/partidos",
     "Encargos financeiros, taxas bancárias e/ou op. cartão de crédito",
@@ -17,6 +18,53 @@ CATEGORIAS_SEM_NOTA_ESPERADA = (
     "Despesas com pessoal",
 )
 SQL_CATEGORIAS_SEM_NOTA_ESPERADA = ", ".join(f"'{c}'" for c in CATEGORIAS_SEM_NOTA_ESPERADA)
+
+# Cupom fiscal (NFC-e/ECF) comprova a despesa perante o fisco tanto quanto a
+# nota — a régua antiga o marcava só porque o texto não contém "nota fiscal".
+DOCUMENTOS_FISCAIS = ("nota fiscal", "cupom fiscal")
+
+# A norma é medida por categoria: em impulsionamento, honorários advocatícios ou
+# militância quase ninguém tem nota (plataforma estrangeira e autônomo não
+# emitem NF brasileira), e marcar todo mundo não separa ninguém. Só é indício
+# não ter documento fiscal ONDE O TIPO DE GASTO COSTUMA TER — daí o limiar.
+ADESAO_MINIMA_NORMA = 50.0   # % do valor da categoria declarado com doc. fiscal
+MIN_LINHAS_NORMA = 30        # amostra mínima para a categoria ter norma medida
+
+
+def cond_documento_nao_fiscal(alias: str = "") -> str:
+    """Documento declarado que não comprova a despesa perante o fisco."""
+    p = f"{alias}." if alias else ""
+    faltantes = " AND ".join(
+        f"{p}DS_TIPO_DOCUMENTO NOT ILIKE '%{d}%'" for d in DOCUMENTOS_FISCAIS
+    )
+    return (
+        f"({p}DS_TIPO_DOCUMENTO IS NULL OR {p}DS_TIPO_DOCUMENTO = '#NULO'"
+        f" OR ({faltantes}))"
+    )
+
+
+def cond_sem_documento_fiscal(alias: str = "", com_norma: bool = True) -> str:
+    """Régua do indicador `valor_sem_nota`, em três partes:
+
+    1. o documento declarado não é fiscal (nota ou cupom);
+    2. o fornecedor é PJ — pessoa física não emite nota, e recibo/RPA é o
+       documento correto dela (marcar PF seria ruído garantido);
+    3. o tipo de gasto costuma ter documento fiscal — pela norma medida em
+       `norma_documento` (com_norma) ou, sem ela, pela lista fixa acima.
+       Categoria com amostra pequena demais para medir norma cai na lista fixa.
+    """
+    p = f"{alias}." if alias else ""
+    categoria = (
+        f"{p}DS_ORIGEM_DESPESA IN (SELECT DS_ORIGEM_DESPESA FROM norma_documento"
+        " WHERE exige_documento)"
+        if com_norma
+        else f"{p}DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})"
+    )
+    return (
+        f"{cond_documento_nao_fiscal(alias)}"
+        f" AND LENGTH({p}NR_CPF_CNPJ_FORNECEDOR) = 14"
+        f" AND {categoria}"
+    )
 
 
 def montar_filtro(numeros=None, uf=None, alias="") -> str:
@@ -150,16 +198,50 @@ def executar_todas(con, numeros=None, uf=None):
       GROUP BY ALL ORDER BY total DESC
       """)
 
-    q("Despesas sem nota fiscal",
-      "Documentos diferentes de nota fiscal (ou ausentes) têm menor rastreabilidade. "
-      "Categorias sem documento fiscal esperado (transferências, tributos, tarifas) ficam de fora.",
+    tem_norma = bool(con.execute(
+        "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'norma_documento'"
+    ).fetchone()[0])
+
+    q("Despesas sem documento fiscal",
+      "Gasto com PJ, documentado sem nota nem cupom fiscal, em tipo de gasto que "
+      "costuma ter documento fiscal. Categorias em que a nota não é o documento "
+      "próprio (transferências, tributos, tarifas, pessoal, aluguel) ficam de fora, "
+      "assim como as categorias em que quase ninguém emite nota.",
       f"""
-      SELECT NM_CANDIDATO, DS_TIPO_DOCUMENTO, COUNT(*) AS notas, ROUND(SUM(VR),2) AS total
+      SELECT NM_CANDIDATO, DS_ORIGEM_DESPESA, DS_TIPO_DOCUMENTO,
+             COUNT(*) AS notas, ROUND(SUM(VR),2) AS total
       FROM v_despesas WHERE {f}
-        AND (DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO IN ('#NULO')
-             OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%')
-        AND DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
+        AND {cond_sem_documento_fiscal(com_norma=tem_norma)}
       GROUP BY ALL ORDER BY total DESC
+      """)
+
+    q("Nota fiscal declarada sem número",
+      "Documento fiscal cujo número não tem um só dígito (ex.: 'SN'). A nota é "
+      "afirmada, mas não dá para localizar — sem número não há o que conferir.",
+      f"""
+      SELECT NM_CANDIDATO, NM_FORNECEDOR, NR_DOCUMENTO, DS_ORIGEM_DESPESA,
+             COUNT(*) AS notas, ROUND(SUM(VR),2) AS total
+      FROM v_despesas WHERE {f}
+        AND NOT {cond_documento_nao_fiscal()}
+        AND NOT regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')
+      GROUP BY ALL ORDER BY total DESC
+      """)
+
+    q("Mesmo número de nota em candidatos diferentes",
+      "O mesmo fornecedor declarou o MESMO número de documento fiscal para mais "
+      "de um candidato. Numeração de nota é sequencial por emitente: repetir "
+      "entre campanhas sugere nota reaproveitada — ou erro de digitação.",
+      f"""
+      SELECT NR_CPF_CNPJ_FORNECEDOR, ANY_VALUE(NM_FORNECEDOR) AS fornecedor,
+             NR_DOCUMENTO, COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
+             STRING_AGG(DISTINCT NM_CANDIDATO, ' | ') AS quem,
+             ROUND(SUM(VR),2) AS total
+      FROM v_despesas WHERE {f}
+        AND NOT {cond_documento_nao_fiscal()}
+        AND regexp_full_match(COALESCE(NR_DOCUMENTO, ''), '[0-9]{{3,}}')
+        AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
+      GROUP BY 1, 3 HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1
+      ORDER BY candidatos DESC, total DESC
       """)
 
     return resultados

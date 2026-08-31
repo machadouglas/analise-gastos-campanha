@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowRight, Bot, Building2, CheckCircle2, EyeOff, Megaphone,
-  Scale, Search, Wallet, type LucideIcon,
+  AlertTriangle, ArrowRight, Bot, EyeOff, Megaphone, Search, Wallet,
+  type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
@@ -49,28 +49,10 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
     href: '/explorar',
   },
   {
-    icone: Building2,
-    pergunta: 'Que empresas recebem de vários candidatos ao mesmo tempo?',
-    detalhe: 'Fornecedores compartilhados podem ser mercado consolidado — ou campanhas casadas. Filtre por UF, cargo ou partido.',
-    href: '/explorar?visao=compartilhados',
-  },
-  {
     icone: Megaphone,
     pergunta: 'Quanto se gasta com carro de som no seu estado?',
     detalhe: 'Filtre qualquer tipo de gasto por UF, cargo ou partido.',
     href: '/explorar?descricao=carro%20de%20som',
-  },
-  {
-    icone: Scale,
-    pergunta: 'Quem está fora da curva do próprio grupo?',
-    detalhe: 'Cada candidato comparado aos pares do mesmo cargo e estado — gasto, concentração, documentação. Refine por UF e partido.',
-    href: '/explorar?visao=fora-da-curva',
-  },
-  {
-    icone: EyeOff,
-    pergunta: 'Alguém removeu declarações que já tinha feito?',
-    detalhe: 'O TSE não mostra o passado; o radar fotografa todo dia e guarda o rastro. Explore todas as remoções, com filtros.',
-    href: '/explorar?visao=removidas',
   },
   {
     icone: Bot,
@@ -121,19 +103,24 @@ function Cartao({ rotulo, valor, indice, serie }: {
 }) {
   return (
     <div className="animar-entrada" style={{ animationDelay: `${indice * 0.06}s` }}>
-      <Card>
-        <CardContent className="p-5">
+      {/* h-full iguala a altura na linha; o rótulo fica ancorado no topo (como
+          nos vizinhos) e o miolo — valor e sparkline — se centra no que sobra,
+          senão o cartão sem sparkline fica com o número colado no rótulo */}
+      <Card className="h-full">
+        <CardContent className="flex h-full flex-col p-5 sm:p-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             {rotulo}
           </p>
-          <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">
-            {valor}
-          </p>
-          {serie && serie.length >= 2 && (
-            <div className="mt-2" title="evolução por dia de extração">
-              <Sparkline valores={serie} />
-            </div>
-          )}
+          <div className="flex flex-1 flex-col justify-center">
+            <p className="text-2xl font-bold tracking-tight text-[#10244A]">
+              {valor}
+            </p>
+            {serie && serie.length >= 2 && (
+              <div className="mt-2" title="evolução por dia de extração">
+                <Sparkline valores={serie} />
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -268,8 +255,12 @@ export function Home() {
   const t = resumo.totais;
   const m = resumo.mudancas;
   // a Home mostra só os maiores casos — o trabalho de busca é do Explorar
-  const removidas = (resumo.despesas_removidas ?? []).slice(0, 5);
-  const removidasReceitas = (resumo.receitas_removidas ?? []).slice(0, 5);
+  const removidas = (resumo.despesas_removidas ?? []).slice(0, 3);
+  const removidasReceitas = (resumo.receitas_removidas ?? []).slice(0, 3);
+  // remoção é indício raro e contextual (a Justiça Eleitoral admite retificação):
+  // a seção só ocupa espaço na Home quando há algo para mostrar — no Explorar e na
+  // ficha do candidato o rastro continua sempre disponível
+  const temRemocoes = removidas.length > 0 || removidasReceitas.length > 0;
   // quando um único lançamento domina o total, o número cheio assusta sem
   // informar — contexto explícito é a linha editorial do site
   const notaDominancia = (maiores: DespesaResumo[], total: number | undefined) => {
@@ -301,16 +292,14 @@ export function Home() {
           </span>
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-          O TSE publica apenas o estado atual das contas de campanha. Este radar fotografa as
-          declarações todos os dias e mostra o que foi declarado, alterado e{' '}
-          <strong className="text-foreground">removido</strong>.
+          Quanto cada candidatura declarou, com quem gastou e quem destoa dos concorrentes.
+          O TSE mostra só o estado atual das contas; o radar fotografa todo dia e guarda o
+          que mudou.
         </p>
         <BuscaHero />
       </section>
 
-      <PerguntasSection />
-
-      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Cartao indice={0} rotulo="Receitas declaradas" valor={brl.format(t.total_receitas)}
                 serie={(resumo.serie_nacional ?? []).map((s) => s.receitas)} />
         <Cartao indice={1} rotulo="Despesas contratadas" valor={brl.format(t.total_contratado)}
@@ -320,73 +309,7 @@ export function Home() {
         <Cartao indice={3} rotulo="Candidaturas registradas" valor={num.format(t.candidaturas_registradas)} />
       </div>
 
-      <Secao
-        id="mudancas"
-        eyebrow="O diferencial"
-        titulo="Declarações removidas ou alteradas"
-        descricao="Quem apaga ou edita uma declaração no TSE apaga também o rastro público. Abaixo, só as maiores de cada lado — a busca completa, com filtros por UF, cargo, partido ou candidato, é sua no Explorar. Uma remoção pode ser correção legítima — é um indício para investigar, nunca uma acusação."
-        verTudo={{
-          href: '/explorar?visao=removidas',
-          rotulo: m
-            ? `Explorar as ${num.format(m.despesas_removidas_qtd)} despesas removidas com filtros`
-            : 'Explorar todas as remoções com filtros',
-        }}
-      >
-        {removidas.length === 0 && removidasReceitas.length === 0 ? (
-          <Card>
-            <CardContent className="flex items-center gap-3 p-5 text-sm text-muted-foreground">
-              <CheckCircle2 className="h-5 w-5 shrink-0 text-[#264E9B]" />
-              Nenhuma declaração removida detectada até a extração de {dataBR(resumo.gerado_em)}.
-              {resumo.primeira_extracao &&
-                ' (Primeira fotografia da série — as comparações começam na próxima extração.)'}
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-6">
-            {removidas.length > 0 && (
-              <div>
-                <p className="mb-3 flex items-start gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  {/* span único: sem ele os dois trechos viram colunas de um
-                      flex e no celular cada uma quebra em duas linhas */}
-                  <span>
-                    {m
-                      ? <>Despesas removidas: {num.format(m.despesas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span></>
-                      : <>Despesas removidas — as {removidas.length} maiores:</>}
-                  </span>
-                </p>
-                {notaDominancia(removidas, m?.despesas_removidas_valor)}
-                <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
-              </div>
-            )}
-            {removidasReceitas.length > 0 && (
-              <div>
-                <p className="mb-3 flex items-start gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  {/* span único: sem ele os dois trechos viram colunas de um
-                      flex e no celular cada uma quebra em duas linhas */}
-                  <span>
-                    {m
-                      ? <>Receitas removidas: {num.format(m.receitas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span></>
-                      : <>Receitas removidas — as {removidasReceitas.length} maiores:</>}
-                  </span>
-                </p>
-                {notaDominancia(removidasReceitas, m?.receitas_removidas_valor)}
-                <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
-                <Link
-                  to="/explorar?visao=removidas-receitas"
-                  className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-[#264E9B] underline-offset-4 hover:underline"
-                >
-                  {m
-                    ? `Explorar as ${num.format(m.receitas_removidas_qtd)} receitas removidas com filtros`
-                    : 'Explorar todas as receitas removidas com filtros'}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </div>
-            )}
-          </div>
-        )}
-      </Secao>
+      <PerguntasSection />
 
       {(resumo.fora_da_curva ?? []).length > 0 && (
         <Secao
@@ -539,12 +462,69 @@ export function Home() {
         </Tabela>
       </Secao>
 
+      {temRemocoes && (
+        <Secao
+          id="mudancas"
+          eyebrow="Rastro"
+          titulo="Declarações removidas"
+          descricao="O TSE publica só o estado atual: quem apaga uma declaração apaga o rastro público. Estas o radar fotografou antes de sumirem. Corrigir a prestação é legítimo e comum — a Justiça Eleitoral só trata a divergência como falha grave quando é relevante e não explicada. Aqui é ponto de partida para investigar, nunca acusação."
+          verTudo={{
+            href: '/explorar?visao=removidas',
+            rotulo: m
+              ? `Explorar as ${num.format(m.despesas_removidas_qtd)} despesas removidas com filtros`
+              : 'Explorar todas as remoções com filtros',
+          }}
+        >
+          <div className="space-y-6">
+            {removidas.length > 0 && (
+              <div>
+                <p className="mb-3 flex items-start gap-2 text-sm text-muted-foreground">
+                  <EyeOff className="mt-0.5 h-4 w-4 shrink-0" />
+                  {/* span único: sem ele os dois trechos viram colunas de um
+                      flex e no celular cada uma quebra em duas linhas */}
+                  <span>
+                    {m
+                      ? <><strong className="font-semibold text-foreground">Despesas removidas: {num.format(m.despesas_removidas_qtd)}</strong> somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</>
+                      : <><strong className="font-semibold text-foreground">Despesas removidas</strong> — as {removidas.length} maiores:</>}
+                  </span>
+                </p>
+                {notaDominancia(removidas, m?.despesas_removidas_valor)}
+                <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
+              </div>
+            )}
+            {removidasReceitas.length > 0 && (
+              <div>
+                <p className="mb-3 flex items-start gap-2 text-sm text-muted-foreground">
+                  <EyeOff className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    {m
+                      ? <><strong className="font-semibold text-foreground">Receitas removidas: {num.format(m.receitas_removidas_qtd)}</strong> somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</>
+                      : <><strong className="font-semibold text-foreground">Receitas removidas</strong> — as {removidasReceitas.length} maiores:</>}
+                  </span>
+                </p>
+                {notaDominancia(removidasReceitas, m?.receitas_removidas_valor)}
+                <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
+                <Link
+                  to="/explorar?visao=removidas-receitas"
+                  className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+                >
+                  {m
+                    ? `Explorar as ${num.format(m.receitas_removidas_qtd)} receitas removidas com filtros`
+                    : 'Explorar todas as receitas removidas com filtros'}
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
+            )}
+          </div>
+        </Secao>
+      )}
+
       <Secao
         id="ranking"
         eyebrow="Ranking"
         titulo="Quem mais contratou até agora"
         descricao="Despesa contratada × receita declarada. Contratar muito acima do que declarou arrecadar merece atenção — a conta precisa fechar até a prestação final."
-        verTudo={{ href: '/explorar', rotulo: 'Explorar todos os gastos' }}
+        verTudo={{ href: '/explorar?visao=ranking', rotulo: 'Explorar o ranking completo com filtros' }}
       >
         <Tabela
           colunas={[
