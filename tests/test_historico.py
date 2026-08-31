@@ -237,6 +237,52 @@ def test_removidas_e_alteradas_nunca_se_sobrepoem():
     assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 1
 
 
+def test_views_de_mudanca_nascem_sem_precisar_de_carga_nova():
+    """Regressão de produção (31/08/2026): o TSE respondeu 304 o dia inteiro, a
+    carga foi pulada e com ela o `versionar` — que era o único lugar que criava
+    as views. A view introduzida naquele mesmo deploy não existia no banco, a
+    exportação a pulou com um aviso e a seção nova sumiu do site sem erro
+    nenhum. View acompanha a versão do CÓDIGO, não a do TSE."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "CARRO DE SOM", "50000,00", 1)])
+    dia(con, "21/08/2026", [("1", "CARRO DE SOM", "5000,00", 1)])
+    tabela = "despesas_contratadas"
+    esperadas = [f"v_removidas_{tabela}", f"v_alteradas_{tabela}", f"v_alteradas_pares_{tabela}"]
+    for v in esperadas:
+        con.execute(f"DROP VIEW {v}")  # simula o deploy que trouxe a view nova
+
+    historico.criar_views_mudancas(con)  # sem versionar: é o dia do 304
+
+    for v in esperadas:
+        assert contar(con, f"SELECT COUNT(*) FROM {v}") >= 0, f"{v} não foi recriada"
+    assert contar(con, f"SELECT COUNT(*) FROM v_alteradas_pares_{tabela}") == 1
+
+
+def test_rotina_cria_as_views_fora_do_caminho_da_carga():
+    """A chamada TEM de estar fora do `if algum_novo` — se voltar para dentro, o
+    bug acima ressuscita, e nenhum teste de dados o pegaria: as views antigas
+    continuam lá, só a nova falta."""
+    import ast
+
+    fonte = (Path(__file__).parent.parent / "gastos.py").read_text(encoding="utf-8")
+    rotina = next(n for n in ast.walk(ast.parse(fonte))
+                  if isinstance(n, ast.FunctionDef) and n.name == "cmd_rotina")
+    dentro_de_if = {
+        id(no) for ramo in ast.walk(rotina) if isinstance(ramo, ast.If)
+        for no in ast.walk(ramo)
+    }
+    chamadas = [
+        no for no in ast.walk(rotina)
+        if isinstance(no, ast.Call) and isinstance(no.func, ast.Attribute)
+        and no.func.attr == "criar_views_mudancas"
+    ]
+    assert chamadas, "cmd_rotina não cria as views de mudança"
+    assert any(id(c) not in dentro_de_if for c in chamadas), (
+        "criar_views_mudancas só é chamada dentro de um if — no dia em que o TSE "
+        "responde 304 as views novas não seriam criadas"
+    )
+
+
 def test_registro_de_extracoes_cobre_todos_os_dias():
     con = montar_banco()
     dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1)])

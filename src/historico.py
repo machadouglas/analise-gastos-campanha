@@ -147,7 +147,7 @@ def versionar(con) -> None:
         print(f"[historico] {hist} @ {dt}: {novas} conteúdos novos, {removidas} sem correspondência atual")
 
     _registrar_extracao(con)
-    _criar_views_mudancas(con)
+    criar_views_mudancas(con)
 
 
 def _registrar_extracao(con) -> None:
@@ -198,7 +198,17 @@ def _condicao_edicao(tabela: str) -> str:
     return f"{ident} AND ({iguais}) = {len(variaveis) - 1}"
 
 
-def _criar_views_mudancas(con) -> None:
+def criar_views_mudancas(con) -> None:
+    """(Re)cria v_removidas_*, v_alteradas_* e v_alteradas_pares_*.
+
+    Pública, e chamada pela `rotina` FORA do caminho da carga: view é código,
+    não dado, e precisa acompanhar a versão do código — não a do TSE. Quando o
+    CDN responde 304 o dia inteiro, `versionar` não roda; uma view introduzida
+    por um deploy recente simplesmente não existiria no banco. E o estrago é
+    silencioso: a exportação não quebra, pula o arquivo com um aviso e publica o
+    resto, então a seção nova some do site sem erro nenhum (aconteceu em
+    31/08/2026 com `v_alteradas_pares_*`). Recriar é barato e idempotente.
+    """
     for tabela in TABELAS:
         hist = f"hist_{tabela}"
         if not con.execute(
