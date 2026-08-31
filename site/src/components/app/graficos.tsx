@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { brl } from '@/lib/format';
 
 /* Gráficos em série única no matiz da marca (#264E9B), specs do padrão de dataviz:
@@ -7,6 +7,35 @@ import { brl } from '@/lib/format';
 
 const COR = '#264E9B';
 const COR_FORTE = '#10244A';
+
+/** Em telas de celular, o viewBox acompanha a largura do contêiner. Sem isso
+ *  o SVG de 720 unidades é reduzido a ~45% num aparelho de 375px e todo texto
+ *  de 10px vira 4,5px ilegível; medindo, o viewBox fica ~1:1 com o pixel real
+ *  e os rótulos voltam ao tamanho pretendido. Acima de 640px devolve o padrão
+ *  — o desktop continua exatamente como era. */
+const LARGURA_CELULAR = 640;
+
+function useLarguraViewBox(padrao: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [largura, setLargura] = useState(padrao);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const medir = () => {
+      const l = el.clientWidth;
+      setLargura(
+        window.innerWidth < LARGURA_CELULAR && l > 0
+          ? Math.round(Math.min(padrao, Math.max(l, 300)))
+          : padrao,
+      );
+    };
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [padrao]);
+  return [ref, largura] as const;
+}
 
 export interface ItemBarra {
   rotulo: string;
@@ -32,12 +61,15 @@ export const BarrasHorizontais = memo(function BarrasHorizontais({
         <div
           key={d.rotulo}
           title={d.detalhe ?? `${d.rotulo}: ${formatar(d.valor)}`}
-          className="group grid grid-cols-[minmax(0,11rem)_1fr_auto] items-center gap-3 text-sm sm:grid-cols-[minmax(0,16rem)_1fr_auto]"
+          /* no celular o rótulo e o valor ficam na primeira linha e a barra
+             ocupa a segunda inteira — em três colunas numa tela de 375px
+             sobrava um toco de barra ao lado de um nome truncado */
+          className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,16rem)_1fr_auto]"
         >
-          <span className="truncate text-muted-foreground" aria-hidden={false}>
+          <span className="col-start-1 row-start-1 truncate text-muted-foreground" aria-hidden={false}>
             {d.rotulo}
           </span>
-          <div className="h-[18px]">
+          <div className="col-span-2 row-start-2 h-[18px] sm:col-span-1 sm:col-start-2 sm:row-start-1">
             <div
               className="h-full rounded-r-[4px] transition-colors"
               style={{
@@ -48,7 +80,9 @@ export const BarrasHorizontais = memo(function BarrasHorizontais({
               onMouseLeave={(e) => ((e.target as HTMLElement).style.background = COR)}
             />
           </div>
-          <span className="text-xs tabular-nums text-foreground">{formatar(d.valor)}</span>
+          <span className="col-start-2 row-start-1 text-right text-xs tabular-nums text-foreground sm:col-start-3">
+            {formatar(d.valor)}
+          </span>
         </div>
       ))}
     </div>
@@ -68,7 +102,7 @@ export function LinhaTemporal({
   formatar?: (v: number) => string;
 }) {
   const [ativo, setAtivo] = useState<number | null>(null);
-  const L = 720;
+  const [refMedida, L] = useLarguraViewBox(720);
   const A = 220;
   const M = { topo: 12, dir: 16, base: 26, esq: 56 };
 
@@ -85,7 +119,7 @@ export function LinhaTemporal({
     const area = `${caminho} L${coords[coords.length - 1]?.x ?? M.esq},${A - M.base} L${M.esq},${A - M.base} Z`;
     const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({ v: teto * f, y: y(teto * f) }));
     return { caminho, area, coords, ticks };
-  }, [pontos]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pontos, L]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (pontos.length < 2) {
     return <p className="text-sm text-muted-foreground">Poucos pontos para uma linha do tempo.</p>;
@@ -104,7 +138,7 @@ export function LinhaTemporal({
   const pt = ativo != null ? coords[ativo] : null;
 
   return (
-    <div className="relative">
+    <div ref={refMedida} className="relative">
       <svg
         viewBox={`0 0 ${L} ${A}`}
         className="w-full"
@@ -188,7 +222,7 @@ export function LinhasComparadas({
   formatar?: (v: number) => string;
 }) {
   const [ativo, setAtivo] = useState<number | null>(null);
-  const L = 720;
+  const [refMedida, L] = useLarguraViewBox(720);
   const A = 240;
   const M = { topo: 14, dir: 16, base: 26, esq: 60 };
 
@@ -203,7 +237,7 @@ export function LinhasComparadas({
     const caminhos = coords.map((c) => c.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' '));
     const ticks = [0, 0.5, 1].map((f) => ({ v: teto * f, y: y(teto * f) }));
     return { caminhos, coords, ticks };
-  }, [rotulos, series]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rotulos, series, L]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (rotulos.length < 2) {
     return <p className="text-sm text-muted-foreground">Ainda há poucos dias de série para comparar.</p>;
@@ -238,7 +272,7 @@ export function LinhasComparadas({
           </span>
         )}
       </div>
-      <div className="relative">
+      <div ref={refMedida} className="relative">
         <svg viewBox={`0 0 ${L} ${A}`} className="w-full" onMouseMove={aoMover}
              onMouseLeave={() => setAtivo(null)} role="img" aria-label="Comparação no tempo">
           {ticks.map((t) => (
@@ -338,7 +372,7 @@ export const FaixasDePreco = memo(function FaixasDePreco({
         const pos = (v: number) => `${Math.min((v / max) * 100, 100)}%`;
         return (
           <div key={f.categoria} className="grid items-center gap-3 sm:grid-cols-[minmax(0,15rem)_1fr]">
-            <div className="truncate text-sm text-muted-foreground" title={f.categoria}>
+            <div className="text-sm text-muted-foreground sm:truncate" title={f.categoria}>
               {f.categoria}
             </div>
             <div className="relative h-8">
@@ -488,7 +522,7 @@ export function Dispersao({
   aoClicar?: (p: PontoDispersao) => void;
 }) {
   const [ativo, setAtivo] = useState<number | null>(null);
-  const L = 720;
+  const [refMedida, L] = useLarguraViewBox(720);
   const A = 400;
   const M = { topo: 14, dir: 18, base: 40, esq: 64 };
 
@@ -508,7 +542,7 @@ export function Dispersao({
     }
     const diag = { x1: x(PISO_LOG), y1: y(PISO_LOG), x2: x(10 ** logMax), y2: y(10 ** logMax) };
     return { coords, ticks, diag };
-  }, [pontos]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pontos, L]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (pontos.length < 3) {
     return <p className="text-sm text-muted-foreground">Poucos candidatos neste recorte para uma dispersão.</p>;
@@ -528,7 +562,7 @@ export function Dispersao({
           <span className="inline-block h-[2px] w-5 bg-[#6e6a60]" /> linha do equilíbrio (gastar = arrecadar)
         </span>
       </div>
-      <div className="relative">
+      <div ref={refMedida} className="relative">
         <svg viewBox={`0 0 ${L} ${A}`} className="w-full" role="img"
              aria-label="Dispersão: arrecadado × contratado por candidato"
              onMouseLeave={() => setAtivo(null)}>

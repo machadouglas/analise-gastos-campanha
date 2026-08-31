@@ -122,14 +122,14 @@ export function Partido() {
 
   if (dados === 'carregando') {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center gap-3 text-muted-foreground">
+      <div className="flex min-h-[50vh] items-center justify-center gap-3 px-6 text-center text-muted-foreground">
         <Spinner className="h-5 w-5" /> Consultando os dados do partido no seu navegador…
       </div>
     );
   }
   if (dados === 'nao-encontrado' || dados === null) {
     return (
-      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-muted-foreground">
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
         <p>Partido sem movimentação declarada até agora.</p>
         <Link to="/explorar" className="text-[#264E9B] underline underline-offset-4">Voltar ao Explorar</Link>
       </div>
@@ -137,10 +137,10 @@ export function Partido() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-6 py-12">
+    <div className="mx-auto max-w-7xl space-y-6 px-4 py-10 sm:px-6 sm:py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do partido</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{dados.nome}</h1>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{dados.nome}</h1>
         <p className="mt-2 max-w-3xl text-muted-foreground">
           Consolidado das candidaturas com movimentação declarada nas Eleições 2026.
         </p>

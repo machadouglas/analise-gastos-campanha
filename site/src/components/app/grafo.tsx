@@ -88,6 +88,10 @@ export function GrafoConexoes({
   const [largura, setLargura] = useState(0);
   const hoverRef = useRef<string | null>(null);
   const enquadrouRef = useRef(false);
+  const ajustouFinalRef = useRef(false);
+  // tela estreita comporta menos nós: com 20 diretos + 30 de 2º nível num
+  // canvas de ~300px os rótulos viram um borrão sobreposto
+  const estreito = largura > 0 && largura < 480;
 
   useEffect(() => {
     const el = contRef.current;
@@ -101,21 +105,24 @@ export function GrafoConexoes({
   }, []);
 
 
-  const { dados, altura, temN2, totalN1 } = useMemo(() => {
-    const n1 = [...nos].sort((a, b) => b.valor - a.valor).slice(0, 20);
+  const { dados, altura, temN2, totalN1, maxN1 } = useMemo(() => {
+    const maxN1 = estreito ? 10 : 20;
+    const n1 = [...nos].sort((a, b) => b.valor - a.valor).slice(0, maxN1);
     const idsN1 = new Set(n1.map((n) => n.id));
     const n2 = secundarios
       .filter((s) => !idsN1.has(s.id) && s.ligadoA.some((a) => idsN1.has(a)))
-      .slice(0, 30);
+      .slice(0, estreito ? 8 : 30);
     const max = Math.max(...n1.map((n) => n.valor), 1);
     const nodes: DadosNo[] = [
-      { id: '__centro__', nome: centro, valor: 0, nivel: 0, r: 11, fx: 0, fy: 0 },
+      { id: '__centro__', nome: centro, valor: 0, nivel: 0, r: estreito ? 8 : 11, fx: 0, fy: 0 },
+      // raios menores em tela estreita: num canvas de ~300px os círculos de
+      // desktop se sobrepõem antes de a física ter espaço para separá-los
       ...n1.map((n): DadosNo => ({
         id: n.id, nome: n.rotulo, valor: n.valor, nivel: 1, tipo: n.tipo, detalhe: n.detalhe,
-        r: 4 + Math.sqrt(n.valor / max) * 8,
+        r: estreito ? 3 + Math.sqrt(n.valor / max) * 5 : 4 + Math.sqrt(n.valor / max) * 8,
       })),
       ...n2.map((n): DadosNo => ({
-        id: n.id, nome: n.rotulo, valor: n.valor, nivel: 2, detalhe: n.detalhe, r: 3.5,
+        id: n.id, nome: n.rotulo, valor: n.valor, nivel: 2, detalhe: n.detalhe, r: estreito ? 2.5 : 3.5,
       })),
     ];
     const links = [
@@ -129,11 +136,14 @@ export function GrafoConexoes({
     ];
     return {
       dados: { nodes, links },
-      altura: Math.min(620, 420 + n2.length * 5),
+      // caixa mais baixa em tela estreita: com menos nós, a altura de desktop
+      // sobrava como faixa vazia acima e abaixo da rede
+      altura: estreito ? Math.min(420, 300 + n2.length * 5) : Math.min(620, 420 + n2.length * 5),
       temN2: n2.length > 0,
       totalN1: nos.length,
+      maxN1,
     };
-  }, [nos, secundarios, centro]);
+  }, [nos, secundarios, centro, estreito]);
 
   // forças ajustadas ao nosso caso: 2º nível orbita perto do seu nível 1.
   // Depende TAMBÉM de `largura`: o ForceGraph só monta depois da medição do
@@ -143,11 +153,17 @@ export function GrafoConexoes({
     const fg = fgRef.current;
     if (!fg || largura <= 0) return;
     enquadrouRef.current = false;
+    ajustouFinalRef.current = false;
     const carga = fg.d3Force('charge') as ForceManyBody<No> | undefined;
     carga?.strength((n) => (n.nivel === 2 ? -18 : -65));
     const link = fg.d3Force('link') as { distance: (fn: (l: Ligacao) => number) => unknown } | undefined;
-    link?.distance((l) => (l.nivel2 ? 48 : 118));
-    fg.d3Force('collide', forceCollide<No>().radius((n) => n.r + (n.nivel === 2 ? 8 : 10)));
+    // distâncias menores em tela estreita: a rede cabe sem virar um novelo
+    link?.distance((l) => (l.nivel2 ? (estreito ? 34 : 48) : estreito ? 80 : 118));
+    fg.d3Force(
+      'collide',
+      forceCollide<No>().radius((n) =>
+        estreito ? n.r + (n.nivel === 2 ? 4 : 5) : n.r + (n.nivel === 2 ? 8 : 10)),
+    );
     fg.d3ReheatSimulation();
     // enquadra com a física ainda em movimento (transição suave), uma vez por
     // dataset; teto de zoom para rede pequena não virar bolas gigantes
@@ -160,7 +176,7 @@ export function GrafoConexoes({
       }, 750);
     }, 1300);
     return () => clearTimeout(timer);
-  }, [dados, largura]);
+  }, [dados, largura, estreito]);
 
   const corNo = (n: No) =>
     n.nivel === 0 ? NAVY_ESCURO : n.nivel === 2 ? '#efe9dc' : n.tipo === 'doacao' ? AMBAR : NAVY;
@@ -198,6 +214,37 @@ export function GrafoConexoes({
             d3AlphaDecay={0.02}
             d3VelocityDecay={0.3}
             cooldownTime={8000}
+            // reenquadra quando a física para: o enquadramento feito no meio
+            // do movimento envelhece e, em tela estreita, a rede terminava
+            // encostada num canto. Só no celular — no desktop o comportamento
+            // original já cabia na caixa e não vale o risco de mexer.
+            onEngineStop={() => {
+              if (!estreito || ajustouFinalRef.current) return;
+              ajustouFinalRef.current = true;
+              const fg = fgRef.current;
+              if (!fg) return;
+              fg.zoomToFit(400, 24);
+              setTimeout(() => {
+                const f = fgRef.current;
+                if (!f || f.zoom() <= 1.15) return;
+                // aplicar o teto de zoom desloca o enquadramento: recentra na
+                // caixa dos nós DEPOIS da transição (chamar as duas juntas
+                // cancela uma à outra — as duas movem o mesmo transform)
+                f.zoom(1.15, 300);
+                setTimeout(() => {
+                  const g = fgRef.current;
+                  if (!g) return;
+                  const xs = (dados.nodes as No[]).map((n) => n.x ?? 0);
+                  const ys = (dados.nodes as No[]).map((n) => n.y ?? 0);
+                  if (!xs.length) return;
+                  g.centerAt(
+                    (Math.min(...xs) + Math.max(...xs)) / 2,
+                    (Math.min(...ys) + Math.max(...ys)) / 2,
+                    300,
+                  );
+                }, 350);
+              }, 450);
+            }}
             nodeLabel={(n) =>
               `<div style="max-width:280px;font-size:12px;line-height:1.4">` +
               `<strong>${escapar(n.nome)}</strong><br/>` +
@@ -225,7 +272,9 @@ export function GrafoConexoes({
               // qualquer zoom (como rótulo de mapa) — sem nomes gigantes
               const fonte = (n.nivel === 0 ? 14 : n.nivel === 1 ? 12 : 10) / escala;
               ctx.font = `${n.nivel === 0 ? '600 ' : ''}${fonte}px Inter, system-ui, sans-serif`;
-              const nome = n.nome.length > 28 ? `${n.nome.slice(0, 27)}…` : n.nome;
+              // nomes mais curtos em tela estreita: senão vazam pela borda direita
+              const limite = estreito ? 16 : 28;
+              const nome = n.nome.length > limite ? `${n.nome.slice(0, limite - 1)}…` : n.nome;
               const x = (n.x ?? 0) + n.r + 4 / escala;
               const y = (n.y ?? 0) + fonte / 3;
               // halo: legível mesmo cruzando linhas e outros rótulos
@@ -299,7 +348,7 @@ export function GrafoConexoes({
       </div>
       <p className="mt-1.5 text-xs text-muted-foreground">
         Arraste os nós para reorganizar · role para dar zoom (aproxime para ver os rótulos menores)
-        {totalN1 > 20 && ` · mostrando as 20 maiores conexões diretas de ${totalN1}`}
+        {totalN1 > maxN1 && ` · mostrando as ${maxN1} maiores conexões diretas de ${totalN1}`}
       </p>
     </div>
   );
