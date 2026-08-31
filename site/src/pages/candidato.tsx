@@ -18,7 +18,7 @@ import {
 import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
-import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
@@ -93,7 +93,8 @@ interface FichaRegistro {
 }
 
 /** Bens declarados ao registrar a candidatura — usados tanto na ficha completa
- *  quanto na ficha sem movimento. */
+ *  quanto na ficha sem movimento. Os dois chamadores já aguardaram a conexão,
+ *  então a guarda abaixo lê um tabelasDisponiveis já populado. */
 async function carregarBens(w: string): Promise<Bem[]> {
   if (!tabelasDisponiveis.has('bens')) return [];
   const r = await executarSQL(`
@@ -107,6 +108,11 @@ async function carregarBens(w: string): Promise<Bem[]> {
 }
 
 async function carregarRegistro(sq: string): Promise<FichaRegistro | null> {
+  // tabelasDisponiveis só é populado quando o motor termina de iniciar; num
+  // load direto desta rota nada o bootou antes e as guardas abaixo leriam um
+  // Set vazio — aguarde a conexão antes de decidir. Não custa latência:
+  // executarSQL já aguarda obterConexao, nenhuma consulta começaria antes.
+  await obterConexao();
   if (!tabelasDisponiveis.has('candidatos')) return null;
   const w = `SQ_CANDIDATO = '${esc(sq)}'`;
   const [reg, extracao, bens] = await Promise.all([
@@ -167,6 +173,11 @@ async function amostraGrupo(cargo: string, uf: string | null): Promise<Record<st
 }
 
 async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
+  // tabelasDisponiveis só é populado quando o motor termina de iniciar; num
+  // load direto desta rota nada o bootou antes e as guardas abaixo leriam um
+  // Set vazio — aguarde a conexão antes de decidir. Não custa latência:
+  // executarSQL já aguarda obterConexao, nenhuma consulta começaria antes.
+  await obterConexao();
   const w = `SQ_CANDIDATO = '${esc(sq)}'`;
   const temForn = tabelasDisponiveis.has('fornecedores');
 

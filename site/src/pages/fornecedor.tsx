@@ -7,7 +7,7 @@ import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
 import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
-import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { CONDICAO_SEM_NOTA, escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
@@ -70,6 +70,8 @@ async function resolverId(param: string): Promise<string | null> {
 }
 
 async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
+  // guardas de tabelasDisponiveis só valem depois do boot (ver candidato.tsx)
+  await obterConexao();
   const w = `NR_CPF_CNPJ_FORNECEDOR = '${esc(id)}'`;
 
   // consultas independentes disparadas juntas: o ganho é o pipeline das

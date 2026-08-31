@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
-import { executarSQL, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
@@ -23,6 +23,8 @@ interface DadosPartido {
 async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
   // siglas reais são curtas e alfanuméricas — qualquer outra coisa nem consulta
   if (!/^[A-Za-zÀ-ÿ0-9 .-]{1,30}$/.test(sigla)) return null;
+  // guardas de tabelasDisponiveis só valem depois do boot (ver candidato.tsx)
+  await obterConexao();
   const w = `SG_PARTIDO = '${escSQL(sigla)}'`;
 
   // as oito consultas são independentes; juntas, o pipeline de leitura dos
