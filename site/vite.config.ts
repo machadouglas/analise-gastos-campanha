@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -21,6 +22,13 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
+  // jsdom global (e não por arquivo): os testes de função pura não se importam
+  // com o ambiente e o `npm test` continua sendo um comando só, sem docblock
+  // de ambiente espalhado por arquivo.
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
   },
   build: {
     rollupOptions: {
