@@ -48,7 +48,7 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
     id: 'removidas',
     rotulo: 'Despesas removidas',
     descricao:
-      'Despesas que estavam declaradas e deixaram de estar (retransmissões renumeradas pelo sistema do TSE não contam). Pode ser correção legítima — é indício, não acusação.',
+      'Despesas que estavam declaradas e deixaram de estar. Não entram aqui as retransmissões renumeradas pelo TSE nem as retificações (a mesma declaração reaparecendo com um campo corrigido). É indício, não acusação.',
   },
   {
     id: 'removidas-receitas',
@@ -765,7 +765,7 @@ export function Explorar() {
                                 }
                               >
                                 <AlertTriangle className="mr-1 inline h-3.5 w-3.5 align-[-3px]" />
-                                {m.rotulo}: {m.formatar(si.valor)}{' '}
+                                {m.frase(si.valor)}{' '}
                                 <span className={selecionado ? 'text-white/75' : 'text-[#7c3a06]/70'}>
                                   · corte (p95): {m.formatar(si.p95)}
                                 </span>

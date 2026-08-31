@@ -16,25 +16,30 @@ invisível no site do TSE. A data usada é a DT_GERACAO do próprio arquivo.
 
 from src.carga import filtro_placeholder
 
-# tabelas versionadas -> coluna de pareamento p/ detectar alterações (id da nota)
+# tabelas versionadas -> id da nota no arquivo do TSE. NÃO serve para parear
+# versões: o SPCE regenera os SQ_* a cada retransmissão (nos dados publicados,
+# 10.112 notas já trocaram de SQ e 3.489 SQ apontam para mais de uma nota).
 TABELAS = {
     "despesas_contratadas": "SQ_DESPESA",
     "receitas": "SQ_RECEITA",
 }
 
-# "Essência" do fato declarado. Quando o candidato retransmite a prestação, o
-# SPCE regenera os SQ_* e metadados — o conteúdo "some" e renasce com id novo.
-# Uma remoção REAL é a que não reaparece com a mesma essência na extração atual.
-ESSENCIA = {
-    "despesas_contratadas": [
-        "SQ_CANDIDATO", "NR_CPF_CNPJ_FORNECEDOR", "DS_DESPESA",
-        "VR_DESPESA_CONTRATADA", "DT_DESPESA",
-    ],
-    "receitas": [
-        "SQ_CANDIDATO", "NR_CPF_CNPJ_DOADOR", "DS_ORIGEM_RECEITA",
-        "VR_RECEITA", "DT_RECEITA",
-    ],
+# "Essência" do fato declarado, em duas partes:
+# IDENTIDADE — a quem o dinheiro liga (candidato ↔ contraparte). Uma mudança
+#   aqui é outro fato, nunca uma correção do mesmo.
+# VARIAVEIS — o que uma retificação costuma mexer: quanto, do quê, quando.
+# Quando o candidato retransmite a prestação, o SPCE regenera os SQ_* e
+# metadados — o conteúdo "some" e renasce com id novo. Uma remoção REAL é a que
+# não reaparece nem com a mesma essência nem como edição (ver _condicao_edicao).
+IDENTIDADE = {
+    "despesas_contratadas": ["SQ_CANDIDATO", "NR_CPF_CNPJ_FORNECEDOR"],
+    "receitas": ["SQ_CANDIDATO", "NR_CPF_CNPJ_DOADOR"],
 }
+VARIAVEIS = {
+    "despesas_contratadas": ["DS_DESPESA", "VR_DESPESA_CONTRATADA", "DT_DESPESA"],
+    "receitas": ["DS_ORIGEM_RECEITA", "VR_RECEITA", "DT_RECEITA"],
+}
+ESSENCIA = {t: IDENTIDADE[t] + VARIAVEIS[t] for t in IDENTIDADE}
 
 # metadados do arquivo, não do fato declarado — ficam fora do histórico e do hash
 COLUNAS_VOLATEIS = {"DT_GERACAO", "HH_GERACAO"}
@@ -155,8 +160,34 @@ def _registrar_extracao(con) -> None:
     """)
 
 
+def _condicao_edicao(tabela: str) -> str:
+    """Reconhece a MESMA declaração entre uma versão morta (m) e uma viva (v).
+
+    Parear por SQ_* não funciona — o SPCE os regenera a cada retransmissão, e
+    era por isso que `v_alteradas` ficava cega e toda edição caía como remoção.
+    A régua aqui é: mesma IDENTIDADE e exatamente UM campo variável diferente
+    (corrigiram o valor, OU a descrição, OU a data).
+
+    Descartada a régua alternativa "mesmo NR_DOCUMENTO": o arquivo do TSE é por
+    ITEM de nota, e os itens irmãos de uma nota compartilham o número — parear
+    por ele casaria linhas diferentes da mesma nota (medido: 84 dos 530 casos
+    reais eram exatamente isso) e engoliria remoções de verdade.
+
+    O erro residual é assimétrico de propósito: dois itens irmãos que difiram em
+    um só campo podem ser lidos como edição. Errar para "editada" enfraquece um
+    indício; errar para "removida" afirma que alguém apagou declaração — e essa
+    é a acusação que o projeto não pode fazer por engano.
+    """
+    ident = " AND ".join(f"v.{c} = m.{c}" for c in IDENTIDADE[tabela])
+    variaveis = VARIAVEIS[tabela]
+    iguais = " + ".join(
+        f"CASE WHEN v.{c} IS NOT DISTINCT FROM m.{c} THEN 1 ELSE 0 END" for c in variaveis
+    )
+    return f"{ident} AND ({iguais}) = {len(variaveis) - 1}"
+
+
 def _criar_views_mudancas(con) -> None:
-    for tabela, sq in TABELAS.items():
+    for tabela in TABELAS:
         hist = f"hist_{tabela}"
         if not con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [hist]
@@ -165,29 +196,39 @@ def _criar_views_mudancas(con) -> None:
         essencia = " AND ".join(f"v.{c} = m.{c}" for c in ESSENCIA[tabela])
         contraparte, valor = CONTRAPARTE[tabela]
         # conteúdo que estava declarado e não está mais, SEM correspondente de
-        # mesma essência na extração atual (filtra o re-registro em massa do
-        # SPCE) e SEM linhas-placeholder (prestação sem movimento)
-        con.execute(f"""
-            CREATE OR REPLACE VIEW v_removidas_{tabela} AS
+        # mesma essência na extração atual (filtra o re-registro em massa do SPCE)
+        sumidas = f"""
             WITH ultima AS (SELECT MAX(dt_ultima_extracao) AS dt FROM {hist}),
             mortas AS (
                 SELECT h.* FROM {hist} h, ultima
                 QUALIFY MAX(h.dt_ultima_extracao) OVER (PARTITION BY h.hash_linha) < ultima.dt),
             vivas AS (
-                SELECT h.* FROM {hist} h, ultima WHERE h.dt_ultima_extracao = ultima.dt)
-            SELECT m.* FROM mortas m
-            WHERE {filtro_placeholder(f'm.{contraparte}', f'm.{valor}')}
-              AND NOT EXISTS (SELECT 1 FROM vivas v WHERE {essencia})
-        """)
-        # notas (SQ) com versão antiga sem essência atual + versão nova: provável edição
+                SELECT h.* FROM {hist} h, ultima WHERE h.dt_ultima_extracao = ultima.dt),
+            sumidas AS (
+                SELECT m.* FROM mortas m
+                WHERE NOT EXISTS (SELECT 1 FROM vivas v WHERE {essencia}))"""
+        # edição: a essência sumiu, mas a declaração continua viva com um campo
+        # corrigido. Traz as DUAS versões (a morta e a viva) para dar o antes/depois.
         con.execute(f"""
             CREATE OR REPLACE VIEW v_alteradas_{tabela} AS
-            WITH ultima AS (SELECT MAX(dt_ultima_extracao) AS dt FROM {hist})
-            SELECT h.* FROM {hist} h, ultima
-            WHERE h.{sq} <> '-1'
-              AND h.{sq} IN (SELECT {sq} FROM v_removidas_{tabela})
-              AND h.{sq} IN (SELECT {sq} FROM {hist}, ultima WHERE dt_primeira_extracao = ultima.dt)
-            ORDER BY h.{sq}, h.dt_primeira_extracao
+            {sumidas},
+            pares AS (
+                SELECT DISTINCT m.hash_linha AS morta, v.hash_linha AS viva
+                FROM sumidas m JOIN vivas v ON {_condicao_edicao(tabela)})
+            SELECT h.* FROM {hist} h
+            WHERE h.hash_linha IN (SELECT morta FROM pares)
+               OR h.hash_linha IN (SELECT viva FROM pares)
+            ORDER BY {", ".join(f"h.{c}" for c in IDENTIDADE[tabela])}, h.dt_primeira_extracao
+        """)
+        # remoção de fato: sumiu, não voltou com a mesma essência e não é edição.
+        # As duas views são mutuamente exclusivas por construção — uma declaração
+        # corrigida não pode aparecer no site como declaração apagada.
+        con.execute(f"""
+            CREATE OR REPLACE VIEW v_removidas_{tabela} AS
+            {sumidas}
+            SELECT m.* FROM sumidas m
+            WHERE {filtro_placeholder(f'm.{contraparte}', f'm.{valor}')}
+              AND m.hash_linha NOT IN (SELECT hash_linha FROM v_alteradas_{tabela})
         """)
 
 

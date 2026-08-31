@@ -50,9 +50,10 @@ Views tipadas (use nas análises — valores `VR` são DOUBLE, datas `DT` são D
 Histórico de extrações (`src/historico.py`, alimentado automaticamente pelo `carregar`):
 
 - `hist_despesas_contratadas`, `hist_receitas` — uma linha por **conteúdo único** (os arquivos do TSE são por item de nota e têm linhas idênticas legítimas; `qt_linhas` guarda a contagem). `dt_primeira_extracao`/`dt_ultima_extracao` marcam a janela em que o conteúdo esteve declarado.
-- `v_removidas_*` — conteúdo que estava declarado e sumiu (red flag forte: declaração apagada/editada).
-- `v_alteradas_*` — notas (SQ) com versão antiga e nova (provável edição).
-- `SQ_DESPESA`/`SQ_RECEITA` **não são únicos** (repetem por item; `-1` = sem id). Nunca use como chave primária.
+- `v_removidas_*` — conteúdo que estava declarado, sumiu e **não voltou de outra forma** (red flag forte: declaração apagada).
+- `v_alteradas_*` — a versão morta E a viva de uma declaração corrigida (antes/depois).
+- As duas são **mutuamente exclusivas por construção** (`v_removidas` exclui o que está em `v_alteradas`): uma retificação nunca pode aparecer no site como declaração apagada. A régua está em `historico.ESSENCIA`, que se divide em `IDENTIDADE` (candidato ↔ contraparte — mudou aqui, é outro fato) e `VARIAVEIS` (descrição, valor, data — o que uma retificadora mexe): mesma identidade com **3 de 3** variáveis iguais é retransmissão, com **2 de 3** é edição, e só o resto é remoção. O erro residual é assimétrico de propósito — errar para "editada" enfraquece um indício, errar para "removida" afirma que alguém apagou declaração.
+- `SQ_DESPESA`/`SQ_RECEITA` **não são únicos nem estáveis** (repetem por item; `-1` = sem id; o SPCE os **regenera a cada retransmissão** — nos dados publicados, 10.112 notas já trocaram de SQ e 3.489 SQ apontam para mais de uma nota). Nunca use como chave primária nem para parear versões.
 
 Valores originais usam vírgula decimal e datas `DD/MM/AAAA`; as views já convertem.
 
@@ -62,7 +63,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 - `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
 - `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
 - `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
-- `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal quando > 1×) do site e do `resumo.json`.
+- `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
 - `norma_documento` — por DS_ORIGEM_DESPESA: quanto do valor é declarado com documento fiscal (só entre fornecedores PJ) e `exige_documento` (a categoria tem nota como norma). É a régua do indicador `valor_sem_nota`: sem ela, marcar "sem nota" pegava metade do dinheiro do país, porque em impulsionamento/honorários/militância quase ninguém emite nota. Categoria com menos de 30 linhas cai na lista fixa de `analises.py` (que é sempre o piso).
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
 - `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
@@ -133,9 +134,20 @@ cartão de compartilhamento em PNG via `lib/cartao.ts`), `/partido/:sigla` e `/f
 agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores) com degradação
 graciosa se algum ainda não foi publicado.
 
+As red flags **por nota** (7, 12 e 13) são marcas nas fichas, não páginas: a linha
+de fornecedor da ficha do candidato abre e mostra as notas que ela esconde
+(`sqlNotasDoCandidato`), e as flags 12/13 viram chip no cabeçalho da ficha do
+fornecedor — numeração de nota é sequencial por emitente, então "mesmo número em
+2+ candidatos" é fato DO fornecedor, e a tabela dele mostra só as 50 maiores.
+Não há rota `/despesa/:id`: 88% dos pares candidato×fornecedor têm uma única
+nota, então a página seria uma repetição da linha — e `SQ_DESPESA` não serve de
+chave (o SPCE regenera).
+
 Regras espelhadas do backend vivem centralizadas em `site/src/lib/consultas.ts`
 (categorias sem NF ↔ `src/analises.py`; SINAIS_CTE/SINAIS_FILTRO ↔ `METRICAS_SINAL` em
-`src/resumo.py`; SITUACAO_NAO_ENCONTRADA ↔ `SITUACAO_NAO_ENCONTRADO` em `src/cnpj.py` —
+`src/resumo.py`; CONDICAO_NOTA_SEM_NUMERO/CONDICAO_DOCUMENTO_NUMERADO ↔ as análises 12 e
+13 de `src/analises.py`; MINIMO_NOTAS_VALOR_REPETIDO ↔ `rep` em `src/agregados.py`;
+SITUACAO_NAO_ENCONTRADA ↔ `SITUACAO_NAO_ENCONTRADO` em `src/cnpj.py` —
 a lápide de CNPJ que a Receita respondeu 404, que vira aviso na ficha do fornecedor e
 marca a linha na tabela de fornecedores do candidato) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
 `despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);

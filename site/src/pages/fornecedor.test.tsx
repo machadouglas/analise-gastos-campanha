@@ -92,3 +92,53 @@ describe('ficha do fornecedor · cadastro na Receita', () => {
     expect(screen.queryByText(/CNPJ não encontrado na base pública/)).not.toBeInTheDocument();
   });
 });
+
+/* Red flags 12 e 13 são fatos DO FORNECEDOR (numeração de nota é sequencial por
+ * emitente), e a tabela de despesas mostra só as 50 maiores — se a marca
+ * morasse só lá, o achado sumiria no fornecedor grande. Por isso viram chip do
+ * cabeçalho, sempre visível. */
+describe('ficha do fornecedor · red flags por nota no cabeçalho', () => {
+  const DOCS_REPETIDOS: RotaFalsa = ['HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1', { linhas: [[3, 7]] }];
+  const SEM_REPETIDO: RotaFalsa = ['HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1', { linhas: [[0, 0]] }];
+
+  function perfil(notasSemNumero: number): RotaFalsa {
+    return [
+      'COUNT(DISTINCT SQ_CANDIDATO), COUNT(DISTINCT SG_PARTIDO)',
+      {
+        linhas: [[
+          'GRÁFICA HORIZONTE LTDA', 'Pessoa Jurídica', 'Impressão', null,
+          2, 1, 1, 48000, 7, 0, notasSemNumero,
+        ]],
+      },
+    ];
+  }
+
+  it('conta as notas sem número e os documentos repetidos entre candidatos', async () => {
+    responder([perfil(4), DOCS_REPETIDOS, CANDIDATOS]);
+    renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
+
+    expect(await screen.findByText('4 notas fiscais declaradas sem número')).toBeInTheDocument();
+    expect(
+      screen.getByText('3 números de nota declarados para mais de um candidato'),
+    ).toBeInTheDocument();
+  });
+
+  it('singular quando é uma só', async () => {
+    responder([perfil(1), ['HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1', { linhas: [[1, 2]] }], CANDIDATOS]);
+    renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
+
+    expect(await screen.findByText('1 nota fiscal declarada sem número')).toBeInTheDocument();
+    expect(
+      screen.getByText('1 número de nota declarado para mais de um candidato'),
+    ).toBeInTheDocument();
+  });
+
+  it('fornecedor limpo não ganha chip nenhum dos dois', async () => {
+    responder([perfil(0), SEM_REPETIDO, CANDIDATOS]);
+    renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
+
+    await screen.findByText('GRÁFICA HORIZONTE LTDA');
+    expect(screen.queryByText(/sem número/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/mais de um candidato/)).not.toBeInTheDocument();
+  });
+});

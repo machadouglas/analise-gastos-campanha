@@ -279,7 +279,7 @@ LIMIT 50`,
        ROUND(total_receitas, 2) AS arrecadado,
        razao_gasto_receita
 FROM indicadores
-WHERE razao_gasto_receita > 1 AND total_contratado > 10000
+WHERE razao_gasto_receita > 1.1 AND total_contratado > 10000
 ORDER BY razao_gasto_receita DESC
 LIMIT 50`,
       },

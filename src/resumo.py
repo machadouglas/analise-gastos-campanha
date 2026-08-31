@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from src import db, privacidade
+from src import db, historico, privacidade
 from src.carga import filtro_placeholder
 
 
@@ -22,13 +22,18 @@ def _registros(con, sql) -> list[dict]:
 
 # métricas que contam como "sinal" no fora da curva: fatos em que estar muito
 # acima do grupo merece pergunta (arrecadar muito, por si, não é indício).
-# A razão gasto÷arrecadado só é sinal quando > 1: quem gastou MENOS do que
-# arrecadou não vira sinal só porque o p95 do grupo é ~0 no início da campanha.
+# A razão gasto÷arrecadado só é sinal com MARGEM_GASTO_ACIMA: quem gastou menos
+# do que arrecadou não vira sinal só porque o p95 do grupo é ~0 no início da
+# campanha, e quem estourou por poucos por cento está em descompasso de
+# calendário (nota contratada antes do repasse entrar), não em indício — com o
+# corte em 1 o sinal disparava a 1,01×, e em quase metade dos grupos o p95 fica
+# abaixo de 1, ou seja, esse corte era o único portão que existia.
 # Métricas percentuais têm teto: quando 5% ou mais do grupo está em 100%, o p95
 # satura no teto e "estritamente acima" vira impossível — o sinal nunca dispara
 # (era o caso de pct_sem_nota em TODOS os grupos). Nesses casos, estar no teto é
 # o máximo que existe e conta como sinal.
 TETO_PERCENTUAL = 100.0
+MARGEM_GASTO_ACIMA = 1.1
 CONDICAO_SINAL = (
     "(r.valor > r.p95 OR (r.metrica LIKE 'pct_%' "
     f"AND r.p95 >= {TETO_PERCENTUAL} AND r.valor >= {TETO_PERCENTUAL}))"
@@ -36,7 +41,8 @@ CONDICAO_SINAL = (
 
 METRICAS_SINAL = [
     ("total_contratado", "total_contratado", "total_contratado > 0"),
-    ("razao_gasto_receita", "razao_gasto_receita", "razao_gasto_receita > 1"),
+    ("razao_gasto_receita", "razao_gasto_receita",
+     f"razao_gasto_receita > {MARGEM_GASTO_ACIMA}"),
     ("pct_maior_fornecedor", "pct_maior_fornecedor", "n_fornecedores > 1"),
     ("pct_sem_nota", "pct_sem_nota", "total_contratado > 0"),
     ("pct_pessoa_fisica", "pct_pessoa_fisica", "total_contratado > 0"),
@@ -166,16 +172,27 @@ def gerar(con) -> dict:
     """)[0]
 
     # SQ_CANDIDATO e o CNPJ/CPF do fornecedor viajam junto: a Home linka cada
-    # nome à sua ficha (site todo conectado)
+    # nome à sua ficha (site todo conectado).
+    # "Nova" é a ESSÊNCIA que estreou hoje, não o hash. O hash inclui o
+    # SQ_DESPESA, que o SPCE regenera a cada retransmissão: pela régua do hash,
+    # a prestação inteira de quem retransmite renascia "nova" todo dia e ocupava
+    # o topo da Home (medido em 31/08/2026: 62% das linhas e 13 dos 15 maiores
+    # já estavam declaradas dias antes).
+    chave_essencia = ", ".join(historico.ESSENCIA["despesas_contratadas"])
     novas = _registros(con, f"""
-        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF,
-               COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
+        WITH estreia AS (
+            SELECT {chave_essencia}, MIN(dt_primeira_extracao) AS dt
+            FROM hist_despesas_contratadas GROUP BY ALL)
+        SELECT h.SQ_CANDIDATO, h.NM_CANDIDATO, h.SG_PARTIDO, h.DS_CARGO, h.SG_UF,
+               COALESCE(NULLIF(h.NM_FORNECEDOR_RFB,'#NULO'), h.NM_FORNECEDOR) AS fornecedor,
                {pseudo_fornecedor} AS NR_CPF_CNPJ_FORNECEDOR,
-               DS_ORIGEM_DESPESA, DS_DESPESA,
-               ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
-               DT_DESPESA
-        FROM hist_despesas_contratadas
-        WHERE dt_primeira_extracao = DATE '{dt_extracao}'
+               h.DS_ORIGEM_DESPESA, h.DS_DESPESA,
+               ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * h.qt_linhas, 2) AS valor,
+               h.DT_DESPESA
+        FROM hist_despesas_contratadas h
+        JOIN estreia e USING ({chave_essencia})
+        WHERE h.dt_primeira_extracao = DATE '{dt_extracao}'
+          AND e.dt = DATE '{dt_extracao}'
           AND {filtro_placeholder('NR_CPF_CNPJ_FORNECEDOR', 'VR_DESPESA_CONTRATADA')}
         ORDER BY valor DESC LIMIT 15
     """)

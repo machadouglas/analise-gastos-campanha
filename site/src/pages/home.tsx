@@ -363,7 +363,7 @@ export function Home() {
                         className="inline-block rounded-2xl border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium leading-relaxed text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20 sm:rounded-full"
                       >
                         <AlertTriangle className="mr-1 inline h-3.5 w-3.5 align-[-3px]" />
-                        {m.rotulo}: {m.formatar(s.valor)}{' '}
+                        {m.frase(s.valor)}{' '}
                         {/* mediana E p95 nomeados: "grupo: 0" sem dizer o que é parecia dado quebrado,
                             e o p95 (o critério do corte) vivia só no tooltip, invisível no toque */}
                         <span className="text-[#7c3a06]/70">
@@ -467,7 +467,7 @@ export function Home() {
           id="mudancas"
           eyebrow="Rastro"
           titulo="Declarações removidas"
-          descricao="O TSE publica só o estado atual: quem apaga uma declaração apaga o rastro público. Estas o radar fotografou antes de sumirem. Corrigir a prestação é legítimo e comum — a Justiça Eleitoral só trata a divergência como falha grave quando é relevante e não explicada. Aqui é ponto de partida para investigar, nunca acusação."
+          descricao="O TSE publica só o estado atual: quem apaga uma declaração apaga o rastro público. Estas o radar fotografou antes de sumirem. Já estão fora daqui as notas que o sistema do TSE apenas renumerou e as que reapareceram com um campo corrigido — o que resta é declaração que saiu do ar e não voltou. Ainda assim é ponto de partida para investigar, nunca acusação: a Justiça Eleitoral só trata a divergência como falha grave quando é relevante e não explicada."
           verTudo={{
             href: '/explorar?visao=removidas',
             rotulo: m

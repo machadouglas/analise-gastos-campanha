@@ -54,9 +54,15 @@ export function Metodologia() {
           Antes de publicar, a rotina passa por checagens automáticas de integridade (valores que
           não convertem, datas impossíveis, totais que não fecham entre visões independentes dos
           mesmos dados). Se qualquer checagem falha, <strong>nada é publicado</strong> naquele dia.
-          Distinguimos remoção real de reprocessamento técnico: quando o sistema do TSE renumera
-          notas ao receber uma retransmissão, o fato (candidato, fornecedor, descrição, valor e
-          data) continua declarado — e não contamos como remoção.
+          Distinguimos remoção real de reprocessamento técnico e de correção. Quando o sistema do
+          TSE renumera notas ao receber uma retransmissão, o fato (candidato, fornecedor,
+          descrição, valor e data) continua declarado — não é remoção. E quando a declaração
+          reaparece para o mesmo par candidato↔fornecedor com <strong>um</strong> desses campos
+          corrigido — o valor, a descrição ou a data —, tratamos como{' '}
+          <strong>alteração</strong>, não como declaração apagada. Só sobra como removido o que
+          sumiu e não voltou de nenhuma dessas formas. Na dúvida entre as duas leituras ficamos
+          com a mais branda de propósito: chamar de "apagada" uma linha que foi apenas corrigida
+          seria afirmar algo mais grave do que os dados sustentam.
         </p>
         <p>
           Por que isso importa — e até onde. A Justiça Eleitoral trata a omissão de informação na
@@ -74,9 +80,9 @@ export function Metodologia() {
           <strong>Indício não é acusação.</strong> Tudo que este site marca — concentração em um
           fornecedor, gasto acima do arrecadado, valores repetidos, declarações removidas, CNPJ
           recém-aberto — é um <strong>fato contável</strong> extraído do que foi declarado, que
-          pode ter explicação perfeitamente legítima. Um valor removido pode ser correção de erro
-          de digitação; um fornecedor compartilhado pode ser simplesmente a melhor gráfica da
-          cidade. O papel do radar é tornar os fatos visíveis para que cidadãos, jornalistas e
+          pode ter explicação perfeitamente legítima. Um valor removido pode ter sido substituído
+          por outra declaração que a nossa régua não conseguiu ligar à primeira; um fornecedor
+          compartilhado pode ser simplesmente a melhor gráfica da cidade. O papel do radar é tornar os fatos visíveis para que cidadãos, jornalistas e
           órgãos de controle façam as perguntas — nunca afirmar irregularidade, fraude ou crime.
         </p>
         <p>
@@ -107,9 +113,10 @@ export function Metodologia() {
           sempre de fora; <strong>valores repetidos</strong> só contam quando aparecem em 3+
           notas distintas <em>do mesmo fornecedor</em>; a razão{' '}
           <strong>gasto ÷ arrecadado</strong> só conta como sinal quando o candidato contratou
-          mais do que declarou arrecadar (razão acima de 1×) — no início da campanha o p95 de
-          muitos grupos é próximo de zero, e quem gastou menos do que arrecadou não merece
-          marca por isso; <strong>"dinheiro público"</strong> soma
+          pelo menos 10% acima do que declarou arrecadar (razão acima de 1,10×) — no início da
+          campanha o p95 de muitos grupos é próximo de zero, quem gastou menos do que arrecadou
+          não merece marca por isso, e estourar por poucos por cento costuma ser descompasso de
+          calendário (nota contratada antes de o repasse entrar), não indício; <strong>"dinheiro público"</strong> soma
           Fundo Especial e Fundo Partidário pela fonte oficial da receita; e o indicador de{' '}
           <strong>CNPJ recém-aberto</strong> (empresa criada a partir de outubro do ano anterior à
           eleição) sempre informa quantos dos fornecedores do candidato já foram verificados na

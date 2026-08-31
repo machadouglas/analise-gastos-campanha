@@ -59,10 +59,29 @@ async function abrirFornecedores() {
   return screen.getByRole('table');
 }
 
+/* As notas que cada linha de fornecedor esconde. A ficha só mostrava "4 itens";
+ * as red flags por nota (12, 13 e 7 do catálogo) viviam fora do site, como
+ * consulta de exemplo no console SQL. */
+const NOTAS: RotaFalsa = [
+  'repetidos AS (',
+  {
+    colunas: ['cnpj', 'dt', 'categoria', 'descricao', 'documento',
+              'valor', 'itens', 'sem_numero', 'valor_repetido', 'doc_de_outro'],
+    linhas: [
+      // nota limpa: nenhuma marca deve aparecer
+      ['12345678000190', '10/08/2026', 'Publicidade por materiais impressos',
+       'Santinhos', 'Nota Fiscal nº 1426', 20000, 2, 0, 0, 0],
+      // as três marcas juntas, na mesma nota
+      ['12345678000190', '12/08/2026', 'Publicidade por adesivos',
+       'Adesivos', 'Nota Fiscal SN', 10000, 1, 1, 1, 1],
+    ],
+  },
+];
+
 beforeEach(() => {
   limparDuckDBFalso();
   tabelasDisponiveis.add('fornecedores');
-  responder([INDICADORES, FORNECEDORES]);
+  responder([INDICADORES, NOTAS, FORNECEDORES]);
   renderizarRota(<Candidato />, { caminho: '/candidato/:sq', url: `/candidato/${SQ}` });
 });
 
@@ -95,5 +114,42 @@ describe('ficha do candidato · tabela de fornecedores', () => {
     }
     // e o valor da coluna oculta não escapa por nenhum outro canto da página
     expect(screen.queryByText(/NAO ENCONTRADO NA BASE PUBLICA/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ficha do candidato · notas escondidas na linha do fornecedor', () => {
+  it('as notas só aparecem depois do clique na linha', async () => {
+    const tabela = await abrirFornecedores();
+    expect(within(tabela).queryByText('Santinhos')).not.toBeInTheDocument();
+
+    await userEvent.click(within(tabela).getByText('GRÁFICA HORIZONTE LTDA').closest('tr')!);
+
+    expect(within(tabela).getByText('Santinhos')).toBeInTheDocument();
+    expect(within(tabela).getByText(/Adesivos/)).toBeInTheDocument();
+  });
+
+  it('cada red flag por nota vira marca, e só na nota que a tem', async () => {
+    const tabela = await abrirFornecedores();
+    await userEvent.click(within(tabela).getByText('GRÁFICA HORIZONTE LTDA').closest('tr')!);
+
+    const marcada = within(tabela).getByText(/Adesivos/).closest('tr')!;
+    expect(within(marcada).getByText('nota sem número')).toBeInTheDocument();
+    expect(within(marcada).getByText('nº repetido em outro candidato')).toBeInTheDocument();
+    expect(within(marcada).getByText('valor repetido')).toBeInTheDocument();
+
+    // a nota limpa não pode herdar marca da vizinha
+    const limpa = within(tabela).getByText('Santinhos').closest('tr')!;
+    expect(within(limpa).queryByText(/nota sem número|repetido/)).not.toBeInTheDocument();
+    expect(within(limpa).getByText(/2 itens/)).toBeInTheDocument();
+  });
+
+  it('fornecedor sem nota carregada não vira linha clicável', async () => {
+    const tabela = await abrirFornecedores();
+    const semNotas = within(tabela).getByText('AGÊNCIA MIRAGEM ME').closest('tr')!;
+
+    expect(semNotas).not.toHaveClass('cursor-pointer');
+    await userEvent.click(semNotas);
+    // nada de linha de detalhe vazia abaixo dela
+    expect(semNotas.nextElementSibling).toBeNull();
   });
 });

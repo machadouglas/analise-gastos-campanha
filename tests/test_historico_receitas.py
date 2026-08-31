@@ -48,6 +48,30 @@ def test_receita_alterada_gera_versoes_e_flag(banco):
     assert [a[0] for a in alteradas] == ["9000,00", "900,00"]
 
 
+def test_receita_editada_com_sq_regenerado_nao_e_removida(banco):
+    """Mesma correção do lado das despesas: o SPCE regenera SQ_RECEITA e o
+    doador retifica o valor — é alteração, não doação apagada."""
+    extrair_dia(banco, "20/08/2026", receitas=[{"SQ_RECEITA": "100", "VR_RECEITA": "9000,00"}])
+    extrair_dia(banco, "21/08/2026", receitas=[{"SQ_RECEITA": "999", "VR_RECEITA": "900,00"}])
+    assert contar(banco, "SELECT COUNT(*) FROM v_removidas_receitas") == 0
+    alteradas = banco.execute(
+        "SELECT VR_RECEITA FROM v_alteradas_receitas ORDER BY dt_primeira_extracao"
+    ).fetchall()
+    assert [a[0] for a in alteradas] == ["9000,00", "900,00"]
+
+
+def test_doador_diferente_nunca_e_edicao(banco):
+    """Trocar a contraparte é outro fato: a receita antiga foi removida mesmo."""
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "1", "NR_CPF_CNPJ_DOADOR": "11111111000111",
+         "NM_DOADOR": "SUMIDO ME", "VR_RECEITA": "5000,00"}])
+    extrair_dia(banco, "21/08/2026", receitas=[
+        {"SQ_RECEITA": "2", "NR_CPF_CNPJ_DOADOR": "22222222000122",
+         "NM_DOADOR": "OUTRO ME", "VR_RECEITA": "5000,00"}])
+    removidas = banco.execute("SELECT NM_DOADOR FROM v_removidas_receitas").fetchall()
+    assert [r[0] for r in removidas] == ["SUMIDO ME"]
+
+
 def test_despesas_e_receitas_versionam_de_forma_independente(banco):
     """Remover uma despesa não pode contaminar o histórico de receitas (e vice-versa)."""
     extrair_dia(banco, "20/08/2026",
