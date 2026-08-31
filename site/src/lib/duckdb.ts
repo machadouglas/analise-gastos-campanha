@@ -11,6 +11,7 @@ const TABELAS_BOOT = [
   'benchmark_precos',
   'benchmark_indicadores',
   'benchmark_categorias',
+  'norma_documento',
   'indicadores',
   'rede',
   'fornecedores',

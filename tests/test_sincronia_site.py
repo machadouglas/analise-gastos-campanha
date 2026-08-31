@@ -28,10 +28,26 @@ def test_categorias_sem_nota_iguais_no_front():
 
 
 def test_condicao_sem_nota_igual_no_front():
-    """O critério de documento (NOT ILIKE nota fiscal) é o mesmo dos agregados."""
-    assert "NOT ILIKE '%nota fiscal%'" in CONSULTAS_TS
-    fonte_backend = (RAIZ / "src" / "agregados.py").read_text(encoding="utf-8")
-    assert "NOT ILIKE '%nota fiscal%'" in fonte_backend
+    """A régua do 'sem documento fiscal' é a mesma nos dois lados: documento não
+    fiscal (nota OU cupom), fornecedor PJ e categoria em que a nota é a norma."""
+    for doc in analises.DOCUMENTOS_FISCAIS:
+        assert f"NOT ILIKE '%{doc}%'" in CONSULTAS_TS, f"documento fiscal '{doc}' ausente do site"
+    # fornecedor PJ e o corte pela norma medida
+    assert "LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14" in CONSULTAS_TS
+    assert "FROM norma_documento WHERE exige_documento" in CONSULTAS_TS
+    # e o fallback sem o parquet novo continua sendo a lista fixa
+    assert "SQL_CATEGORIAS_SEM_NOTA" in CONSULTAS_TS
+
+
+def test_norma_documento_e_a_tabela_que_o_site_espera():
+    """O site registra `norma_documento` no boot e lê a coluna exige_documento;
+    o backend precisa publicar exatamente esse nome de tabela e de coluna."""
+    agregados_py = (RAIZ / "src" / "agregados.py").read_text(encoding="utf-8")
+    exportar_py = (RAIZ / "src" / "exportar.py").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE TABLE norma_documento" in agregados_py
+    assert "AS exige_documento" in agregados_py
+    assert "norma_documento.parquet" in exportar_py
+    assert "'norma_documento'" in DUCKDB_TS
 
 
 def test_sinais_do_fora_da_curva_iguais_no_front():
@@ -42,6 +58,12 @@ def test_sinais_do_fora_da_curva_iguais_no_front():
     filtro_front = re.findall(r"'([^']+)'", bloco.group(1))
     nomes_backend = [nome for nome, _, _ in resumo.METRICAS_SINAL]
     assert filtro_front == nomes_backend
+
+    # a saturação das métricas percentuais tem de valer nos dois lados: sem isso
+    # o sinal de % nunca dispara (p95 no teto) num deles e dispara no outro
+    assert "LIKE 'pct_%'" in CONSULTAS_TS
+    assert "LIKE 'pct_%'" in resumo.CONDICAO_SINAL
+    assert str(int(resumo.TETO_PERCENTUAL)) in CONSULTAS_TS
 
     cte = re.search(r"SINAIS_CTE = `(.*?)`", CONSULTAS_TS, re.DOTALL)
     assert cte, "SINAIS_CTE não encontrada em consultas.ts"
@@ -83,3 +105,17 @@ if __name__ == "__main__":
     import pytest
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_situacao_nao_encontrada_igual_no_front():
+    """SITUACAO_NAO_ENCONTRADA em consultas.ts == SITUACAO_NAO_ENCONTRADO em
+    src/cnpj.py. É a lápide gravada quando a base pública responde 404: o site
+    troca o bloco de cadastro por um aviso quando a encontra, e um texto
+    divergente faria o aviso nunca aparecer (voltando a exibir a string crua)."""
+    from src import cnpj
+
+    achado = re.search(
+        r"SITUACAO_NAO_ENCONTRADA = '([^']+)'", CONSULTAS_TS
+    )
+    assert achado, "SITUACAO_NAO_ENCONTRADA não encontrada em consultas.ts"
+    assert achado.group(1) == cnpj.SITUACAO_NAO_ENCONTRADO

@@ -19,7 +19,7 @@ import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { escSQL } from '@/lib/consultas';
+import { SITUACAO_NAO_ENCONTRADA, escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
@@ -212,7 +212,10 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
              ROUND(SUM(d.valor), 2) AS "Total",
              COUNT(*) AS "Itens"
              ${temForn ? `, ANY_VALUE(f.data_abertura) AS "Empresa aberta em",
-             ANY_VALUE(f.municipio || '/' || f.uf) AS "Sede"` : ''}
+             ANY_VALUE(f.municipio || '/' || f.uf) AS "Sede",
+             -- coluna oculta (prefixo _): 404 na Receita vem com tudo NULL e
+             -- ficaria igual a "ainda não consultado" na tabela
+             ANY_VALUE(f.situacao) AS "_situacao"` : ''}
       FROM despesas_atual d
       ${temForn ? 'LEFT JOIN fornecedores f ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj' : ''}
       WHERE d.${w} GROUP BY 1, 2 ORDER BY "Total" DESC LIMIT 30`),
@@ -269,7 +272,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   if (Number(linha.pct_maior_fornecedor ?? 0) >= 50 && Number(linha.n_fornecedores) > 1)
     flags.push(`${linha.pct_maior_fornecedor}% do gasto em um único fornecedor`);
   if (Number(linha.valor_sem_nota ?? 0) > 0)
-    flags.push(`${brl.format(Number(linha.valor_sem_nota))} sem nota fiscal`);
+    flags.push(`${brl.format(Number(linha.valor_sem_nota))} sem documento fiscal`);
   if (Number(linha.valor_pessoa_fisica ?? 0) > 0)
     flags.push(`${brl.format(Number(linha.valor_pessoa_fisica))} pagos a pessoas físicas`);
   const repetidos = Number(linha.grupos_valor_repetido ?? 0);
@@ -520,7 +523,7 @@ function FichaSemMovimento({ ficha, sq }: { ficha: FichaRegistro; sq: string }) 
       </div>
 
       <Card>
-        <CardContent className="p-6">
+        <CardContent className="p-6 sm:p-6">
           <p className="text-lg font-semibold text-[#10244A]">
             Nenhuma despesa ou receita declarada ao TSE
             {ficha.dtExtracao && <> até a extração de {ficha.dtExtracao}</>}.
@@ -689,7 +692,7 @@ export function Candidato() {
           ['Gasto ÷ arrecadado', p.receitas ? `${(p.contratado / p.receitas).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}×` : '—'],
         ].map(([r, v]) => (
           <Card key={r}>
-            <CardContent className="p-5">
+            <CardContent className="p-5 sm:p-5">
               <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{r}</p>
               <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">{v}</p>
             </CardContent>
@@ -738,29 +741,6 @@ export function Candidato() {
         </SecaoRecolhivel>
       )}
 
-      {dados.removidas.length > 0 && (
-        <Secao titulo="Declarações removidas" descricao="Conteúdo que estava declarado ao TSE e deixou de estar. Pode ser correção legítima — é um indício, não uma acusação.">
-          <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
-            {dados.removidas.map((l, i) => (
-              <tr key={i}>
-                <td className="min-w-[12rem]">
-                  {temFichaFornecedor(celula(l[5])) ? (
-                    <Link to={urlFornecedor(celula(l[5]))} className="text-[#264E9B] underline-offset-4 hover:underline">
-                      {celula(l[0])}
-                    </Link>
-                  ) : (
-                    celula(l[0])
-                  )}
-                </td>
-                <CelulaTexto>{celula(l[1])}</CelulaTexto>
-                <CelulaNum>{brl.format(Number(l[2] ?? 0))}</CelulaNum>
-                <td>{celula(l[3])}</td><td>{celula(l[4])}</td>
-              </tr>
-            ))}
-          </Tabela>
-        </Secao>
-      )}
-
       {dados.conexoes.length > 0 && (
         <SecaoRecolhivel
           aberta
@@ -802,11 +782,12 @@ export function Candidato() {
         resumo={`${num.format(p.nFornecedores)} · maior ${brl.format(maxFornecedor)}`}
         descricao={`Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (${p.cnpjsConsultados} de ${p.cnpjs} CNPJs já verificados na Receita Federal). Clique no nome para abrir a ficha do fornecedor.`}
       >
-        <Tabela colunas={dados.colunasFornecedores.map((c) => ({ titulo: c, numerica: c === 'Total' || c === 'Itens' }))}>
+        <Tabela colunas={dados.colunasFornecedores.filter((c) => !c.startsWith('_')).map((c) => ({ titulo: c, numerica: c === 'Total' || c === 'Itens' }))}>
           {dados.fornecedores.map((l, i) => (
             <tr key={i} className="hover:bg-muted/40">
               {l.map((v, j) => {
                 const col = dados.colunasFornecedores[j];
+                if (col.startsWith('_')) return null;
                 if (col === 'Total')
                   return (
                     <CelulaNum key={j} frac={maxFornecedor > 0 ? Number(v ?? 0) / maxFornecedor : undefined}>
@@ -814,7 +795,24 @@ export function Candidato() {
                     </CelulaNum>
                   );
                 if (col === 'Itens') return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
-                if (col === 'Empresa aberta em') return <td key={j}>{dataBR(celula(v))}</td>;
+                if (col === 'Empresa aberta em') {
+                  const naoEncontrado =
+                    celula(l[dados.colunasFornecedores.indexOf('_situacao')]) === SITUACAO_NAO_ENCONTRADA;
+                  return (
+                    <td key={j}>
+                      {naoEncontrado ? (
+                        <span
+                          className="whitespace-nowrap text-xs text-[#7c3a06]"
+                          title="O CNPJ declarado ao TSE não corresponde a nenhum cadastro na base pública consultada. Abra a ficha do fornecedor para o detalhe."
+                        >
+                          CNPJ não encontrado na Receita
+                        </span>
+                      ) : (
+                        dataBR(celula(v))
+                      )}
+                    </td>
+                  );
+                }
                 if (col === 'CNPJ/CPF') return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
                 if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
                   return (
@@ -851,6 +849,29 @@ export function Candidato() {
           ))}
         </Tabela>
       </SecaoRecolhivel>
+
+      {dados.removidas.length > 0 && (
+        <Secao titulo="Declarações removidas" descricao="Conteúdo que estava declarado ao TSE e deixou de estar. Pode ser correção legítima — é um indício, não uma acusação.">
+          <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
+            {dados.removidas.map((l, i) => (
+              <tr key={i}>
+                <td className="min-w-[12rem]">
+                  {temFichaFornecedor(celula(l[5])) ? (
+                    <Link to={urlFornecedor(celula(l[5]))} className="text-[#264E9B] underline-offset-4 hover:underline">
+                      {celula(l[0])}
+                    </Link>
+                  ) : (
+                    celula(l[0])
+                  )}
+                </td>
+                <CelulaTexto>{celula(l[1])}</CelulaTexto>
+                <CelulaNum>{brl.format(Number(l[2] ?? 0))}</CelulaNum>
+                <td>{celula(l[3])}</td><td>{celula(l[4])}</td>
+              </tr>
+            ))}
+          </Tabela>
+        </Secao>
+      )}
 
       {dados.bens && (
         <SecaoRecolhivel

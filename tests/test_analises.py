@@ -27,7 +27,7 @@ def test_todas_as_analises_rodam_no_schema_do_tse(banco):
     inserir_despesa(banco)
     inserir_receita(banco)
     resultados = analises.executar_todas(banco)
-    assert len(resultados) == 9
+    assert len(resultados) == 11
     for titulo, comentario, _df in resultados:
         assert comentario, titulo
 
@@ -99,7 +99,7 @@ def test_sem_nota_ignora_categorias_sem_documento_esperado(banco):
                     VR_DESPESA_CONTRATADA="700,00")
     inserir_despesa(banco, SQ_DESPESA="2", DS_TIPO_DOCUMENTO="Recibo",
                     VR_DESPESA_CONTRATADA="100,00")
-    df = _resultado(analises.executar_todas(banco), "Despesas sem nota fiscal")
+    df = _resultado(analises.executar_todas(banco), "Despesas sem documento fiscal")
     assert len(df) == 1
     assert df.iloc[0]["total"] == pytest.approx(100.0)
 

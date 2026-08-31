@@ -33,6 +33,12 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
     descricao: 'Estado atual das despesas declaradas ao TSE.',
   },
   {
+    id: 'ranking',
+    rotulo: 'Quem mais gastou',
+    descricao:
+      'O mesmo recorte somado por candidato, do maior para o menor. Com os filtros, vira o ranking do que você quiser: quem mais gastou no seu estado, no cargo, no partido — ou num tipo de gasto específico. A coluna Arrecadado é a receita total já declarada pela candidatura, não só a parte do recorte.',
+  },
+  {
     id: 'fora-da-curva',
     rotulo: 'Fora da curva',
     descricao:
@@ -58,9 +64,9 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
   },
   {
     id: 'sem-nota',
-    rotulo: 'Sem nota fiscal',
+    rotulo: 'Sem documento fiscal',
     descricao:
-      'Despesas documentadas sem nota fiscal, fora das categorias em que a nota não é o documento próprio (transferências, tributos, aluguel de imóvel, pessoal).',
+      'Gastos com empresas, documentados sem nota nem cupom fiscal, em tipos de gasto que costumam ter documento fiscal. Ficam de fora as categorias em que a nota não é o documento próprio (transferências, tributos, aluguel, pessoal) e aquelas em que quase ninguém emite nota — impulsionamento, honorários, militância. Pessoa física também fica de fora: ela não emite nota.',
   },
   {
     id: 'pessoa-fisica',
@@ -182,7 +188,11 @@ export function Explorar() {
     setCarregando(true);
     setErro(null);
     try {
-      const { base, where: w } = whereDaVisao(v, f, s, cat);
+      // espera o boot antes de checar tabelasDisponiveis: na primeira consulta o
+      // Set ainda está vazio e a régua do "sem documento fiscal" cairia no
+      // fallback (lista fixa) mesmo com norma_documento publicada
+      await obterConexao();
+      const { base, where: w } = whereDaVisao(v, f, s, cat, tabelasDisponiveis.has('norma_documento'));
       const buscando = v === 'atual' && Boolean(f.candidato.trim());
       const [encontrados, registrados] = await Promise.all([
         buscando
@@ -564,7 +574,7 @@ export function Explorar() {
                 },
               ].map((k) => (
                 <Card key={k.rotulo}>
-                  <CardContent className="p-5">
+                  <CardContent className="p-5 sm:p-5">
                     <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{k.rotulo}</p>
                     <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">{k.valor}</p>
                   </CardContent>
@@ -669,7 +679,9 @@ export function Explorar() {
           <div className="mt-6">
             <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted-foreground">
-                {visao === 'compartilhados'
+                {visao === 'ranking'
+                  ? 'Candidatos do recorte, quem mais gastou primeiro'
+                  : visao === 'compartilhados'
                   ? 'Fornecedores compartilhados do recorte, maiores primeiro'
                   : visao === 'removidas'
                     ? 'Despesas removidas do recorte, maiores primeiro'
@@ -778,7 +790,7 @@ export function Explorar() {
             ) : (
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
-              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'Neste tipo de gasto', 'p95 do grupo'].includes(c),
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'Neste tipo de gasto', 'p95 do grupo', 'Itens', 'Fornecedores'].includes(c),
             }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
@@ -799,7 +811,8 @@ export function Explorar() {
                       const fmt = sinal ? metrica(sinal).formatar : (n: number) => brl.format(n);
                       return <CelulaNum key={j}>{v == null ? '—' : fmt(Number(v))}</CelulaNum>;
                     }
-                    if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais')
+                    if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais'
+                        || col === 'Itens' || col === 'Fornecedores')
                       return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Descrição' || col === 'Acima do típico do grupo em')
                       return <CelulaTexto key={j}>{celula(v)}</CelulaTexto>;

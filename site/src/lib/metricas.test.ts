@@ -3,7 +3,7 @@ import { METRICAS, metrica } from './metricas';
 
 describe('metrica', () => {
   it('conhece as métricas do benchmark com formatação própria', () => {
-    expect(metrica('pct_sem_nota').rotulo).toBe('% sem nota fiscal');
+    expect(metrica('pct_sem_nota').rotulo).toBe('% sem documento fiscal');
     expect(metrica('pct_sem_nota').formatar(12.34)).toBe('12,3%');
     expect(metrica('razao_gasto_receita').formatar(2)).toBe('2×');
     expect(metrica('total_contratado').formatar(1000)).toContain('1.000');

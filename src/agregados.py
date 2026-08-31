@@ -6,7 +6,10 @@ Tudo é derivado; recriar é sempre seguro.
 """
 
 from src import db
-from src.analises import SQL_CATEGORIAS_SEM_NOTA_ESPERADA
+from src.analises import (
+    ADESAO_MINIMA_NORMA, MIN_LINHAS_NORMA, SQL_CATEGORIAS_SEM_NOTA_ESPERADA,
+    cond_documento_nao_fiscal, cond_sem_documento_fiscal,
+)
 from src.carga import filtro_placeholder
 
 VALOR_DESPESA = "TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE)"
@@ -18,6 +21,7 @@ MIN_GRUPO_COMPARACAO = 20
 
 
 def materializar(con) -> None:
+    _norma_documento(con)   # antes de _indicadores: a régua do sem-nota lê daqui
     _serie_diaria(con)
     _benchmark_precos(con)
     _indicadores(con)
@@ -37,6 +41,46 @@ def _ano_eleicao(con):
             UNION ALL
             SELECT MAX(EXTRACT(year FROM DT)) FROM v_receitas)
     """).fetchone()[0]
+
+
+def _norma_documento(con) -> None:
+    """Quanto cada tipo de gasto costuma ser documentado com nota/cupom fiscal.
+
+    A régua antiga era binária ("não tem nota = indício") e marcava metade de
+    todo o dinheiro do país, porque em várias categorias praticamente ninguém
+    emite nota: plataforma estrangeira de impulsionamento, honorário advocatício,
+    militância de rua. Isso é convenção do setor, não indício. Aqui a norma sai
+    dos próprios dados — só é sinal não ter documento fiscal onde o tipo de
+    gasto costuma ter. A lista fixa de `analises.py` segue valendo como piso.
+
+    A norma é medida só entre fornecedores PJ: PF não emite nota, e incluí-la
+    puxaria a adesão da categoria para baixo por um motivo que não é indício.
+    """
+    con.execute(f"""
+        CREATE OR REPLACE TABLE norma_documento AS
+        SELECT DS_ORIGEM_DESPESA,
+               COUNT(*) AS linhas,
+               ROUND(SUM(VR), 2) AS total,
+               ROUND(100.0 * SUM(CASE WHEN NOT ({cond_documento_nao_fiscal()})
+                                      THEN VR ELSE 0 END)
+                     / NULLIF(SUM(VR), 0), 1) AS pct_documento_fiscal,
+               -- categoria com amostra pequena demais para ter norma medida
+               -- mantém o comportamento antigo (exige nota, salvo lista fixa):
+               -- ficar em silêncio no início da campanha seria pior que errar
+               (DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
+                AND (COUNT(*) < {MIN_LINHAS_NORMA}
+                     OR 100.0 * SUM(CASE WHEN NOT ({cond_documento_nao_fiscal()})
+                                         THEN VR ELSE 0 END)
+                        / NULLIF(SUM(VR), 0) >= {ADESAO_MINIMA_NORMA}))
+               AS exige_documento
+        FROM v_despesas
+        WHERE LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14 AND DS_ORIGEM_DESPESA <> '#NULO'
+        GROUP BY 1
+    """)
+    n, exigem = con.execute(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE exige_documento) FROM norma_documento"
+    ).fetchone()
+    print(f"[agregado] norma_documento: {n} categorias, {exigem} com nota como norma")
 
 
 def _serie_diaria(con) -> None:
@@ -207,11 +251,10 @@ def _indicadores(con) -> None:
                   FROM v_despesas GROUP BY 1, 2)
             GROUP BY 1),
         sem_nota AS (
-            -- categorias sem documento fiscal esperado ficam de fora (ver analises.py)
+            -- régua em src/analises.py: documento não fiscal + fornecedor PJ +
+            -- tipo de gasto que costuma ter documento fiscal (norma_documento)
             SELECT SQ_CANDIDATO, ROUND(SUM(VR), 2) AS valor_sem_nota FROM v_despesas
-            WHERE (DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO = '#NULO'
-                   OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%')
-              AND DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
+            WHERE {cond_sem_documento_fiscal()}
             GROUP BY 1),
         pf AS (
             SELECT SQ_CANDIDATO, ROUND(SUM(VR), 2) AS valor_pessoa_fisica FROM v_despesas

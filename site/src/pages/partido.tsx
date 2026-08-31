@@ -154,7 +154,7 @@ export function Partido() {
           ['Fornecedores', num.format(dados.kpis.fornecedores)],
         ].map(([r, v]) => (
           <Card key={r}>
-            <CardContent className="p-5">
+            <CardContent className="p-5 sm:p-5">
               <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{r}</p>
               <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">{v}</p>
             </CardContent>

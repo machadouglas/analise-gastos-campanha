@@ -96,8 +96,37 @@ def test_indicadores_concentracao_sem_nota_e_pessoa_fisica(banco):
     assert ind["razao_gasto_receita"] == pytest.approx(0.5)
     assert ind["n_fornecedores"] == 2
     assert ind["pct_maior_fornecedor"] == pytest.approx(70.0)
-    assert ind["valor_sem_nota"] == pytest.approx(700.0)   # recibo não é nota fiscal
+    # o recibo aqui é de pessoa física, que não emite nota: fora do indicador
+    assert ind["valor_sem_nota"] == pytest.approx(0.0)
     assert ind["valor_pessoa_fisica"] == pytest.approx(700.0)
+
+
+def test_indicadores_sem_nota_so_conta_pessoa_juridica(banco):
+    """PF não emite nota (recibo/RPA é o documento correto dela): marcar PF
+    seria ruído garantido. O mesmo recibo, vindo de PJ, é indício."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "NR_CPF_CNPJ_FORNECEDOR": "12345678901",
+         "NM_FORNECEDOR": "CICRANO PF", "DS_TIPO_FORNECEDOR": "PESSOA FÍSICA",
+         "VR_DESPESA_CONTRATADA": "700,00", "DS_TIPO_DOCUMENTO": "Recibo"},
+        {"SQ_DESPESA": "2", "NR_CPF_CNPJ_FORNECEDOR": "11222333000144",
+         "VR_DESPESA_CONTRATADA": "250,00", "DS_TIPO_DOCUMENTO": "Recibo"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute(
+        "SELECT valor_sem_nota FROM indicadores"
+    ).fetchone()[0] == pytest.approx(250.0)
+
+
+def test_indicadores_sem_nota_aceita_cupom_fiscal(banco):
+    """Cupom fiscal (NFC-e/ECF) comprova a despesa tanto quanto a nota."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "400,00",
+         "DS_TIPO_DOCUMENTO": "Cupom Fiscal"},
+    ])
+    agregados.materializar(banco)
+    assert banco.execute(
+        "SELECT COALESCE(valor_sem_nota, 0) FROM indicadores"
+    ).fetchone()[0] == pytest.approx(0.0)
 
 
 def test_indicadores_valor_repetido_ignora_itens_da_mesma_nota(banco):

@@ -3,6 +3,7 @@
  *  Este arquivo é o ponto único de sincronia com o Python:
  *  - CATEGORIAS_SEM_NOTA_ESPERADA espelha src/analises.py
  *  - SINAIS_CTE / SINAIS_FILTRO espelham METRICAS_SINAL em src/resumo.py
+ *  - SITUACAO_NAO_ENCONTRADA espelha SITUACAO_NAO_ENCONTRADO em src/cnpj.py
  *  tests/test_sincronia_site.py lê este arquivo e falha se as listas divergirem.
  */
 
@@ -26,6 +27,7 @@ export const FILTROS_VAZIOS: Filtros = {
 /** Visões: recortes prontos que respondem uma pergunta e aceitam os demais filtros. */
 export type Visao =
   | 'atual'
+  | 'ranking'
   | 'fora-da-curva'
   | 'removidas'
   | 'removidas-receitas'
@@ -39,6 +41,12 @@ export const eVisaoReceitas = (v: Visao) => v === 'removidas-receitas';
 
 /** Visões de conteúdo removido (despesas ou receitas) — mudam rótulos e colunas. */
 export const eVisaoRemocao = (v: Visao) => v === 'removidas' || v === 'removidas-receitas';
+
+/** Lápide gravada em `fornecedores.situacao` quando a base pública da Receita
+ *  respondeu 404 para o CNPJ: o cadastro não existe lá, e não "a empresa existe
+ *  mas veio sem dados". Manter em sincronia com SITUACAO_NAO_ENCONTRADO em
+ *  src/cnpj.py (teste automático em tests/test_sincronia_site.py). */
+export const SITUACAO_NAO_ENCONTRADA = 'NAO ENCONTRADO NA BASE PUBLICA';
 
 // manter em sincronia com CATEGORIAS_SEM_NOTA_ESPERADA em src/analises.py
 // (teste automático em tests/test_sincronia_site.py)
@@ -55,13 +63,26 @@ const SQL_CATEGORIAS_SEM_NOTA = CATEGORIAS_SEM_NOTA_ESPERADA
   .map((c) => `'${escSQL(c)}'`)
   .join(', ');
 
-/** Mesma régua do backend (src/analises.py / src/agregados.py): documento
- *  ausente ou diferente de nota fiscal, fora das categorias em que a nota não
- *  é o documento próprio. Usada no Explorar e na ficha do fornecedor. */
-export const CONDICAO_SEM_NOTA =
+/** Documento declarado que não comprova a despesa perante o fisco. Cupom fiscal
+ *  conta como fiscal — espelha DOCUMENTOS_FISCAIS em src/analises.py. */
+export const CONDICAO_DOCUMENTO_NAO_FISCAL =
   `(DS_TIPO_DOCUMENTO IS NULL OR DS_TIPO_DOCUMENTO = '#NULO'` +
-  ` OR DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%')` +
-  ` AND DS_ORIGEM_DESPESA NOT IN (${SQL_CATEGORIAS_SEM_NOTA})`;
+  ` OR (DS_TIPO_DOCUMENTO NOT ILIKE '%nota fiscal%'` +
+  ` AND DS_TIPO_DOCUMENTO NOT ILIKE '%cupom fiscal%'))`;
+
+/** Régua do "sem documento fiscal", espelho de cond_sem_documento_fiscal em
+ *  src/analises.py: documento não fiscal + fornecedor PJ + tipo de gasto que
+ *  costuma ter documento fiscal. `temNorma` diz se o parquet `norma_documento`
+ *  foi publicado; sem ele o corte por categoria cai na lista fixa (o release
+ *  antigo continua navegável, só com a régua anterior). */
+export function condicaoSemNota(temNorma: boolean): string {
+  const categoria = temNorma
+    ? 'DS_ORIGEM_DESPESA IN (SELECT DS_ORIGEM_DESPESA FROM norma_documento WHERE exige_documento)'
+    : `DS_ORIGEM_DESPESA NOT IN (${SQL_CATEGORIAS_SEM_NOTA})`;
+  return `${CONDICAO_DOCUMENTO_NAO_FISCAL}`
+    + ` AND LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14`
+    + ` AND ${categoria}`;
+}
 
 // espelha METRICAS_SINAL em src/resumo.py: sinal = métrica estritamente acima
 // do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe).
@@ -85,7 +106,11 @@ export const SINAIS_CTE = `
       ON buf.DS_CARGO = m.DS_CARGO AND buf.SG_UF = m.SG_UF AND buf.metrica = m.metrica
     LEFT JOIN benchmark_indicadores bbr
       ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica
-    WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND m.valor > COALESCE(buf.p95, bbr.p95))`;
+    WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL
+      AND (m.valor > COALESCE(buf.p95, bbr.p95)
+           -- métrica percentual satura: com 5%+ do grupo em 100%, o p95 vai ao
+           -- teto e "estritamente acima" nunca acontece — estar no teto conta
+           OR (m.metrica LIKE 'pct_%' AND COALESCE(buf.p95, bbr.p95) >= 100 AND m.valor >= 100)))`;
 
 // filtro de segundo nível da visão fora-da-curva: EM QUAL sinal a pessoa
 // destoa ('' = qualquer). Ids espelham METRICAS_SINAL em src/resumo.py.
@@ -107,6 +132,33 @@ export function condUF(uf: string, prefixo = ''): string | null {
   return `${prefixo}SG_UF IN (${lista.map((u) => `'${escSQL(u)}'`).join(', ')})`;
 }
 
+
+/** Busca textual tolerante: cada palavra do termo é exigida (AND) dentro de UMA
+ *  das colunas, e palavra de 4+ letras terminada em "s" perde o "s" no padrão.
+ *  Sem isso a busca é literal demais: "carro de som" não achava a categoria
+ *  oficial do TSE "Publicidade por carros de som", e "JOSE SILVA" não achava
+ *  "JOSE DA SILVA". `plural` fica desligado em nomes próprios, onde o "s" final
+ *  costuma ser parte do nome. */
+const CONECTIVOS = new Set([
+  'a', 'as', 'o', 'os', 'e', 'de', 'da', 'do', 'das', 'dos',
+  'em', 'na', 'no', 'nas', 'nos', 'para', 'por', 'com',
+]);
+
+export function condTexto(termo: string, colunas: string[], plural = false): string | null {
+  const palavras = termo.trim().split(/\s+/).filter(Boolean);
+  // conectivos não discriminam nada e só estreitariam o resultado à toa
+  // ("carro de som" tem de achar "CARRO SOM"); se sobrar nada, vale o termo cru
+  const semConectivos = palavras.filter((t) => !CONECTIVOS.has(t.toLowerCase()));
+  const tokens = semConectivos.length ? semConectivos : palavras;
+  if (!tokens.length || !colunas.length) return null;
+  const padrao = (t: string) =>
+    `%${escSQL(plural && t.length >= 4 && /s$/i.test(t) ? t.slice(0, -1) : t)}%`;
+  const porColuna = colunas.map(
+    (c) => `(${tokens.map((t) => `${c} ILIKE '${padrao(t)}'`).join(' AND ')})`,
+  );
+  return porColuna.length === 1 ? porColuna[0] : `(${porColuna.join(' OR ')})`;
+}
+
 /** Filtros aplicáveis sobre `indicadores` (fornecedor/descrição não existem lá). */
 export function whereIndicadores(f: Filtros): string {
   const partes = ['1=1'];
@@ -117,7 +169,7 @@ export function whereIndicadores(f: Filtros): string {
   const cand = f.candidato.trim();
   if (cand) {
     partes.push(
-      /^\d+$/.test(cand) ? `i.NR_CANDIDATO = '${cand}'` : `i.NM_CANDIDATO ILIKE '%${escSQL(cand)}%'`,
+      /^\d+$/.test(cand) ? `i.NR_CANDIDATO = '${cand}'` : condTexto(cand, ['i.NM_CANDIDATO'])!,
     );
   }
   return partes.join(' AND ');
@@ -153,7 +205,7 @@ export function montarWhere(f: Filtros, receitas = false): string {
     partes.push(
       /^\d+$/.test(cand)
         ? `NR_CANDIDATO = '${cand}'`
-        : `NM_CANDIDATO ILIKE '%${escSQL(cand)}%'`,
+        : condTexto(cand, ['NM_CANDIDATO'])!,
     );
   }
   const forn = f.fornecedor.trim();
@@ -164,15 +216,17 @@ export function montarWhere(f: Filtros, receitas = false): string {
     partes.push(
       /^[\d./-]+$/.test(forn)
         ? `${colId} LIKE '${forn.replace(/\D/g, '')}%'`
-        : `(${colNome} ILIKE '%${escSQL(forn)}%' OR ${colNomeRfb} ILIKE '%${escSQL(forn)}%')`,
+        : condTexto(forn, [colNome, colNomeRfb])!,
     );
   }
   const desc = f.descricao.trim();
   if (desc) {
     partes.push(
-      receitas
-        ? `(DS_ORIGEM_RECEITA ILIKE '%${escSQL(desc)}%' OR DS_ESPECIE_RECEITA ILIKE '%${escSQL(desc)}%')`
-        : `(DS_DESPESA ILIKE '%${escSQL(desc)}%' OR DS_ORIGEM_DESPESA ILIKE '%${escSQL(desc)}%')`,
+      condTexto(
+        desc,
+        receitas ? ['DS_ORIGEM_RECEITA', 'DS_ESPECIE_RECEITA'] : ['DS_DESPESA', 'DS_ORIGEM_DESPESA'],
+        true,
+      )!,
     );
   }
   return partes.join(' AND ');
@@ -183,6 +237,7 @@ export function whereDaVisao(
   f: Filtros,
   sinal: SinalFiltro,
   categoria: string,
+  temNorma = false,
 ): { base: string; where: string } {
   if (visao === 'removidas-receitas') return { base: 'receitas_removidas', where: montarWhere(f, true) };
   const w = montarWhere(f);
@@ -208,11 +263,15 @@ export function whereDaVisao(
     };
   }
   if (visao === 'sem-nota') {
-    return { base: 'despesas_atual', where: `${w} AND ${CONDICAO_SEM_NOTA}` };
+    return { base: 'despesas_atual', where: `${w} AND ${condicaoSemNota(temNorma)}` };
   }
   if (visao === 'pessoa-fisica') {
     return { base: 'despesas_atual', where: `${w} AND DS_TIPO_FORNECEDOR ILIKE '%f_sica%'` };
   }
+  // ranking anda sobre as MESMAS despesas da visão padrão (mesmos filtros, e o
+  // painel acima continua valendo) — o que muda é a tabela, que agrega por
+  // candidato em vez de listar item a item
+  if (visao === 'ranking') return { base: 'despesas_atual', where: w };
   if (visao === 'compartilhados') {
     return {
       base: 'despesas_atual',
@@ -296,6 +355,30 @@ export function sqlTabelaDaVisao(
              ORDER BY "Neste tipo de gasto" DESC
              ${paginacao}`;
   if (v === 'fora-da-curva') return ''; // sem categoria, a visão vira cards
+  if (v === 'ranking')
+    // agrega ANTES de juntar com as receitas: `w` traz colunas sem qualificação
+    // (SG_UF, NM_CANDIDATO...) que existem nas duas tabelas e ficariam ambíguas
+    return `WITH r AS (
+               SELECT SQ_CANDIDATO AS sq, ANY_VALUE(NM_CANDIDATO) AS nome,
+                      ANY_VALUE(SG_PARTIDO) AS partido, ANY_VALUE(SG_UF) AS uf,
+                      ANY_VALUE(DS_CARGO) AS cargo, ROUND(SUM(valor), 2) AS total,
+                      COUNT(*) AS itens,
+                      COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR) FILTER (
+                        WHERE NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')) AS fornecedores
+               FROM ${base} WHERE ${w} GROUP BY 1),
+             rec AS (
+               SELECT SQ_CANDIDATO, ROUND(SUM(valor), 2) AS arrecadado
+               FROM receitas_atual GROUP BY 1)
+             SELECT r.sq AS "_sq", '' AS "_cnpj",
+                    r.nome AS "Candidato",
+                    r.partido || '/' || r.uf AS "Partido/UF",
+                    r.cargo AS "Cargo",
+                    r.total AS "Total",
+                    r.itens AS "Itens",
+                    r.fornecedores AS "Fornecedores",
+                    rec.arrecadado AS "Arrecadado"
+             FROM r LEFT JOIN rec ON rec.SQ_CANDIDATO = r.sq
+             ORDER BY "Total" DESC ${paginacao}`;
   if (v === 'compartilhados')
     return `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
                     COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS "Fornecedor",
@@ -379,7 +462,7 @@ export function sqlRegistrosSemMovimento(f: Filtros, limite: number): string {
     partes.push(
       /^\d+$/.test(cand)
         ? `NR_CANDIDATO = '${cand}'`
-        : `(NM_CANDIDATO ILIKE '%${escSQL(cand)}%' OR NM_URNA_CANDIDATO ILIKE '%${escSQL(cand)}%')`,
+        : condTexto(cand, ['NM_CANDIDATO', 'NM_URNA_CANDIDATO'])!,
     );
   }
   return `
