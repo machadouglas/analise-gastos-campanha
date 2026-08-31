@@ -65,3 +65,53 @@ def test_valor_do_estado_atual_multiplica_qt_linhas(banco, tmp_path, monkeypatch
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --- retificações publicadas (despesas_alteradas/receitas_alteradas) ---------
+# O antes/depois é pareado no backend de propósito: parear no front seria a
+# terceira cópia da régua que decide o que NÃO é remoção.
+
+
+def test_parquet_de_alteradas_traz_o_antes_e_o_depois(banco, tmp_path, monkeypatch):
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "DS_DESPESA": "CARRO DE SOM",
+         "VR_DESPESA_CONTRATADA": "50000,00"}])
+    extrair_dia(banco, "21/08/2026", despesas=[
+        {"SQ_DESPESA": "999", "DS_DESPESA": "CARRO DE SOM",  # SQ novo + valor corrigido
+         "VR_DESPESA_CONTRATADA": "5000,00"}])
+    saida = _exportados(banco, tmp_path, monkeypatch)
+
+    linhas = duckdb.query(
+        "SELECT campo_alterado, valor_antes, valor_depois, sucessores "
+        f"FROM '{(saida / 'despesas_alteradas.parquet').as_posix()}'"
+    ).fetchall()
+    assert linhas == [("valor", pytest.approx(50000.0), pytest.approx(5000.0), 1)]
+
+    # e a mesma declaração NÃO pode estar na conta de removidas
+    removidas = duckdb.query(
+        f"SELECT COUNT(*) FROM '{(saida / 'despesas_removidas.parquet').as_posix()}'"
+    ).fetchone()
+    assert removidas == (0,)
+
+
+def test_alteradas_tem_uma_linha_por_declaracao_e_conta_a_ambiguidade(banco, tmp_path, monkeypatch):
+    """Com N versões mortas e M vivas casando entre si, o JOIN devolvia N×M
+    combinações — uma nota corrigida virava 12 linhas na tela. A linha é uma por
+    declaração morta, e quando há mais de uma sucessora possível o parquet diz
+    quantas, em vez de eleger uma e apresentá-la como a resposta."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "DS_DESPESA": "PANFLETO", "VR_DESPESA_CONTRATADA": "100,00"}])
+    # duas declarações vivas diferem da morta em um só campo (o valor): as duas
+    # servem de sucessora e não há como saber qual substituiu qual
+    extrair_dia(banco, "21/08/2026", despesas=[
+        {"SQ_DESPESA": "2", "DS_DESPESA": "PANFLETO", "VR_DESPESA_CONTRATADA": "300,00"},
+        {"SQ_DESPESA": "3", "DS_DESPESA": "PANFLETO", "VR_DESPESA_CONTRATADA": "900,00"}])
+    saida = _exportados(banco, tmp_path, monkeypatch)
+
+    linhas = duckdb.query(
+        "SELECT valor_antes, valor_depois, sucessores "
+        f"FROM '{(saida / 'despesas_alteradas.parquet').as_posix()}'"
+    ).fetchall()
+    assert len(linhas) == 1, "uma linha por declaração morta, não por combinação"
+    # o representante é o de valor mais próximo — determinístico entre publicações
+    assert linhas == [(pytest.approx(100.0), pytest.approx(300.0), 2)]

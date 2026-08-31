@@ -60,6 +60,15 @@ EXPORTS_REMOVIDAS = {
     "receitas_removidas.parquet": ("v_removidas_receitas", "VR_RECEITA"),
 }
 
+# Retificações com o antes/depois pronto (v_alteradas_pares_*, uma linha por
+# par). O pareamento é a mesma régua que decide o que NÃO é remoção — deixar o
+# site refazê-lo seria a terceira cópia dela, então aqui não há derivação de
+# fallback: sem estes parquet, a seção simplesmente não aparece.
+EXPORTS_ALTERADAS = {
+    "despesas_alteradas.parquet": "v_alteradas_pares_despesas_contratadas",
+    "receitas_alteradas.parquet": "v_alteradas_pares_receitas",
+}
+
 
 def _copiar(con, sql_origem: str, destino: Path) -> None:
     con.execute(f"COPY ({sql_origem}) TO '{destino.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)")
@@ -110,7 +119,7 @@ def exportar(con) -> tuple[list[Path], dict[str, str]]:
             FROM {origem}
         """, destino)
         gerados.append(destino)
-    for nome, origem in EXPORTS.items():
+    for nome, origem in {**EXPORTS_ALTERADAS, **EXPORTS}.items():
         if not _existe(con, origem):
             print(f"[aviso] {origem} não existe — pulando {nome}")
             continue

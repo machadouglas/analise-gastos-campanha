@@ -16,6 +16,13 @@ const TABELAS_BOOT = [
   'rede',
   'fornecedores',
   'bens',
+  // retificações com o antes/depois pronto (v_alteradas_pares_* no backend).
+  // Não há derivação de fallback: parear versões é a MESMA régua que decide o
+  // que não é remoção, e uma terceira cópia dela no front é justamente o tipo
+  // de divergência silenciosa que esse projeto já pagou caro. Sem o parquet, a
+  // seção não aparece.
+  'despesas_alteradas',
+  'receitas_alteradas',
 ] as const;
 const TABELAS_SOB_DEMANDA = ['despesas_pagas', 'receitas_doador_originario'] as const;
 export const TABELAS = [

@@ -99,6 +99,31 @@ export function sqlDocumentoDaNota(tipo: string, numero: string): string {
             ELSE '' END)`;
 }
 
+/** Retificações de uma ficha, já pareadas pelo backend (v_alteradas_pares_* em
+ *  src/historico.py). Vêm com o antes/depois e o campo que mudou nomeado —
+ *  parear aqui seria a terceira cópia da régua que decide o que NÃO é remoção.
+ *  Ordenadas pelo tamanho da correção: quem trocou uma ordem de grandeza
+ *  interessa mais do que quem ajustou centavos. */
+export function sqlCorrigidas(
+  tabela: 'despesas_alteradas' | 'receitas_alteradas',
+  where: string,
+): string {
+  const contraparte =
+    tabela === 'despesas_alteradas' ? 'NR_CPF_CNPJ_FORNECEDOR' : 'NR_CPF_CNPJ_DOADOR';
+  return `
+    SELECT campo_alterado, nome_contraparte, ${contraparte} AS contraparte,
+           SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF,
+           descricao_antes, descricao_depois, valor_antes, valor_depois,
+           data_antes, data_depois,
+           STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS visivel_de,
+           STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS visivel_ate,
+           sucessores
+    FROM ${tabela} WHERE ${where}
+    ORDER BY ABS(COALESCE(valor_depois, 0) - COALESCE(valor_antes, 0)) DESC,
+             COALESCE(valor_antes, 0) DESC
+    LIMIT 30`;
+}
+
 /** Nota fiscal afirmada e não localizável — red flag 12 de src/analises.py:
  *  o documento é fiscal, mas o número não tem um só dígito ('SN', 'CONTRATO').
  *  Sem número não há o que conferir. */

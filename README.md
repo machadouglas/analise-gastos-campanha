@@ -46,6 +46,11 @@ python gastos.py verificar
 # 9. Exportar Parquet e publicar no GitHub Releases
 python gastos.py exportar --publicar
 
+# 10. Subir o site com dados REAIS sem baixar nada do TSE: monta o banco a
+#     partir dos Parquet já publicados e roda o pipeline do código atual por
+#     cima. É o caminho curto para quem quer só mexer no site.
+python scripts/previa-local.py
+
 # Tudo de uma vez (pipeline diário, agendável em servidor — ver docs/deploy-coolify.md)
 python gastos.py rotina --ano 2026
 ```
