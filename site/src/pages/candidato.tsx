@@ -68,7 +68,8 @@ interface DadosCandidato {
   receitas: unknown[][];
   colunasReceitas: string[];
   removidas: unknown[][];
-  bens: Bem[];
+  /** null = tabela de bens indisponível; [] = candidato sem bens declarados */
+  bens: Bem[] | null;
 }
 
 const esc = escSQL;
@@ -94,9 +95,11 @@ interface FichaRegistro {
 
 /** Bens declarados ao registrar a candidatura — usados tanto na ficha completa
  *  quanto na ficha sem movimento. Os dois chamadores já aguardaram a conexão,
- *  então a guarda abaixo lê um tabelasDisponiveis já populado. */
-async function carregarBens(w: string): Promise<Bem[]> {
-  if (!tabelasDisponiveis.has('bens')) return [];
+ *  então a guarda abaixo lê um tabelasDisponiveis já populado.
+ *  null = parquet ainda não publicado (a ficha omite a seção); [] = registro
+ *  sem nenhum bem, que é um fato e a ficha declara como tal. */
+async function carregarBens(w: string): Promise<Bem[] | null> {
+  if (!tabelasDisponiveis.has('bens')) return null;
   const r = await executarSQL(`
       SELECT DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, ROUND(VR, 2)
       FROM bens WHERE ${w} ORDER BY VR DESC LIMIT 30`);
@@ -129,6 +132,7 @@ async function carregarRegistro(sq: string): Promise<FichaRegistro | null> {
   ]);
   const l = reg.linhas[0];
   if (!l || l[0] == null) return null;
+  const listaBens = bens ?? [];
   return {
     registroSemMovimento: true,
     nomeUrna: String(l[0]),
@@ -141,8 +145,8 @@ async function carregarRegistro(sq: string): Promise<FichaRegistro | null> {
     cdEleicao: l[7] == null ? null : String(l[7]),
     sgUe: l[8] == null ? null : String(l[8]),
     dtExtracao: extracao.linhas[0]?.[0] == null ? null : String(extracao.linhas[0][0]),
-    totalBens: bens.length ? bens.reduce((s, b) => s + b.valor, 0) : null,
-    bens,
+    totalBens: listaBens.length ? listaBens.reduce((s, b) => s + b.valor, 0) : null,
+    bens: listaBens,
   };
 }
 
@@ -846,13 +850,25 @@ export function Candidato() {
         </Tabela>
       </SecaoRecolhivel>
 
-      {dados.bens.length > 0 && (
+      {dados.bens && (
         <SecaoRecolhivel
           titulo="Patrimônio declarado no registro"
-          resumo={brl.format(dados.bens.reduce((s, b) => s + b.valor, 0))}
+          resumo={
+            dados.bens.length
+              ? brl.format(dados.bens.reduce((s, b) => s + b.valor, 0))
+              : 'nenhum bem declarado'
+          }
           descricao="Bens declarados pelo próprio candidato ao registrar a candidatura. Não é dinheiro de campanha — é o contexto patrimonial de quem gasta e arrecada acima."
         >
-          <TabelaBens bens={dados.bens} />
+          {dados.bens.length > 0 ? (
+            <TabelaBens bens={dados.bens} />
+          ) : (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              O candidato não declarou nenhum bem ao registrar a candidatura. Não é
+              irregularidade — é o que consta no registro, e fica aqui ao lado do que a
+              campanha contratou e arrecadou.
+            </p>
+          )}
         </SecaoRecolhivel>
       )}
     </div>
