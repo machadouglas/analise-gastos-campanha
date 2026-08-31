@@ -500,8 +500,8 @@ function TabelaBens({ bens }: { bens: Bem[] }) {
 
 function FichaSemMovimento({ ficha, sq }: { ficha: FichaRegistro; sq: string }) {
   return (
-    <div className="mx-auto max-w-4xl space-y-6 px-6 py-12">
-      <div className="flex flex-wrap items-start gap-5">
+    <div className="mx-auto max-w-4xl space-y-6 px-4 py-10 sm:px-6 sm:py-12">
+      <div className="flex flex-wrap items-start gap-4 sm:gap-5">
         <FotoCandidato
           cdEleicao={ficha.cdEleicao}
           sq={sq}
@@ -509,9 +509,9 @@ function FichaSemMovimento({ ficha, sq }: { ficha: FichaRegistro; sq: string }) 
           nome={ficha.nomeUrna}
           className="h-24 w-24 text-2xl"
         />
-        <div>
+        <div className="min-w-[12rem] flex-1">
           <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do candidato</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{ficha.nomeUrna}</h1>
+          <h1 className="mt-2 text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{ficha.nomeUrna}</h1>
           <p className="mt-2 text-muted-foreground">
             {ficha.nome} · nº {ficha.numero} · {ficha.cargo} · {ficha.partido}/{ficha.uf}
             {ficha.situacao && <> · registro: {ficha.situacao.toLowerCase()}</>}
@@ -580,14 +580,14 @@ export function Candidato() {
 
   if (dados === 'carregando') {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center gap-3 text-muted-foreground">
+      <div className="flex min-h-[50vh] items-center justify-center gap-3 px-6 text-center text-muted-foreground">
         <Spinner className="h-5 w-5" /> Consultando os dados do candidato no seu navegador…
       </div>
     );
   }
   if (dados === 'nao-encontrado' || dados === null) {
     return (
-      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-muted-foreground">
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
         <p>Candidato não encontrado no registro de candidaturas desta eleição.</p>
         <Link to="/explorar" className="text-[#264E9B] underline underline-offset-4">Voltar ao Explorar</Link>
       </div>
@@ -632,10 +632,10 @@ export function Candidato() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-6 py-12">
+    <div className="mx-auto max-w-7xl space-y-6 px-4 py-10 sm:px-6 sm:py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do candidato</p>
-        <div className="mt-2 flex flex-wrap items-center gap-4">
+        <div className="mt-2 flex flex-wrap items-center gap-3 sm:gap-4">
           <FotoCandidato
             cdEleicao={p.cdEleicao}
             sq={sq ?? null}
@@ -643,8 +643,10 @@ export function Candidato() {
             nome={p.nome}
             className="h-16 w-16 text-lg sm:h-20 sm:w-20"
           />
-          <div className="min-w-0 flex-1">
-            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{p.nome}</h1>
+          {/* min-w: sem um piso, o botão ao lado espremia o nome a ~120px e
+              cada palavra virava uma linha */}
+          <div className="min-w-[12rem] flex-1">
+            <h1 className="text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{p.nome}</h1>
             <p className="mt-2 text-muted-foreground">
               nº {p.numero} · {p.cargo} ·{' '}
               <Link to={`/partido/${encodeURIComponent(p.partido)}`} className="text-[#264E9B] underline underline-offset-4">
@@ -656,7 +658,7 @@ export function Candidato() {
           <button
             onClick={() => void baixarCartao()}
             disabled={gerandoCartao}
-            className="inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-foreground disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-foreground disabled:opacity-60 sm:w-auto"
             title="Gera uma imagem PNG com o resumo desta ficha, pronta para compartilhar"
           >
             {gerandoCartao ? <Spinner className="h-4 w-4" /> : <Download className="h-4 w-4" />}

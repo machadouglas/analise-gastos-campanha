@@ -114,7 +114,11 @@ export function FluxoDinheiro({
 
   return (
     <div>
-      <svg viewBox={`0 0 ${L} ${A}`} className="w-full" role="img"
+      {/* o diagrama é largo por natureza (rótulos nos dois lados): comprimi-lo
+          na largura de um celular deixaria o texto de 11px em ~5px. Abaixo de
+          ~700px ele mantém a largura legível e rola na horizontal. */}
+      <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${L} ${A}`} className="w-full min-w-[42rem]" role="img"
            aria-label={`Fluxo do dinheiro: ${entradas.length} origens de receita e ${saidas.length} categorias de gasto`}
            onMouseLeave={() => setAtivo(null)}>
         {/* ligações origem → candidato */}
@@ -187,6 +191,7 @@ export function FluxoDinheiro({
           {truncar(centro, 26)}
         </text>
       </svg>
+      </div>
       <p className="mt-2 text-xs text-muted-foreground">
         Arrecadado <span className="font-semibold tabular-nums text-foreground">{formatar(totalIn)}</span>
         {' '}· contratado <span className="font-semibold tabular-nums text-foreground">{formatar(totalOut)}</span>

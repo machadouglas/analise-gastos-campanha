@@ -26,7 +26,7 @@ export function Ampliavel({ titulo, children }: { titulo: string; children: Reac
         }}
         className="m-auto w-[96vw] max-w-[1500px] rounded-xl border bg-card p-0 shadow-xl backdrop:bg-black/50"
       >
-        <div className="flex items-center justify-between border-b px-6 py-4">
+        <div className="flex items-center justify-between border-b px-4 py-3 sm:px-6 sm:py-4">
           <p className="font-semibold">{titulo}</p>
           <button
             onClick={() => ref.current?.close()}
@@ -36,7 +36,7 @@ export function Ampliavel({ titulo, children }: { titulo: string; children: Reac
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="max-h-[85vh] overflow-auto p-6">{children}</div>
+        <div className="max-h-[85vh] overflow-auto p-3 sm:p-6">{children}</div>
       </dialog>
     </div>
   );

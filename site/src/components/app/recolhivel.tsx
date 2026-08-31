@@ -31,12 +31,12 @@ export function SecaoRecolhivel({
       }}
       className="group rounded-xl border bg-card shadow-sm"
     >
-      <summary className="flex cursor-pointer select-none items-start justify-between gap-4 rounded-xl p-6 transition-colors hover:bg-muted/30 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer select-none items-start justify-between gap-3 rounded-xl p-4 transition-colors hover:bg-muted/30 sm:gap-4 sm:p-6 [&::-webkit-details-marker]:hidden">
         <div className="min-w-0">
           <p className="font-semibold leading-snug">
             {titulo}
             {resumo && (
-              <span className="ml-2 text-sm font-normal tabular-nums text-muted-foreground">{resumo}</span>
+              <span className="block text-sm font-normal tabular-nums text-muted-foreground sm:ml-2 sm:inline">{resumo}</span>
             )}
           </p>
           {descricao && (
@@ -45,7 +45,7 @@ export function SecaoRecolhivel({
         </div>
         <ChevronDown className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
-      <div className="px-6 pb-6">{jaAbriu && children}</div>
+      <div className="px-4 pb-4 sm:px-6 sm:pb-6">{jaAbriu && children}</div>
     </details>
   );
 }

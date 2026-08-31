@@ -252,14 +252,14 @@ export function Home() {
 
   if (resumo === null) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center gap-3 text-muted-foreground">
+      <div className="flex min-h-[50vh] items-center justify-center gap-3 px-6 text-center text-muted-foreground">
         <Spinner className="h-5 w-5" /> Carregando os dados mais recentes…
       </div>
     );
   }
   if (resumo === 'erro') {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center text-muted-foreground">
+      <div className="flex min-h-[50vh] items-center justify-center px-6 text-center text-muted-foreground">
         Não foi possível carregar os dados. Tente novamente em instantes.
       </div>
     );
@@ -285,7 +285,7 @@ export function Home() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-6 pb-24">
+    <div className="mx-auto max-w-7xl px-4 pb-24 sm:px-6">
       <section className="pt-14 pb-4">
         <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#264E9B]/20 bg-[#264E9B]/5 px-4 py-1.5 text-sm text-[#264E9B]">
           <span className="relative flex h-2 w-2">
@@ -345,11 +345,15 @@ export function Home() {
           <div className="space-y-6">
             {removidas.length > 0 && (
               <div>
-                <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="h-4 w-4" />
-                  {m
-                    ? <>Despesas removidas: {num.format(m.despesas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span></>
-                    : <>Despesas removidas — as {removidas.length} maiores:</>}
+                <p className="mb-3 flex items-start gap-2 text-sm font-semibold text-destructive-foreground">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  {/* span único: sem ele os dois trechos viram colunas de um
+                      flex e no celular cada uma quebra em duas linhas */}
+                  <span>
+                    {m
+                      ? <>Despesas removidas: {num.format(m.despesas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.despesas_removidas_valor)} — as {removidas.length} maiores:</span></>
+                      : <>Despesas removidas — as {removidas.length} maiores:</>}
+                  </span>
                 </p>
                 {notaDominancia(removidas, m?.despesas_removidas_valor)}
                 <TabelaRemovidas linhas={removidas} quem="Fornecedor" />
@@ -357,11 +361,15 @@ export function Home() {
             )}
             {removidasReceitas.length > 0 && (
               <div>
-                <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-destructive-foreground">
-                  <AlertTriangle className="h-4 w-4" />
-                  {m
-                    ? <>Receitas removidas: {num.format(m.receitas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span></>
-                    : <>Receitas removidas — as {removidasReceitas.length} maiores:</>}
+                <p className="mb-3 flex items-start gap-2 text-sm font-semibold text-destructive-foreground">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  {/* span único: sem ele os dois trechos viram colunas de um
+                      flex e no celular cada uma quebra em duas linhas */}
+                  <span>
+                    {m
+                      ? <>Receitas removidas: {num.format(m.receitas_removidas_qtd)} <span className="font-normal text-muted-foreground">somando {brl.format(m.receitas_removidas_valor)} — as {removidasReceitas.length} maiores:</span></>
+                      : <>Receitas removidas — as {removidasReceitas.length} maiores:</>}
+                  </span>
                 </p>
                 {notaDominancia(removidasReceitas, m?.receitas_removidas_valor)}
                 <TabelaRemovidas linhas={removidasReceitas} quem="Doador" />
@@ -390,7 +398,7 @@ export function Home() {
         >
           <div className="space-y-3">
             {(resumo.fora_da_curva ?? []).slice(0, 5).map((c: CandidatoForaDaCurva) => (
-              <div key={c.SQ_CANDIDATO} className="flex items-start gap-4 rounded-xl border bg-card p-4 shadow-sm">
+              <div key={c.SQ_CANDIDATO} className="flex items-start gap-3 rounded-xl border bg-card p-4 shadow-sm sm:gap-4">
                 <Link to={`/candidato/${c.SQ_CANDIDATO}`} tabIndex={-1} aria-hidden>
                   <FotoCandidato
                     cdEleicao={c.cd_eleicao}
@@ -413,7 +421,7 @@ export function Home() {
                   </span>
                   <Link
                     to={`/explorar?visao=fora-da-curva&uf=${encodeURIComponent(c.SG_UF)}&cargo=${encodeURIComponent(c.DS_CARGO)}`}
-                    className="ml-auto text-xs font-semibold text-[#264E9B] underline-offset-4 hover:underline"
+                    className="w-full text-xs font-semibold text-[#264E9B] underline-offset-4 hover:underline sm:ml-auto sm:w-auto"
                   >
                     ver o grupo ({c.DS_CARGO}/{c.SG_UF}) →
                   </Link>
@@ -426,10 +434,13 @@ export function Home() {
                         key={s.metrica}
                         to={`/explorar?visao=fora-da-curva&sinal=${encodeURIComponent(s.metrica)}&uf=${encodeURIComponent(c.SG_UF)}&cargo=${encodeURIComponent(c.DS_CARGO)}`}
                         title={`p95 do grupo (${s.grupo_n} candidatos${s.grupo_ambito === 'BR-TODAS' ? ', âmbito nacional' : ''}): ${m.formatar(s.p95)} — clique para ver todos fora da curva neste sinal`}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20"
+                        /* inline-block (e não inline-flex): assim o rótulo, o valor e o
+                           contexto fluem como texto e quebram naturalmente no celular —
+                           em três itens de flex cada um virava uma coluna espremida */
+                        className="inline-block rounded-2xl border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium leading-relaxed text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20 sm:rounded-full"
                       >
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        {m.rotulo}: {m.formatar(s.valor)}
+                        <AlertTriangle className="mr-1 inline h-3.5 w-3.5 align-[-3px]" />
+                        {m.rotulo}: {m.formatar(s.valor)}{' '}
                         {/* mediana E p95 nomeados: "grupo: 0" sem dizer o que é parecia dado quebrado,
                             e o p95 (o critério do corte) vivia só no tooltip, invisível no toque */}
                         <span className="text-[#7c3a06]/70">

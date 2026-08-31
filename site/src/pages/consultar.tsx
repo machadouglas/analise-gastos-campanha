@@ -242,7 +242,7 @@ export function Consultar() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8 px-6 py-12">
+    <div className="mx-auto max-w-7xl space-y-8 px-4 py-10 sm:px-6 sm:py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
           Console aberto
@@ -276,7 +276,7 @@ export function Consultar() {
           <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
             {CATALOGO.map((grupo) => (
               <div key={grupo.rotulo} className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
-                <span className="w-24 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <span className="w-full text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:w-24 sm:shrink-0">
                   {grupo.rotulo}
                 </span>
                 {grupo.tabelas.map((tabela) => (
@@ -296,7 +296,7 @@ export function Consultar() {
           <div className="space-y-1.5">
             {GRUPOS_EXEMPLOS.map((grupo) => (
               <div key={grupo.rotulo} className="flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
-                <span className="w-24 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <span className="w-full text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:w-24 sm:shrink-0">
                   {grupo.rotulo}
                 </span>
                 {grupo.exemplos.map((ex) => (
@@ -365,6 +365,11 @@ export function Consultar() {
                 {Math.round(resultado.ms)} ms
                 {resultado.total > LIMITE_EXIBICAO &&
                   ` — exibindo as primeiras ${LIMITE_EXIBICAO} (baixe o CSV para tudo)`}
+                {/* o resultado tem tantas colunas quanto a consulta pedir: no
+                    celular só cabem duas, e a rolagem lateral precisa ser dita */}
+                {resultado.colunas.length > 2 && (
+                  <span className="sm:hidden"> · role a tabela para o lado para ver as demais colunas →</span>
+                )}
               </p>
               <div className="max-h-[32rem] overflow-auto rounded-xl border bg-card shadow-sm">
                 <table className="w-full border-collapse text-sm">

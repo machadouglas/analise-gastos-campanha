@@ -129,7 +129,7 @@ async function consultarDispersao(f: Filtros): Promise<PontoDispersao[] | null> 
 }
 
 const seletor =
-  'h-9 rounded-md border bg-card px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
+  'h-9 min-w-0 rounded-md border bg-card px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
 
 export function Explorar() {
   const [params] = useSearchParams();
@@ -317,7 +317,7 @@ export function Explorar() {
     : 0;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8 px-6 py-12">
+    <div className="mx-auto max-w-7xl space-y-8 px-4 py-10 sm:px-6 sm:py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Explorar</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Navegue pelos gastos</h1>
@@ -353,7 +353,7 @@ export function Explorar() {
         </p>
         {visao === 'fora-da-curva' && (
           <div className="mt-3 flex flex-wrap items-center gap-2" role="tablist" aria-label="Fora da curva em">
-            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            <span className="w-full text-xs font-semibold uppercase tracking-widest text-muted-foreground sm:w-auto">
               Fora da curva em:
             </span>
             {(['', ...SINAIS_FILTRO] as SinalFiltro[]).map((s) => (
@@ -398,7 +398,9 @@ export function Explorar() {
       </div>
 
       <form
-        className="flex flex-wrap items-center gap-3"
+        /* grade de duas colunas no celular: em `flex-wrap` os campos de 13rem
+           sobravam sozinhos por linha, com metade da tela vazia ao lado */
+        className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3"
         onSubmit={(e) => {
           e.preventDefault();
           mudar(digitado);
@@ -421,27 +423,27 @@ export function Explorar() {
           {partidos.map((p) => <option key={p}>{p}</option>)}
         </select>
         <input
-          className={`${seletor} w-52`}
+          className={`${seletor} col-span-2 w-full sm:w-52`}
           placeholder="Candidato (nome ou nº)"
           value={digitado.candidato}
           onChange={(e) => setDigitado((d) => ({ ...d, candidato: e.target.value }))}
           aria-label="Candidato"
         />
         <input
-          className={`${seletor} w-52`}
+          className={`${seletor} col-span-2 w-full sm:w-52`}
           placeholder={eVisaoReceitas(visao) ? 'Doador (nome ou CNPJ)' : 'Fornecedor (nome ou CNPJ)'}
           value={digitado.fornecedor}
           onChange={(e) => setDigitado((d) => ({ ...d, fornecedor: e.target.value }))}
           aria-label={eVisaoReceitas(visao) ? 'Doador' : 'Fornecedor'}
         />
         <input
-          className={`${seletor} w-52`}
+          className={`${seletor} col-span-2 w-full sm:w-52`}
           placeholder={eVisaoReceitas(visao) ? 'Origem ou espécie da receita' : 'Descrição do gasto'}
           value={digitado.descricao}
           onChange={(e) => setDigitado((d) => ({ ...d, descricao: e.target.value }))}
           aria-label={eVisaoReceitas(visao) ? 'Origem da receita' : 'Descrição'}
         />
-        <Button type="submit" variant="secondary" size="sm" className="gap-1.5">
+        <Button type="submit" variant="secondary" size="sm" className="col-span-2 h-9 gap-1.5 sm:col-span-1 sm:h-8">
           <Search className="h-4 w-4" /> Filtrar
         </Button>
       </form>
@@ -456,8 +458,8 @@ export function Explorar() {
         // esqueleto com a forma da página: a espera do DuckDB-WASM (motor +
         // parquet) é longa na primeira visita e a tela em branco parecia travada
         <div aria-hidden className="space-y-6">
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <Spinner className="h-4 w-4" /> Preparando o motor de consultas no seu navegador —
+          <div className="flex items-start gap-3 text-sm text-muted-foreground">
+            <Spinner className="mt-0.5 h-4 w-4 shrink-0" /> Preparando o motor de consultas no seu navegador —
             só na primeira visita, as próximas são rápidas…
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -665,7 +667,7 @@ export function Explorar() {
             </div>
 
           <div className="mt-6">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted-foreground">
                 {visao === 'compartilhados'
                   ? 'Fornecedores compartilhados do recorte, maiores primeiro'
@@ -706,7 +708,7 @@ export function Explorar() {
               ) : (
                 <div className="space-y-3">
                   {dados.foraDaCurva.map((c) => (
-                    <div key={c.sq} className="flex items-start gap-4 rounded-xl border bg-card p-4 shadow-sm">
+                    <div key={c.sq} className="flex items-start gap-3 rounded-xl border bg-card p-4 shadow-sm sm:gap-4">
                       <Link to={`/candidato/${c.sq}`} tabIndex={-1} aria-hidden>
                         <FotoCandidato
                           cdEleicao={c.cdEleicao}
@@ -742,14 +744,16 @@ export function Explorar() {
                                   setSinal(selecionado ? '' : (si.metrica as SinalFiltro));
                                 }}
                                 title={`corte do grupo (p95): ${m.formatar(si.p95)} — clique para ${selecionado ? 'limpar o filtro deste sinal' : 'ver todos fora da curva neste sinal'}`}
+                                /* inline-block: rótulo, valor e corte fluem como texto e
+                                   quebram naturalmente no celular (em flex viravam colunas) */
                                 className={
                                   selecionado
-                                    ? 'inline-flex items-center gap-1.5 rounded-full border border-[#B45309] bg-[#B45309] px-3 py-1 text-xs font-medium text-white'
-                                    : 'inline-flex items-center gap-1.5 rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-xs font-medium text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20'
+                                    ? 'inline-block rounded-2xl border border-[#B45309] bg-[#B45309] px-3 py-1 text-left text-xs font-medium leading-relaxed text-white sm:rounded-full'
+                                    : 'inline-block rounded-2xl border border-[#B45309]/40 bg-[#B45309]/10 px-3 py-1 text-left text-xs font-medium leading-relaxed text-[#7c3a06] transition-colors hover:border-[#B45309] hover:bg-[#B45309]/20 sm:rounded-full'
                                 }
                               >
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                {m.rotulo}: {m.formatar(si.valor)}
+                                <AlertTriangle className="mr-1 inline h-3.5 w-3.5 align-[-3px]" />
+                                {m.rotulo}: {m.formatar(si.valor)}{' '}
                                 <span className={selecionado ? 'text-white/75' : 'text-[#7c3a06]/70'}>
                                   · corte (p95): {m.formatar(si.p95)}
                                 </span>
