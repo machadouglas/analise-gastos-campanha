@@ -41,6 +41,18 @@ VARIAVEIS = {
 }
 ESSENCIA = {t: IDENTIDADE[t] + VARIAVEIS[t] for t in IDENTIDADE}
 
+# rótulos dos campos VARIAVEIS, na mesma ordem — o que a retificação mexeu.
+# Viajam no parquet publicado para o site não ter de reconhecer nome de coluna
+# do TSE (e para as duas tabelas renderizarem com o mesmo componente).
+ROTULO_VARIAVEL = ["descricao", "valor", "data"]
+
+# nome legível da contraparte: o cadastro da Receita vem '#NULO' enquanto o CNPJ
+# não foi consultado, e aí vale o nome declarado pelo candidato
+NOME_CONTRAPARTE = {
+    "despesas_contratadas": ("NM_FORNECEDOR_RFB", "NM_FORNECEDOR"),
+    "receitas": ("NM_DOADOR_RFB", "NM_DOADOR"),
+}
+
 # metadados do arquivo, não do fato declarado — ficam fora do histórico e do hash
 COLUNAS_VOLATEIS = {"DT_GERACAO", "HH_GERACAO"}
 
@@ -220,6 +232,58 @@ def _criar_views_mudancas(con) -> None:
                OR h.hash_linha IN (SELECT viva FROM pares)
             ORDER BY {", ".join(f"h.{c}" for c in IDENTIDADE[tabela])}, h.dt_primeira_extracao
         """)
+        # o antes/depois pronto: uma linha por par (versão morta + versão viva),
+        # com o campo que mudou nomeado. É o que a v_alteradas acima não dá de
+        # graça — ela devolve as duas versões como linhas soltas, e parear no
+        # front seria a terceira cópia da régua.
+        desc, vr, dt = VARIAVEIS[tabela]
+        rfb, declarado = NOME_CONTRAPARTE[tabela]
+        # o nome da Receita só existe nos arquivos completos do TSE; bancos de
+        # teste (e extrações antigas) têm só o nome declarado pelo candidato
+        nome_sql = (
+            f"COALESCE(NULLIF(a.{rfb}, '#NULO'), a.{declarado})"
+            if rfb in _colunas(con, hist) else f"a.{declarado}"
+        )
+        contraparte, _ = CONTRAPARTE[tabela]
+        campo = " ".join(
+            f"WHEN a.{col} IS DISTINCT FROM d.{col} THEN '{ROTULO_VARIAVEL[i]}'"
+            for i, col in enumerate(VARIAVEIS[tabela])
+        )
+        con.execute(f"""
+            CREATE OR REPLACE VIEW v_alteradas_pares_{tabela} AS
+            {sumidas},
+            pares AS (
+                SELECT DISTINCT m.hash_linha AS morta, v.hash_linha AS viva
+                FROM sumidas m JOIN vivas v ON {_condicao_edicao(tabela)})
+            SELECT a.SQ_CANDIDATO, a.NM_CANDIDATO, a.SG_PARTIDO, a.DS_CARGO, a.SG_UF,
+                   a.{contraparte},
+                   {nome_sql} AS nome_contraparte,
+                   CASE {campo} ELSE 'desconhecido' END AS campo_alterado,
+                   a.{desc} AS descricao_antes, d.{desc} AS descricao_depois,
+                   ROUND(TRY_CAST(REPLACE(a.{vr}, ',', '.') AS DOUBLE) * a.qt_linhas, 2) AS valor_antes,
+                   ROUND(TRY_CAST(REPLACE(d.{vr}, ',', '.') AS DOUBLE) * d.qt_linhas, 2) AS valor_depois,
+                   a.{dt} AS data_antes, d.{dt} AS data_depois,
+                   a.dt_primeira_extracao, a.dt_ultima_extracao,
+                   -- quantas declarações vivas serviriam de sucessora desta. Em
+                   -- 76% dos casos é 1 e o antes/depois é certo; quando é mais,
+                   -- não dá para saber qual substituiu qual, e o site precisa
+                   -- dizer isso em vez de escolher uma e apresentá-la como a
+                   -- resposta. A linha é UMA por declaração morta: sem isso o
+                   -- JOIN devolvia todas as combinações (uma nota corrigida
+                   -- virava 12 linhas na tela).
+                   COUNT(*) OVER (PARTITION BY a.hash_linha) AS sucessores
+            FROM pares
+            JOIN {hist} a ON a.hash_linha = pares.morta
+            JOIN {hist} d ON d.hash_linha = pares.viva
+            -- representante determinístico: a versão viva de valor mais próximo
+            -- (empate resolvido pelo hash, para a publicação não oscilar)
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY a.hash_linha
+                ORDER BY ABS(COALESCE(TRY_CAST(REPLACE(d.{vr}, ',', '.') AS DOUBLE), 0)
+                           - COALESCE(TRY_CAST(REPLACE(a.{vr}, ',', '.') AS DOUBLE), 0)),
+                         d.hash_linha) = 1
+        """)
+
         # remoção de fato: sumiu, não voltou com a mesma essência e não é edição.
         # As duas views são mutuamente exclusivas por construção — uma declaração
         # corrigida não pode aparecer no site como declaração apagada.

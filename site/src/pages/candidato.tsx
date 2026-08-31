@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { SecaoCorrigidas, montarCorrigidas, type Corrigida } from '@/components/app/corrigidas';
+import { Secao } from '@/components/app/secao';
 import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
 import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import {
@@ -19,7 +21,9 @@ import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlNotasDoCandidato } from '@/lib/consultas';
+import {
+  MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas, sqlNotasDoCandidato,
+} from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
@@ -184,6 +188,8 @@ interface DadosCandidato {
   colunasFornecedores: string[];
   /** notas de cada fornecedor, indexadas pelo CNPJ/CPF da linha da tabela */
   notasPorFornecedor: Map<string, Nota[]>;
+  corrigidas: Corrigida[];
+  corrigidasReceitas: Corrigida[];
   faixas: FaixaPreco[];
   comparacao: FaixaPreco[];
   receitas: unknown[][];
@@ -308,7 +314,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   // 1ª onda: tudo que não depende de resultado anterior, junto — o ganho é o
   // pipeline das leituras parciais dos parquet, o gargalo real da ficha
-  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, notasRes, faixasRes, receitas, removidas, bens] =
+  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, notasRes,
+         corrigidasDesp, corrigidasRec, faixasRes, receitas, removidas, bens] =
     await Promise.all([
       executarSQL(`SELECT * FROM indicadores WHERE ${w}`),
       tabelasDisponiveis.has('candidatos')
@@ -350,6 +357,13 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       // as notas que cada linha de fornecedor esconde (mediana de 2 por
       // candidato, p95 de 24 — cabe tudo de uma vez, sem consulta por clique)
       executarSQL(sqlNotasDoCandidato(w)),
+      // retificações prontas do backend; sem o parquet, a seção não aparece
+      tabelasDisponiveis.has('despesas_alteradas')
+        ? executarSQL(sqlCorrigidas('despesas_alteradas', w))
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+      tabelasDisponiveis.has('receitas_alteradas')
+        ? executarSQL(sqlCorrigidas('receitas_alteradas', w))
+        : Promise.resolve({ linhas: [] as unknown[][] }),
       tabelasDisponiveis.has('benchmark_precos')
         ? executarSQL(`
         WITH notas AS (
@@ -592,6 +606,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     colunasFornecedores: fornecedores.colunas,
     fornecedores: fornecedores.linhas,
     notasPorFornecedor: agruparNotas(notasRes.linhas),
+    corrigidas: montarCorrigidas(corrigidasDesp.linhas),
+    corrigidasReceitas: montarCorrigidas(corrigidasRec.linhas),
     faixas: [...faixasPorCategoria.values()].slice(0, 8),
     comparacao,
     colunasReceitas: receitas.colunas,
@@ -601,17 +617,6 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   };
 }
 
-function Secao({ titulo, descricao, children }: { titulo: string; descricao: string; children: React.ReactNode }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{titulo}</CardTitle>
-        <CardDescription>{descricao}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
-  );
-}
 
 function TabelaBens({ bens }: { bens: Bem[] }) {
   return (
@@ -1050,6 +1055,9 @@ export function Candidato() {
           </Tabela>
         </Secao>
       )}
+
+      <SecaoCorrigidas itens={dados.corrigidas} coluna="contraparte" tipo="despesa" />
+      <SecaoCorrigidas itens={dados.corrigidasReceitas} coluna="contraparte" tipo="receita" />
 
       {dados.bens && (
         <SecaoRecolhivel

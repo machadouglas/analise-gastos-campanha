@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { SecaoCorrigidas, montarCorrigidas, type Corrigida } from '@/components/app/corrigidas';
+import { Secao } from '@/components/app/secao';
 import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
 import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
@@ -14,6 +16,7 @@ import {
   SITUACAO_NAO_ENCONTRADA,
   condicaoSemNota,
   escSQL,
+  sqlCorrigidas,
   sqlDocumentoDaNota,
 } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
@@ -56,6 +59,8 @@ interface DadosFornecedor {
   candidatos: { sq: string; nome: string; cargo: string; partido: string; uf: string; itens: number; total: number }[];
   doacoes: unknown[][];
   removidas: unknown[][];
+  corrigidas: Corrigida[];
+  corrigidasReceitas: Corrigida[];
   notas: unknown[][];
 }
 
@@ -85,7 +90,8 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
 
   // consultas independentes disparadas juntas: o ganho é o pipeline das
   // leituras parciais dos parquet (rede), não paralelismo de CPU no worker
-  const [perfilRes, docRepetidoRes, rfbRes, doacaoAgg, removidasAgg, candidatos, categorias, porDia, notas, doacoes, removidasRes] =
+  const [perfilRes, docRepetidoRes, rfbRes, doacaoAgg, removidasAgg, candidatos, categorias,
+         porDia, notas, doacoes, removidasRes, corrigidasDesp, corrigidasRec] =
     await Promise.all([
       executarSQL(`
       SELECT ANY_VALUE(COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)),
@@ -173,6 +179,13 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
         WHERE ${w}
         ORDER BY 4 DESC LIMIT 30`).then((x) => x.linhas)
         : Promise.resolve([] as unknown[][]),
+      // retificações prontas do backend; sem o parquet, a seção não aparece
+      tabelasDisponiveis.has('despesas_alteradas')
+        ? executarSQL(sqlCorrigidas('despesas_alteradas', w))
+        : Promise.resolve({ linhas: [] as unknown[][] }),
+      tabelasDisponiveis.has('receitas_alteradas')
+        ? executarSQL(sqlCorrigidas('receitas_alteradas', `NR_CPF_CNPJ_DOADOR = '${esc(id)}'`))
+        : Promise.resolve({ linhas: [] as unknown[][] }),
     ]);
 
   const l = perfilRes.linhas[0] ?? [];
@@ -329,21 +342,12 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
     })),
     doacoes,
     removidas,
+    corrigidas: montarCorrigidas(corrigidasDesp.linhas),
+    corrigidasReceitas: montarCorrigidas(corrigidasRec.linhas),
     notas: notas.linhas,
   };
 }
 
-function Secao({ titulo, descricao, children }: { titulo: string; descricao: string; children: React.ReactNode }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{titulo}</CardTitle>
-        <CardDescription>{descricao}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
-  );
-}
 
 function CampoRFB({ rotulo, valor }: { rotulo: string; valor: string | null }) {
   if (!valor) return null;
@@ -658,6 +662,8 @@ export function Fornecedor() {
         </Secao>
       )}
 
+      <SecaoCorrigidas itens={dados.corrigidas} coluna="candidato" tipo="despesa" />
+      <SecaoCorrigidas itens={dados.corrigidasReceitas} coluna="candidato" tipo="receita" />
     </div>
   );
 }
