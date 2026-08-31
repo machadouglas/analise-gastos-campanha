@@ -125,7 +125,7 @@ def main() -> None:
     baixar(con, args.atualizar)
     montar(con)
     carga.criar_views(con)
-    historico._criar_views_mudancas(con)
+    historico.criar_views_mudancas(con)
     agregados.materializar(con)
 
     falhas = verificacao.verificar(con)

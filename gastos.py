@@ -87,6 +87,11 @@ def cmd_rotina(args):
     if algum_novo:
         etapa("versionando extração")
         historico.versionar(con)
+    # fora do `if`: as views seguem a versão do CÓDIGO, não a do TSE. Num dia de
+    # 304 o `versionar` não roda, e uma view nova de um deploy recente ficaria
+    # ausente — a exportação pularia o arquivo com um aviso e o site degradaria
+    # em silêncio. Recriar é barato e idempotente.
+    historico.criar_views_mudancas(con)
     etapa("enriquecendo CNPJs")
     cnpj.enriquecer_em_massa(con, limite=args.limite_cnpj)
 
