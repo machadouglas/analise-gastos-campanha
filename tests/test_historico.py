@@ -186,6 +186,57 @@ def test_rodada_repetida_identica_no_mesmo_dia_e_idempotente():
     assert contar(con, "SELECT COUNT(*) FROM hist_despesas_contratadas") == 1
 
 
+def test_edicao_nao_aparece_como_remocao():
+    """Regressão: valor corrigido caía nas DUAS views — a Home anunciava
+    'declaração removida' para quem só retificou a prestação."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "CARRO DE SOM", "50000,00", 1)])
+    dia(con, "21/08/2026", [("1", "CARRO DE SOM", "5000,00", 1)])
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+    assert contar(con, "SELECT COUNT(*) FROM v_alteradas_despesas_contratadas") == 2
+
+
+def test_edicao_com_sq_regenerado_e_alteracao_nao_remocao():
+    """O caso que a v_alteradas antiga não via: a retransmissão troca o SQ E
+    corrige o valor. Parear por SQ não achava par, e a nota virava 'removida'."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("100", "CARRO DE SOM", "50000,00", 1)])
+    dia(con, "21/08/2026", [("999", "CARRO DE SOM", "5000,00", 1)])
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+    alteradas = con.execute(
+        "SELECT VR_DESPESA_CONTRATADA FROM v_alteradas_despesas_contratadas "
+        "ORDER BY dt_primeira_extracao"
+    ).fetchall()
+    assert [a[0] for a in alteradas] == ["50000,00", "5000,00"]
+
+
+def test_dois_campos_diferentes_nao_e_edicao_e_sim_remocao():
+    """A régua é UM campo corrigido. Se descrição E valor mudam, não dá para
+    afirmar que é a mesma declaração — e sumir de vez é o fato mais forte."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "CARRO DE SOM", "50000,00", 1)])
+    dia(con, "21/08/2026", [("2", "BANDEIRA", "300,00", 1)])
+    removidas = con.execute(
+        "SELECT DS_DESPESA FROM v_removidas_despesas_contratadas").fetchall()
+    assert [r[0] for r in removidas] == ["CARRO DE SOM"]
+    assert contar(con, "SELECT COUNT(*) FROM v_alteradas_despesas_contratadas") == 0
+
+
+def test_removidas_e_alteradas_nunca_se_sobrepoem():
+    """Invariante das duas views: nenhuma declaração pode ser contada como
+    removida E alterada — o site mostraria o mesmo fato com dois nomes."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [
+        ("1", "CARRO DE SOM", "50000,00", 1),   # vai ser corrigida
+        ("2", "PANFLETO", "800,00", 1),         # vai sumir de vez
+    ])
+    dia(con, "21/08/2026", [("1", "CARRO DE SOM", "5000,00", 1)])
+    assert contar(con, """
+        SELECT COUNT(*) FROM v_removidas_despesas_contratadas
+        WHERE hash_linha IN (SELECT hash_linha FROM v_alteradas_despesas_contratadas)""") == 0
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 1
+
+
 def test_registro_de_extracoes_cobre_todos_os_dias():
     con = montar_banco()
     dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1)])

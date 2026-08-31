@@ -84,15 +84,108 @@ export function condicaoSemNota(temNorma: boolean): string {
     + ` AND ${categoria}`;
 }
 
+/** Rótulo do documento fiscal de uma linha: "Nota Fiscal nº 1426", "Outro SN".
+ *
+ *  Os marcadores de nulo do TSE são DIFERENTES nas duas colunas —
+ *  DS_TIPO_DOCUMENTO usa '#NULO' e NR_DOCUMENTO usa '#NULO#', com o '#' final.
+ *  Tratar só o primeiro deixava "#NULO#" vazar para a tela (1.061 linhas na
+ *  extração de 31/08/2026). O 'nº' só entra quando o número tem dígito: "nº SN"
+ *  seria absurdo, e SN é justamente o caso que a red flag 12 marca. */
+export function sqlDocumentoDaNota(tipo: string, numero: string): string {
+  const num = `COALESCE(${numero}, '')`;
+  return `TRIM(COALESCE(NULLIF(${tipo}, '#NULO'), '')
+    || CASE WHEN regexp_matches(${num}, '[0-9]') THEN ' nº ' || ${numero}
+            WHEN ${num} NOT IN ('', '#NULO', '#NULO#', '-1') THEN ' ' || ${numero}
+            ELSE '' END)`;
+}
+
+/** Nota fiscal afirmada e não localizável — red flag 12 de src/analises.py:
+ *  o documento é fiscal, mas o número não tem um só dígito ('SN', 'CONTRATO').
+ *  Sem número não há o que conferir. */
+export const CONDICAO_NOTA_SEM_NUMERO =
+  `NOT ${CONDICAO_DOCUMENTO_NAO_FISCAL}`
+  + ` AND NOT regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')`;
+
+/** Documento fiscal com número de verdade (3+ dígitos) — base da red flag 13
+ *  (o mesmo fornecedor declarando o mesmo número para candidatos diferentes).
+ *  Espelha a análise "Mesmo número de nota em candidatos diferentes". */
+export const CONDICAO_DOCUMENTO_NUMERADO =
+  `NOT ${CONDICAO_DOCUMENTO_NAO_FISCAL}`
+  + ` AND regexp_full_match(COALESCE(NR_DOCUMENTO, ''), '[0-9]{3,}')`
+  + ` AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')`;
+
+/** Fracionamento clássico (red flag 7): mesmo valor, mesmo fornecedor, em notas
+ *  DISTINTAS. Itens repetidos de uma mesma nota são legítimos — por isso a
+ *  contagem é de SQ_DESPESA distintos. Espelha `rep` em src/agregados.py. */
+export const MINIMO_NOTAS_VALOR_REPETIDO = 3;
+
+/** As notas de um candidato, agrupadas por SQ_DESPESA e já marcadas com as red
+ *  flags que são por nota — as três que hoje só existiam como consulta de
+ *  exemplo no console. A ficha lista fornecedores; estas são as notas que cada
+ *  linha de fornecedor esconde.
+ *
+ *  SQ_DESPESA '-1' significa "sem id": essas linhas não podem ser agrupadas
+ *  entre si (viraria uma nota falsa somando despesas independentes), então cada
+ *  uma é a própria nota — mesmo padrão do benchmark de preços por nota. */
+export function sqlNotasDoCandidato(where: string): string {
+  const chave = `NR_CPF_CNPJ_FORNECEDOR, SQ_DESPESA`;
+  return `
+    WITH itens AS (SELECT * FROM despesas_atual WHERE ${where}),
+    -- mesmo valor de item, mesmo fornecedor, em 3+ notas distintas
+    repetidos AS (
+      SELECT NR_CPF_CNPJ_FORNECEDOR AS cnpj, valor FROM itens
+      GROUP BY 1, 2 HAVING COUNT(DISTINCT SQ_DESPESA) >= ${MINIMO_NOTAS_VALOR_REPETIDO}),
+    notas AS (
+      SELECT ${chave}, ANY_VALUE(DT_DESPESA) AS dt, ANY_VALUE(DS_ORIGEM_DESPESA) AS categoria,
+             STRING_AGG(DISTINCT DS_DESPESA, ' · ') AS descricao,
+             ANY_VALUE(${sqlDocumentoDaNota('DS_TIPO_DOCUMENTO', 'NR_DOCUMENTO')}) AS documento,
+             ANY_VALUE(NR_DOCUMENTO) AS n_doc,
+             ROUND(SUM(valor), 2) AS valor, COUNT(*) AS itens,
+             MAX(CASE WHEN ${CONDICAO_NOTA_SEM_NUMERO} THEN 1 ELSE 0 END) AS sem_numero,
+             MAX(CASE WHEN ${CONDICAO_DOCUMENTO_NUMERADO} THEN 1 ELSE 0 END) AS numerado,
+             MAX(CASE WHEN EXISTS (SELECT 1 FROM repetidos r
+                   WHERE r.cnpj = itens.NR_CPF_CNPJ_FORNECEDOR AND r.valor = itens.valor)
+                 THEN 1 ELSE 0 END) AS valor_repetido
+      FROM itens WHERE SQ_DESPESA <> '-1' GROUP BY 1, 2
+      UNION ALL
+      SELECT NR_CPF_CNPJ_FORNECEDOR, SQ_DESPESA, DT_DESPESA, DS_ORIGEM_DESPESA, DS_DESPESA,
+             ${sqlDocumentoDaNota('DS_TIPO_DOCUMENTO', 'NR_DOCUMENTO')}, NR_DOCUMENTO,
+             ROUND(valor, 2), 1,
+             CASE WHEN ${CONDICAO_NOTA_SEM_NUMERO} THEN 1 ELSE 0 END,
+             CASE WHEN ${CONDICAO_DOCUMENTO_NUMERADO} THEN 1 ELSE 0 END,
+             0
+      FROM itens WHERE SQ_DESPESA = '-1')
+    SELECT n.NR_CPF_CNPJ_FORNECEDOR AS cnpj, n.dt, n.categoria, n.descricao,
+           n.documento, n.valor, n.itens,
+           n.sem_numero, n.valor_repetido,
+           -- red flag 13: o número desta nota aparece para OUTRO candidato
+           CASE WHEN n.numerado = 1 AND EXISTS (
+                  SELECT 1 FROM despesas_atual o
+                  WHERE o.NR_CPF_CNPJ_FORNECEDOR = n.NR_CPF_CNPJ_FORNECEDOR
+                    AND o.NR_DOCUMENTO = n.n_doc
+                    AND o.SQ_CANDIDATO <> (SELECT ANY_VALUE(SQ_CANDIDATO) FROM itens))
+                THEN 1 ELSE 0 END AS doc_de_outro
+    FROM notas n
+    ORDER BY n.valor DESC`;
+}
+
+/** Margem da razão gasto÷arrecadado para ela contar como sinal: estourar o
+ *  arrecadado por poucos por cento é descompasso de calendário (nota
+ *  contratada antes do repasse entrar), não indício.
+ *  Espelha MARGEM_GASTO_ACIMA em src/resumo.py — o literal aparece de novo
+ *  dentro do SINAIS_CTE abaixo porque tests/test_sincronia_site.py compara o
+ *  texto do SQL dos dois lados; mudar aqui exige mudar lá (e o teste cobra). */
+export const MARGEM_GASTO_ACIMA = 1.1;
+
 // espelha METRICAS_SINAL em src/resumo.py: sinal = métrica estritamente acima
 // do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe).
-// razão gasto÷arrecadado só é sinal quando > 1 — mesma régua do backend.
+// razão gasto÷arrecadado só é sinal acima de MARGEM_GASTO_ACIMA — mesma régua.
 export const SINAIS_CTE = `
   metricas AS (
     SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'total_contratado' AS metrica, total_contratado AS valor
     FROM indicadores WHERE total_contratado > 0
     UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'razao_gasto_receita', razao_gasto_receita
-    FROM indicadores WHERE razao_gasto_receita > 1
+    FROM indicadores WHERE razao_gasto_receita > 1.1
     UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_maior_fornecedor', pct_maior_fornecedor
     FROM indicadores WHERE n_fornecedores > 1
     UNION ALL SELECT SQ_CANDIDATO, DS_CARGO, SG_UF, 'pct_sem_nota', pct_sem_nota

@@ -1,9 +1,11 @@
-/* Home: duas coisas que só tinham verificação no olho — a seção de declarações
- * removidas, que some por completo quando não há remoção, e a linha de cartões,
- * onde o cartão sem sparkline precisa manter altura e padding dos vizinhos. */
+/* Home: três coisas que só tinham verificação no olho — a seção de declarações
+ * removidas, que some por completo quando não há remoção; a linha de cartões,
+ * onde o cartão sem sparkline precisa manter altura e padding dos vizinhos; e o
+ * chip do fora da curva, que precisa afirmar o fato em vez de largar um par
+ * "métrica: número" para o leitor interpretar. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import type { DespesaResumo, Resumo } from '@/lib/resumo';
+import type { CandidatoForaDaCurva, DespesaResumo, Resumo } from '@/lib/resumo';
 import { renderizarRota } from '@/test/render';
 
 const { carregarResumoFalso } = vi.hoisted(() => ({ carregarResumoFalso: vi.fn() }));
@@ -33,6 +35,20 @@ const RECEITA_REMOVIDA: DespesaResumo = {
   valor: 4000,
 };
 
+const FORA_DA_CURVA: CandidatoForaDaCurva = {
+  SQ_CANDIDATO: '900000000002',
+  NM_CANDIDATO: 'CARLA FICTÍCIA DE OLIVEIRA',
+  SG_PARTIDO: 'PXX',
+  DS_CARGO: 'Deputado Federal',
+  SG_UF: 'PR',
+  total_contratado: 1_262_278,
+  total_receitas: 1_100_000,
+  sinais: [
+    { metrica: 'razao_gasto_receita', valor: 1.15, mediana: 0, p95: 0.9, grupo_n: 40, grupo_ambito: 'PR' },
+    { metrica: 'pct_sem_nota', valor: 62.4, mediana: 0, p95: 0, grupo_n: 40, grupo_ambito: 'PR' },
+  ],
+};
+
 const BASE: Resumo = {
   gerado_em: '2026-08-30',
   primeira_extracao: false,
@@ -54,6 +70,7 @@ const BASE: Resumo = {
   receitas_removidas: [RECEITA_REMOVIDA],
   fornecedores_compartilhados: [],
   top_candidatos: [],
+  fora_da_curva: [FORA_DA_CURVA],
   serie_nacional: [
     { dt: '2026-08-28', contratado: 4_000_000, receitas: 6_000_000, candidatos: 1100 },
     { dt: '2026-08-29', contratado: 4_500_000, receitas: 6_500_000, candidatos: 1150 },
@@ -127,5 +144,23 @@ describe('home · cartões de indicador', () => {
     // número colava no topo do quadro a partir do breakpoint sm
     expect(semSerie).toHaveClass('p-5', 'sm:p-5');
     expect(semSerie.className).not.toMatch(/(^|\s|:)pt-0(\s|$)/);
+  });
+});
+
+describe('home · chips do fora da curva', () => {
+  it('a razão vira frase com as 2 casas do banco, e não o par "métrica: número"', async () => {
+    montar(BASE);
+    const chip = await screen.findByText(/Gastou 1,15× o que arrecadou/);
+    // o corte do grupo continua no chip: sem ele o número não tem régua
+    expect(chip).toHaveTextContent('corte (p95): 0,90×');
+    expect(chip).toHaveTextContent('mediana do grupo: 0,00×');
+    // regressão: com 1 casa decimal a razão 1,03 virava "1×" e o chip parecia
+    // implicância com quem está no normal
+    expect(screen.queryByText(/Gasto ÷ arrecadado:/)).toBeNull();
+  });
+
+  it('métrica sem frase própria segue no par rótulo: valor', async () => {
+    montar(BASE);
+    expect(await screen.findByText(/% sem documento fiscal: 62,4%/)).toBeInTheDocument();
   });
 });

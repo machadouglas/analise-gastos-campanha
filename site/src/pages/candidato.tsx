@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, Download } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
@@ -19,7 +19,7 @@ import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { SITUACAO_NAO_ENCONTRADA, escSQL } from '@/lib/consultas';
+import { MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlNotasDoCandidato } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
@@ -52,6 +52,125 @@ interface Bem {
   valor: number;
 }
 
+/** Uma nota declarada, com as red flags que são por nota (12, 13 e 7 do
+ *  catálogo) já resolvidas pela consulta — ver sqlNotasDoCandidato. */
+interface Nota {
+  data: string;
+  categoria: string;
+  descricao: string;
+  documento: string;
+  valor: number;
+  itens: number;
+  semNumero: boolean;
+  valorRepetido: boolean;
+  docDeOutro: boolean;
+}
+
+/** Agrupa as notas pelo CNPJ/CPF, que é a chave da linha de fornecedor. */
+function agruparNotas(linhas: unknown[][]): Map<string, Nota[]> {
+  const mapa = new Map<string, Nota[]>();
+  for (const l of linhas) {
+    const cnpj = celula(l[0]);
+    const nota: Nota = {
+      data: celula(l[1]),
+      categoria: celula(l[2]),
+      descricao: celula(l[3]),
+      // já vem montado ("Nota Fiscal nº 1426"), com os dois marcadores de nulo
+      // do TSE tratados — ver sqlDocumentoDaNota
+      documento: celula(l[4]),
+      valor: Number(l[5] ?? 0),
+      itens: Number(l[6] ?? 0),
+      semNumero: Number(l[7] ?? 0) === 1,
+      valorRepetido: Number(l[8] ?? 0) === 1,
+      docDeOutro: Number(l[9] ?? 0) === 1,
+    };
+    const atual = mapa.get(cnpj);
+    if (atual) atual.push(nota);
+    else mapa.set(cnpj, [nota]);
+  }
+  return mapa;
+}
+
+/** As notas de um fornecedor, abertas dentro da linha dele. Antes a ficha
+ *  dizia "4 itens" e não deixava ver quais — e as red flags por nota só
+ *  existiam como consulta de exemplo no console SQL.
+ *
+ *  Tabela aninhada, não lista corrida: com data, descrição, documento e valor
+ *  soltos numa linha só, quatro notas viravam um bloco de texto impossível de
+ *  varrer. Alinhadas em coluna, a comparação entre notas é imediata — que é o
+ *  que denuncia fracionamento (mesmo valor, dias seguidos). */
+function NotasDoFornecedor({ notas }: { notas: Nota[] }) {
+  return (
+    <div className="px-1 py-2">
+      <p className="mb-1.5 text-[0.7rem] font-semibold uppercase tracking-widest text-muted-foreground">
+        {notas.length === 1 ? '1 nota declarada' : `${num.format(notas.length)} notas declaradas`}
+      </p>
+      <table className="w-full border-separate border-spacing-y-1 text-xs">
+        <thead className="sr-only">
+          <tr>
+            <th>Data</th>
+            <th>Descrição</th>
+            <th>Documento</th>
+            <th>Valor</th>
+          </tr>
+        </thead>
+        <tbody>
+          {notas.map((n, i) => (
+            <tr key={i} className="align-top">
+              <td className="w-[6.5rem] whitespace-nowrap py-1 pr-3 text-muted-foreground">
+                {n.data}
+              </td>
+              <td className="py-1 pr-3">
+                <span className="text-[#10244A]">{n.descricao}</span>
+                {n.itens > 1 && (
+                  <span className="text-muted-foreground/70"> · {n.itens} itens</span>
+                )}
+                {(n.semNumero || n.docDeOutro || n.valorRepetido) && (
+                  <span className="mt-1 flex flex-wrap gap-1">
+                    {n.semNumero && (
+                      <MarcaNota titulo="O documento é fiscal, mas o número declarado não tem um só dígito — a nota é afirmada e não dá para localizar.">
+                        nota sem número
+                      </MarcaNota>
+                    )}
+                    {n.docDeOutro && (
+                      <MarcaNota titulo="Este fornecedor declarou o mesmo número de documento para outro candidato. Numeração de nota é sequencial por emitente.">
+                        nº repetido em outro candidato
+                      </MarcaNota>
+                    )}
+                    {n.valorRepetido && (
+                      <MarcaNota titulo="Este mesmo valor aparece em 3 ou mais notas distintas deste fornecedor — padrão de fracionamento.">
+                        valor repetido
+                      </MarcaNota>
+                    )}
+                  </span>
+                )}
+              </td>
+              <td className="w-[11rem] py-1 pr-3 text-muted-foreground/80">
+                {n.documento || '—'}
+              </td>
+              <td className="w-[7rem] whitespace-nowrap py-1 text-right font-medium tabular-nums text-[#10244A]">
+                {brl.format(n.valor)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MarcaNota({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <span
+      title={titulo}
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-2 py-0.5 text-[0.68rem] font-medium text-[#7c3a06]"
+    >
+      <AlertTriangle className="h-3 w-3" />
+      {children}
+    </span>
+  );
+}
+
 interface DadosCandidato {
   perfil: Perfil;
   serieRotulos: string[];
@@ -63,6 +182,8 @@ interface DadosCandidato {
   conexoesSecundarias: NoSecundario[];
   fornecedores: unknown[][];
   colunasFornecedores: string[];
+  /** notas de cada fornecedor, indexadas pelo CNPJ/CPF da linha da tabela */
+  notasPorFornecedor: Map<string, Nota[]>;
   faixas: FaixaPreco[];
   comparacao: FaixaPreco[];
   receitas: unknown[][];
@@ -187,7 +308,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   // 1ª onda: tudo que não depende de resultado anterior, junto — o ganho é o
   // pipeline das leituras parciais dos parquet, o gargalo real da ficha
-  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, faixasRes, receitas, removidas, bens] =
+  const [ind, fotoRes, serie, categorias, origens, fornecedores, doadores, notasRes, faixasRes, receitas, removidas, bens] =
     await Promise.all([
       executarSQL(`SELECT * FROM indicadores WHERE ${w}`),
       tabelasDisponiveis.has('candidatos')
@@ -226,6 +347,9 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
              ROUND(SUM(valor), 2) AS total
       FROM receitas_atual WHERE ${w}
       GROUP BY 1, 2 ORDER BY total DESC LIMIT 12`),
+      // as notas que cada linha de fornecedor esconde (mediana de 2 por
+      // candidato, p95 de 24 — cabe tudo de uma vez, sem consulta por clique)
+      executarSQL(sqlNotasDoCandidato(w)),
       tabelasDisponiveis.has('benchmark_precos')
         ? executarSQL(`
         WITH notas AS (
@@ -267,8 +391,9 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   const flags: string[] = [];
   const razao = Number(linha.razao_gasto_receita ?? 0);
-  // mesma régua do sinal do backend (razão > 1): gastou mais do que arrecadou
-  if (razao > 1) flags.push(`contratou ${razao.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}× o que declarou arrecadar`);
+  // mesma régua e mesma frase do sinal do backend (razão acima da margem):
+  // gastou mais do que arrecadou com folga suficiente para não ser calendário
+  if (razao > MARGEM_GASTO_ACIMA) flags.push(metrica('razao_gasto_receita').frase(razao));
   if (Number(linha.pct_maior_fornecedor ?? 0) >= 50 && Number(linha.n_fornecedores) > 1)
     flags.push(`${linha.pct_maior_fornecedor}% do gasto em um único fornecedor`);
   if (Number(linha.valor_sem_nota ?? 0) > 0)
@@ -466,6 +591,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     conexoesSecundarias,
     colunasFornecedores: fornecedores.colunas,
     fornecedores: fornecedores.linhas,
+    notasPorFornecedor: agruparNotas(notasRes.linhas),
     faixas: [...faixasPorCategoria.values()].slice(0, 8),
     comparacao,
     colunasReceitas: receitas.colunas,
@@ -567,6 +693,15 @@ export function Candidato() {
   const navigate = useNavigate();
   const [dados, setDados] = useState<DadosCandidato | FichaRegistro | null | 'carregando' | 'nao-encontrado'>('carregando');
   const [gerandoCartao, setGerandoCartao] = useState(false);
+  // linhas de fornecedor abertas (por CNPJ) — a ficha guarda o que o leitor
+  // abriu enquanto navega pela tabela
+  const [notasAbertas, setNotasAbertas] = useState<Set<string>>(new Set());
+  const alternarNotas = (cnpj: string) =>
+    setNotasAbertas((atual) => {
+      const proximo = new Set(atual);
+      if (!proximo.delete(cnpj)) proximo.add(cnpj);
+      return proximo;
+    });
 
   useEffect(() => {
     if (!sq || !/^\d+$/.test(sq)) {
@@ -689,7 +824,7 @@ export function Candidato() {
           ['Pago até agora', p.pago == null ? '—' : brl.format(p.pago)],
           ['Dinheiro público', p.pctFundosPublicos == null ? '—' : `${p.pctFundosPublicos.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do arrecadado`],
           ['Fornecedores', num.format(p.nFornecedores)],
-          ['Gasto ÷ arrecadado', p.receitas ? `${(p.contratado / p.receitas).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}×` : '—'],
+          ['Gasto ÷ arrecadado', p.receitas ? metrica('razao_gasto_receita').formatar(p.contratado / p.receitas) : '—'],
         ].map(([r, v]) => (
           <Card key={r}>
             <CardContent className="p-5 sm:p-5">
@@ -783,8 +918,17 @@ export function Candidato() {
         descricao={`Quem recebeu, quanto — e, quando disponível, a idade e a sede da empresa (${p.cnpjsConsultados} de ${p.cnpjs} CNPJs já verificados na Receita Federal). Clique no nome para abrir a ficha do fornecedor.`}
       >
         <Tabela colunas={dados.colunasFornecedores.filter((c) => !c.startsWith('_')).map((c) => ({ titulo: c, numerica: c === 'Total' || c === 'Itens' }))}>
-          {dados.fornecedores.map((l, i) => (
-            <tr key={i} className="hover:bg-muted/40">
+          {dados.fornecedores.map((l, i) => {
+          const cnpjLinha = celula(l[1]);
+          const notas = dados.notasPorFornecedor.get(cnpjLinha) ?? [];
+          const aberta = notasAbertas.has(cnpjLinha);
+          const comMarca = notas.some((n) => n.semNumero || n.docDeOutro || n.valorRepetido);
+          return (
+            <Fragment key={i}>
+            <tr
+              className={notas.length ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/40'}
+              onClick={notas.length ? () => alternarNotas(cnpjLinha) : undefined}
+            >
               {l.map((v, j) => {
                 const col = dados.colunasFornecedores[j];
                 if (col.startsWith('_')) return null;
@@ -814,18 +958,52 @@ export function Candidato() {
                   );
                 }
                 if (col === 'CNPJ/CPF') return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;
-                if (col === 'Fornecedor' && temFichaFornecedor(celula(l[1])))
+                if (col === 'Fornecedor')
                   return (
                     <td key={j}>
-                      <Link to={urlFornecedor(celula(l[1]))} className="text-[#264E9B] underline-offset-4 hover:underline">
-                        {celula(v)}
-                      </Link>
+                      <span className="flex items-start gap-1">
+                        {notas.length > 0 && (
+                          <ChevronRight
+                            aria-hidden
+                            className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${aberta ? 'rotate-90' : ''}`}
+                          />
+                        )}
+                        <span>
+                          {temFichaFornecedor(cnpjLinha) ? (
+                            <Link
+                              to={urlFornecedor(cnpjLinha)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-[#264E9B] underline-offset-4 hover:underline"
+                            >
+                              {celula(v)}
+                            </Link>
+                          ) : (
+                            celula(v)
+                          )}
+                          {comMarca && !aberta && (
+                            <AlertTriangle
+                              aria-label="há notas com indício nesta linha"
+                              className="ml-1.5 inline h-3.5 w-3.5 align-[-2px] text-[#B45309]"
+                            />
+                          )}
+                        </span>
+                      </span>
                     </td>
                   );
                 return <td key={j}>{celula(v)}</td>;
               })}
             </tr>
-          ))}
+            {aberta && (
+              <tr>
+                <td colSpan={dados.colunasFornecedores.filter((c) => !c.startsWith('_')).length}
+                    className="bg-muted/30">
+                  <NotasDoFornecedor notas={notas} />
+                </td>
+              </tr>
+            )}
+            </Fragment>
+          );
+          })}
         </Tabela>
       </SecaoRecolhivel>
 
@@ -851,7 +1029,7 @@ export function Candidato() {
       </SecaoRecolhivel>
 
       {dados.removidas.length > 0 && (
-        <Secao titulo="Declarações removidas" descricao="Conteúdo que estava declarado ao TSE e deixou de estar. Pode ser correção legítima — é um indício, não uma acusação.">
+        <Secao titulo="Declarações removidas" descricao="Conteúdo que estava declarado ao TSE e deixou de estar — já descontadas as renumerações do sistema e as retificações de um campo. É um indício, não uma acusação.">
           <Tabela colunas={[{ titulo: 'Fornecedor' }, { titulo: 'Descrição' }, { titulo: 'Valor', numerica: true }, { titulo: 'Visível de' }, { titulo: 'Até' }]}>
             {dados.removidas.map((l, i) => (
               <tr key={i}>

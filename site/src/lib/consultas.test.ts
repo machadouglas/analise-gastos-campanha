@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  FILTROS_VAZIOS, SINAIS_FILTRO, condicaoSemNota,
-  condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlPainel,
-  sqlRegistrosSemMovimento, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
+  CONDICAO_DOCUMENTO_NAO_FISCAL, CONDICAO_DOCUMENTO_NUMERADO, CONDICAO_NOTA_SEM_NUMERO,
+  FILTROS_VAZIOS, MINIMO_NOTAS_VALOR_REPETIDO, SINAIS_FILTRO, condicaoSemNota,
+  condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlDocumentoDaNota, sqlNotasDoCandidato,
+  sqlPainel, sqlRegistrosSemMovimento, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
 } from './consultas';
 
 const f = (parcial: Partial<typeof FILTROS_VAZIOS>) => ({ ...FILTROS_VAZIOS, ...parcial });
@@ -204,5 +205,56 @@ describe('eVisaoRemocao', () => {
     expect(eVisaoRemocao('removidas-receitas')).toBe(true);
     expect(eVisaoRemocao('atual')).toBe(false);
     expect(eVisaoRemocao('compartilhados')).toBe(false);
+  });
+});
+
+describe('réguas por nota (red flags 12, 13 e 7)', () => {
+  it('a nota sem número só vale para documento fiscal', () => {
+    // um recibo não tem número de nota a cobrar — sem essa negação a marca
+    // cairia em metade das declarações do país
+    expect(CONDICAO_NOTA_SEM_NUMERO).toContain(CONDICAO_DOCUMENTO_NAO_FISCAL);
+    expect(CONDICAO_NOTA_SEM_NUMERO).toMatch(/NOT regexp_matches/);
+  });
+
+  it('o documento numerado exige 3+ dígitos e fornecedor identificado', () => {
+    expect(CONDICAO_DOCUMENTO_NUMERADO).toContain("'[0-9]{3,}'");
+    expect(CONDICAO_DOCUMENTO_NUMERADO).toContain("NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')");
+  });
+
+  it('a consulta de notas separa quem não tem id em vez de agrupar tudo junto', () => {
+    const sql = sqlNotasDoCandidato("SQ_CANDIDATO = '1'");
+    // SQ_DESPESA '-1' = sem id: agrupar essas linhas somaria despesas
+    // independentes numa nota que não existe
+    expect(sql).toContain("WHERE SQ_DESPESA <> '-1' GROUP BY 1, 2");
+    expect(sql).toContain("WHERE SQ_DESPESA = '-1'");
+  });
+
+  it('o valor repetido conta NOTAS distintas, não itens', () => {
+    const sql = sqlNotasDoCandidato("SQ_CANDIDATO = '1'");
+    // itens iguais da mesma nota são legítimos (2 unidades do mesmo produto)
+    expect(sql).toContain(`COUNT(DISTINCT SQ_DESPESA) >= ${MINIMO_NOTAS_VALOR_REPETIDO}`);
+  });
+
+  it('o nº repetido procura em OUTRO candidato, nunca no próprio', () => {
+    const sql = sqlNotasDoCandidato("SQ_CANDIDATO = '1'");
+    expect(sql).toContain('o.SQ_CANDIDATO <>');
+  });
+});
+
+describe('sqlDocumentoDaNota', () => {
+  const sql = sqlDocumentoDaNota('DS_TIPO_DOCUMENTO', 'NR_DOCUMENTO');
+
+  it('trata os DOIS marcadores de nulo do TSE, que são diferentes por coluna', () => {
+    // DS_TIPO_DOCUMENTO usa '#NULO'; NR_DOCUMENTO usa '#NULO#', com o '#' final.
+    // Tratar só o primeiro fazia "#NULO#" aparecer na tela do visitante.
+    expect(sql).toContain("NULLIF(DS_TIPO_DOCUMENTO, '#NULO')");
+    expect(sql).toContain("'#NULO#'");
+  });
+
+  it("só põe 'nº' quando o número tem dígito", () => {
+    // "Outro nº 12" ajuda; "Outro nº SN" seria absurdo — e SN é justamente o
+    // caso que a red flag 12 marca
+    expect(sql).toContain("regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')");
+    expect(sql).toContain("' nº ' || NR_DOCUMENTO");
   });
 });

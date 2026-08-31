@@ -141,9 +141,12 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
           AND NOT (NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
                    AND COALESCE(TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)`,
     },
-    // Remoções com o MESMO critério do backend: retransmitir a prestação
-    // renumera as notas, então só é remoção o conteúdo sem correspondente de
-    // mesma essência no estado atual (sincronia com ESSENCIA em src/historico.py).
+    // Remoções com o MESMO critério do backend (sincronia com IDENTIDADE e
+    // VARIAVEIS em src/historico.py): retransmitir a prestação renumera as notas
+    // e às vezes corrige um campo. Só é remoção o conteúdo cuja contraparte não
+    // reaparece no estado atual com PELO MENOS dois dos três campos variáveis
+    // iguais — 3 de 3 é a mesma declaração retransmitida, 2 de 3 é uma edição
+    // (valor, descrição OU data corrigidos), e nenhuma das duas é apagar nada.
     // Também aqui preferimos o parquet dedicado (despesas_removidas.parquet),
     // já filtrado no backend com esta mesma régua; a derivação abaixo é o
     // fallback para publicações que ainda não o trazem.
@@ -160,11 +163,11 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
             SELECT 1 FROM despesas_atual v
             WHERE v.SQ_CANDIDATO = d.SQ_CANDIDATO
               AND v.NR_CPF_CNPJ_FORNECEDOR = d.NR_CPF_CNPJ_FORNECEDOR
-              AND v.DS_DESPESA = d.DS_DESPESA
-              AND v.VR_DESPESA_CONTRATADA = d.VR_DESPESA_CONTRATADA
-              AND v.DT_DESPESA = d.DT_DESPESA)`,
+              AND (CASE WHEN v.DS_DESPESA IS NOT DISTINCT FROM d.DS_DESPESA THEN 1 ELSE 0 END
+                 + CASE WHEN v.VR_DESPESA_CONTRATADA IS NOT DISTINCT FROM d.VR_DESPESA_CONTRATADA THEN 1 ELSE 0 END
+                 + CASE WHEN v.DT_DESPESA IS NOT DISTINCT FROM d.DT_DESPESA THEN 1 ELSE 0 END) >= 2)`,
     },
-    // mesma régua para receitas: sincronia com ESSENCIA['receitas'] em src/historico.py
+    // mesma régua para receitas: sincronia com IDENTIDADE/VARIAVEIS['receitas']
     {
       nome: 'receitas_removidas',
       base: 'receitas',
@@ -178,9 +181,9 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
             SELECT 1 FROM receitas_atual v
             WHERE v.SQ_CANDIDATO = r.SQ_CANDIDATO
               AND v.NR_CPF_CNPJ_DOADOR = r.NR_CPF_CNPJ_DOADOR
-              AND v.DS_ORIGEM_RECEITA = r.DS_ORIGEM_RECEITA
-              AND v.VR_RECEITA = r.VR_RECEITA
-              AND v.DT_RECEITA = r.DT_RECEITA)`,
+              AND (CASE WHEN v.DS_ORIGEM_RECEITA IS NOT DISTINCT FROM r.DS_ORIGEM_RECEITA THEN 1 ELSE 0 END
+                 + CASE WHEN v.VR_RECEITA IS NOT DISTINCT FROM r.VR_RECEITA THEN 1 ELSE 0 END
+                 + CASE WHEN v.DT_RECEITA IS NOT DISTINCT FROM r.DT_RECEITA THEN 1 ELSE 0 END) >= 2)`,
     },
   ];
   // ordem importa: as removidas derivadas referenciam a view *_atual

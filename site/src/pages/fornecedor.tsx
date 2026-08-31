@@ -8,7 +8,14 @@ import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { SITUACAO_NAO_ENCONTRADA, condicaoSemNota, escSQL } from '@/lib/consultas';
+import {
+  CONDICAO_DOCUMENTO_NUMERADO,
+  CONDICAO_NOTA_SEM_NUMERO,
+  SITUACAO_NAO_ENCONTRADA,
+  condicaoSemNota,
+  escSQL,
+  sqlDocumentoDaNota,
+} from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 interface CadastroRFB {
@@ -78,7 +85,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
 
   // consultas independentes disparadas juntas: o ganho é o pipeline das
   // leituras parciais dos parquet (rede), não paralelismo de CPU no worker
-  const [perfilRes, rfbRes, doacaoAgg, removidasAgg, candidatos, categorias, porDia, notas, doacoes, removidasRes] =
+  const [perfilRes, docRepetidoRes, rfbRes, doacaoAgg, removidasAgg, candidatos, categorias, porDia, notas, doacoes, removidasRes] =
     await Promise.all([
       executarSQL(`
       SELECT ANY_VALUE(COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR)),
@@ -90,8 +97,19 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
              ROUND(SUM(valor), 2), COUNT(*),
              -- mesma régua do backend (cond_sem_documento_fiscal em src/analises.py):
              -- documento não fiscal + PJ + categoria em que a nota é a norma
-             ROUND(SUM(valor) FILTER (WHERE ${condicaoSemNota(tabelasDisponiveis.has('norma_documento'))}), 2)
+             ROUND(SUM(valor) FILTER (WHERE ${condicaoSemNota(tabelasDisponiveis.has('norma_documento'))}), 2),
+             -- red flag 12: notas fiscais afirmadas sem número localizável
+             COUNT(*) FILTER (WHERE ${CONDICAO_NOTA_SEM_NUMERO})
       FROM despesas_atual WHERE ${w}`),
+      // red flag 13: quantos números de nota este fornecedor declarou para mais
+      // de um candidato. É fato DO FORNECEDOR (numeração é sequencial por
+      // emitente), então vira chip do cabeçalho — a tabela mostra só as 50
+      // maiores notas e esconderia o achado.
+      executarSQL(`
+      SELECT COUNT(*), COALESCE(SUM(candidatos), 0) FROM (
+        SELECT NR_DOCUMENTO, COUNT(DISTINCT SQ_CANDIDATO) AS candidatos
+        FROM despesas_atual WHERE ${w} AND ${CONDICAO_DOCUMENTO_NUMERADO}
+        GROUP BY 1 HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1)`),
       tabelasDisponiveis.has('fornecedores')
         ? executarSQL(`
         SELECT razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal,
@@ -123,8 +141,18 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       executarSQL(`
       SELECT DT_DESPESA AS "Data", SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
              DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
-             NULLIF(DS_TIPO_DOCUMENTO, '#NULO') AS "Documento",
-             ROUND(valor, 2) AS "Valor"
+             ${sqlDocumentoDaNota('DS_TIPO_DOCUMENTO', 'NR_DOCUMENTO')} AS "Documento",
+             ROUND(valor, 2) AS "Valor",
+             -- red flag 12: documento fiscal cujo número não tem um só dígito
+             CASE WHEN ${CONDICAO_NOTA_SEM_NUMERO} THEN 1 ELSE 0 END AS "_semNumero",
+             -- red flag 13: este fornecedor declarou o MESMO número para outro
+             -- candidato. É um fato do fornecedor — esta é a página dele.
+             CASE WHEN ${CONDICAO_DOCUMENTO_NUMERADO} AND EXISTS (
+                    SELECT 1 FROM despesas_atual o
+                    WHERE o.NR_CPF_CNPJ_FORNECEDOR = despesas_atual.NR_CPF_CNPJ_FORNECEDOR
+                      AND o.NR_DOCUMENTO = despesas_atual.NR_DOCUMENTO
+                      AND o.SQ_CANDIDATO <> despesas_atual.SQ_CANDIDATO)
+                  THEN 1 ELSE 0 END AS "_docDeOutro"
       FROM despesas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`),
       executarSQL(`
         SELECT SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
@@ -168,8 +196,9 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
 
   const totalDoado = Number(doacaoAgg.linhas[0]?.[0] ?? 0);
   // MESMA régua do resto do site (view despesas_removidas): retransmissões
-  // renumeradas pelo TSE e linhas-placeholder não contam como remoção — a
-  // consulta crua em `despesas` contava e contradizia a Metodologia
+  // renumeradas pelo TSE, retificações de um campo e linhas-placeholder não
+  // contam como remoção — a consulta crua em `despesas` contava as três e
+  // contradizia a Metodologia
   const valorRemovido = Number(removidasAgg.linhas[0]?.[1] ?? 0);
   const removidas = valorRemovido > 0 ? removidasRes : [];
 
@@ -181,6 +210,16 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
   if (totalDoado > 0) flags.push(`também aparece como doador: ${brl.format(totalDoado)}`);
   if (/f.sica/i.test(String(l[1] ?? ''))) flags.push('pessoa física prestando serviços de campanha');
   if (semNota > 0) flags.push(`${brl.format(semNota)} sem documento fiscal`);
+  const notasSemNumero = Number(l[10] ?? 0);
+  if (notasSemNumero > 0)
+    flags.push(notasSemNumero === 1
+      ? '1 nota fiscal declarada sem número'
+      : `${num.format(notasSemNumero)} notas fiscais declaradas sem número`);
+  const docsRepetidos = Number(docRepetidoRes.linhas[0]?.[0] ?? 0);
+  if (docsRepetidos > 0)
+    flags.push(docsRepetidos === 1
+      ? '1 número de nota declarado para mais de um candidato'
+      : `${num.format(docsRepetidos)} números de nota declarados para mais de um candidato`);
   if (valorRemovido > 0) flags.push(`${brl.format(valorRemovido)} em declarações removidas`);
   if (rfb?.abertura && rfb.abertura >= '2025-10-01')
     flags.push(`CNPJ aberto em ${dataBR(rfb.abertura)}, às vésperas da eleição`);
@@ -313,6 +352,21 @@ function CampoRFB({ rotulo, valor }: { rotulo: string; valor: string | null }) {
       <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{rotulo}</p>
       <p className="mt-0.5 text-sm">{valor}</p>
     </div>
+  );
+}
+
+
+/** Marca âmbar de indício numa célula de tabela — mesma linguagem visual dos
+ *  chips das fichas, em escala de nota. */
+function MarcaNota({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <span
+      title={titulo}
+      className="ml-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[#B45309]/40 bg-[#B45309]/10 px-2 py-0.5 text-[0.68rem] font-medium text-[#7c3a06]"
+    >
+      <AlertTriangle className="h-3 w-3" />
+      {children}
+    </span>
   );
 }
 
@@ -563,7 +617,19 @@ export function Fornecedor() {
               </td>
               <td className="text-muted-foreground">{celula(l[3])}</td>
               <CelulaTexto>{celula(l[4])}</CelulaTexto>
-              <td className="text-muted-foreground">{celula(l[5]) || '—'}</td>
+              <td className="text-muted-foreground">
+                {celula(l[5]) || '—'}
+                {Number(l[7] ?? 0) === 1 && (
+                  <MarcaNota titulo="O documento é fiscal, mas o número declarado não tem um só dígito — a nota é afirmada e não dá para localizar.">
+                    sem número
+                  </MarcaNota>
+                )}
+                {Number(l[8] ?? 0) === 1 && (
+                  <MarcaNota titulo="Este mesmo número de documento foi declarado para outro candidato. Numeração de nota é sequencial por emitente: repetir entre campanhas sugere nota reaproveitada — ou erro de digitação.">
+                    nº repetido em outro candidato
+                  </MarcaNota>
+                )}
+              </td>
               <CelulaNum frac={maxNota > 0 ? Number(l[6] ?? 0) / maxNota : undefined}>
                 {brl.format(Number(l[6] ?? 0))}
               </CelulaNum>

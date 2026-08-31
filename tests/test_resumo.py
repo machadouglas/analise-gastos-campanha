@@ -46,6 +46,37 @@ def test_novas_despesas_multiplicam_qt_linhas(banco):
     assert r["novas_despesas"][0]["valor"] == pytest.approx(30.0)
 
 
+def test_retransmissao_nao_vira_despesa_nova(banco):
+    """Regressão: 'nova' era hash novo, e o SPCE regenera SQ_DESPESA a cada
+    retransmissão — a prestação inteira de quem retransmite renascia todo dia e
+    tomava o topo da Home. Nova é a ESSÊNCIA que estreou hoje."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "100", "DS_DESPESA": "CARRO DE SOM",
+         "VR_DESPESA_CONTRATADA": "5000,00"}])
+    extrair_dia(banco, "21/08/2026", despesas=[
+        {"SQ_DESPESA": "999", "DS_DESPESA": "CARRO DE SOM",   # mesmo fato, SQ novo
+         "VR_DESPESA_CONTRATADA": "5000,00"},
+        {"SQ_DESPESA": "1000", "DS_DESPESA": "PANFLETO",      # essa sim é nova
+         "VR_DESPESA_CONTRATADA": "800,00"}])
+    novas = resumo.gerar(banco)["novas_despesas"]
+    assert [n["DS_DESPESA"] for n in novas] == ["PANFLETO"]
+
+
+def test_despesa_editada_conta_como_nova(banco):
+    """A régua é a essência, e valor faz parte dela: corrigir o valor declara um
+    fato que ninguém tinha visto antes — aparece como novo (e a versão antiga
+    aparece em v_alteradas, não em removidas)."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "DS_DESPESA": "CARRO DE SOM",
+         "VR_DESPESA_CONTRATADA": "5000,00"}])
+    extrair_dia(banco, "21/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "DS_DESPESA": "CARRO DE SOM",
+         "VR_DESPESA_CONTRATADA": "9000,00"}])
+    r = resumo.gerar(banco)
+    assert [n["valor"] for n in r["novas_despesas"]] == [pytest.approx(9000.0)]
+    assert r["despesas_removidas"] == []
+
+
 def test_remocoes_aparecem_no_resumo_apos_sumirem(banco):
     extrair_dia(banco, "20/08/2026",
                 despesas=[

@@ -4,7 +4,8 @@ Rodam na rotina diária ANTES de publicar: se algo falhar, nada sobe.
 Cada checagem devolve (nome, ok, detalhe).
 """
 
-from src import analises, db
+from src import analises, db, historico
+from src.carga import filtro_placeholder
 
 TOLERANCIA = 0.01  # centavos de diferença por arredondamento
 QUEDA_MAXIMA_PCT = 20.0  # retrato encolher mais que isso = suspeita de arquivo truncado
@@ -89,6 +90,64 @@ def verificar(con) -> list[str]:
         """).fetchone()[0]
         checar(f"janelas de extração coerentes ({hist})", janela_invertida == 0,
                f"{janela_invertida} invertidas")
+
+    # --- mudanças: toda linha morta tem UM destino, e "removida" é o último
+    # A régua de remoção é a afirmação mais forte que o site faz ("apagaram a
+    # declaração"). Estas checagens garantem que ela não volte a engolir
+    # retransmissão nem retificação — foi o que aconteceu até 31/08/2026, quando
+    # uma doação digitada como R$ 1 bi e corrigida para R$ 1 mi era publicada
+    # como um bilhão em declarações removidas.
+    for tabela in historico.TABELAS:
+        hist = f"hist_{tabela}"
+        if not (_existe(con, hist) and _existe(con, f"v_removidas_{tabela}")):
+            continue
+        contraparte, valor = historico.CONTRAPARTE[tabela]
+        ult = con.execute(f"SELECT MAX(dt_ultima_extracao) FROM {hist}").fetchone()[0]
+        if ult is None:
+            continue
+        essencia = " AND ".join(f"v.{c} = m.{c}" for c in historico.ESSENCIA[tabela])
+        identidade = " AND ".join(f"v.{c} = m.{c}" for c in historico.IDENTIDADE[tabela])
+        variaveis = historico.VARIAVEIS[tabela]
+        iguais = " + ".join(
+            f"CASE WHEN v.{c} IS NOT DISTINCT FROM m.{c} THEN 1 ELSE 0 END" for c in variaveis
+        )
+
+        sobrepostas = con.execute(f"""
+            SELECT COUNT(*) FROM v_removidas_{tabela}
+            WHERE hash_linha IN (SELECT hash_linha FROM v_alteradas_{tabela})
+        """).fetchone()[0]
+        checar(f"removida e alterada nunca são a mesma linha ({tabela})",
+               sobrepostas == 0, f"{sobrepostas} em ambas as views")
+
+        # se uma "removida" tem sósia vivo com quase todos os campos iguais, ela
+        # é retificação e a régua não pegou
+        sosia = con.execute(f"""
+            SELECT COUNT(*) FROM v_removidas_{tabela} m WHERE EXISTS (
+                SELECT 1 FROM {hist} v WHERE v.dt_ultima_extracao = ?
+                  AND {identidade} AND ({iguais}) >= {len(variaveis) - 1})
+        """, [ult]).fetchone()[0]
+        checar(f"nenhuma remoção tem versão viva equivalente ({tabela})",
+               sosia == 0, f"{sosia} com sósia vivo de {len(variaveis) - 1}+ campos iguais")
+
+        # decomposição fechada: cada linha morta é retransmissão, retificação,
+        # placeholder ou remoção — sem sobra e sem dupla contagem
+        mortas = con.execute(
+            f"SELECT COUNT(*) FROM {hist} WHERE dt_ultima_extracao < ?", [ult]).fetchone()[0]
+        partes = con.execute(f"""
+            SELECT
+              (SELECT COUNT(*) FROM {hist} m WHERE m.dt_ultima_extracao < ?
+                 AND EXISTS (SELECT 1 FROM {hist} v
+                             WHERE v.dt_ultima_extracao = ? AND {essencia}))
+            + (SELECT COUNT(*) FROM v_alteradas_{tabela} WHERE dt_ultima_extracao < ?)
+            + (SELECT COUNT(*) FROM {hist} m WHERE m.dt_ultima_extracao < ?
+                 AND NOT EXISTS (SELECT 1 FROM {hist} v
+                                 WHERE v.dt_ultima_extracao = ? AND {essencia})
+                 AND m.hash_linha NOT IN (SELECT hash_linha FROM v_alteradas_{tabela})
+                 AND NOT ({filtro_placeholder(f'm.{contraparte}', f'm.{valor}')}))
+            + (SELECT COUNT(*) FROM v_removidas_{tabela})
+        """, [ult, ult, ult, ult, ult]).fetchone()[0]
+        checar(f"linhas mortas se decompõem sem sobra ({tabela})", partes == mortas,
+               f"mortas={mortas} decomposição={partes}")
 
     # --- retrato não pode encolher bruscamente (arquivo truncado)
     for tabela in ("despesas_contratadas", "receitas"):

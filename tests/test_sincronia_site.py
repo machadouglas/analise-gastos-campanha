@@ -39,6 +39,48 @@ def test_condicao_sem_nota_igual_no_front():
     assert "SQL_CATEGORIAS_SEM_NOTA" in CONSULTAS_TS
 
 
+def test_reguas_por_nota_iguais_no_front():
+    """As red flags 12 (nota sem número), 13 (mesmo número em candidatos
+    diferentes) e 7 (valor repetido) passaram a ser marcas nas fichas. Antes
+    existiam só como consulta de exemplo no console; agora o site as aplica e
+    precisa usar a MESMA régua de src/analises.py e src/agregados.py — uma
+    divergência aqui marca (ou deixa de marcar) nota de gente real.
+    """
+    fonte_analises = (RAIZ / "src" / "analises.py").read_text(encoding="utf-8")
+    fonte_agregados = (RAIZ / "src" / "agregados.py").read_text(encoding="utf-8")
+
+    # 12 — documento fiscal cujo número não tem um só dígito
+    sem_numero = "NOT regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')"
+    assert sem_numero in fonte_analises, "régua da nota sem número mudou no backend"
+    assert sem_numero in CONSULTAS_TS, f"esperava \"{sem_numero}\" em consultas.ts"
+
+    # 13 — número de verdade (3+ dígitos) e fornecedor identificado. O backend
+    # escapa as chaves por estar dentro de f-string; o site não.
+    numerado = "regexp_full_match(COALESCE(NR_DOCUMENTO, ''), '[0-9]{3,}')"
+    assert numerado.replace("{3,}", "{{3,}}") in fonte_analises
+    assert numerado in CONSULTAS_TS
+    assert "NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')" in CONSULTAS_TS
+
+    # ambas só valem para documento FISCAL: não se cobra número de um recibo.
+    # As duas condições do site precisam carregar essa negação.
+    for regra in ("CONDICAO_NOTA_SEM_NUMERO", "CONDICAO_DOCUMENTO_NUMERADO"):
+        assert f"export const {regra} =" in CONSULTAS_TS, (
+            f"{regra} não encontrada em consultas.ts"
+        )
+        corpo = CONSULTAS_TS.split(f"export const {regra} =", 1)[1].split(";", 1)[0]
+        assert "NOT ${CONDICAO_DOCUMENTO_NAO_FISCAL}" in corpo, (
+            f"{regra} precisa exigir documento fiscal, como faz src/analises.py"
+        )
+
+    # 7 — mínimo de notas distintas de mesmo valor no mesmo fornecedor
+    minimo = re.search(r"COUNT\(DISTINCT SQ_DESPESA\) >= (\d+)", fonte_agregados)
+    assert minimo, "mínimo do valor repetido não encontrado em agregados.py"
+    assert f"MINIMO_NOTAS_VALOR_REPETIDO = {minimo.group(1)}" in CONSULTAS_TS, (
+        f"mínimo do valor repetido divergente: o backend usa {minimo.group(1)}"
+    )
+    assert "COUNT(DISTINCT SQ_DESPESA) >= ${MINIMO_NOTAS_VALOR_REPETIDO}" in CONSULTAS_TS
+
+
 def test_norma_documento_e_a_tabela_que_o_site_espera():
     """O site registra `norma_documento` no boot e lê a coluna exige_documento;
     o backend precisa publicar exatamente esse nome de tabela e de coluna."""
@@ -65,6 +107,14 @@ def test_sinais_do_fora_da_curva_iguais_no_front():
     assert "LIKE 'pct_%'" in resumo.CONDICAO_SINAL
     assert str(int(resumo.TETO_PERCENTUAL)) in CONSULTAS_TS
 
+    # a margem da razão gasto÷arrecadado vive num literal do SQL (o SINAIS_CTE
+    # é texto puro) E numa constante que a ficha do candidato usa para o mesmo
+    # chip — as duas têm de bater com o Python, senão a home marca um candidato
+    # que a ficha dele não marca
+    assert f"MARGEM_GASTO_ACIMA = {resumo.MARGEM_GASTO_ACIMA};" in CONSULTAS_TS, (
+        f"MARGEM_GASTO_ACIMA do site fora de {resumo.MARGEM_GASTO_ACIMA} (src/resumo.py)"
+    )
+
     cte = re.search(r"SINAIS_CTE = `(.*?)`", CONSULTAS_TS, re.DOTALL)
     assert cte, "SINAIS_CTE não encontrada em consultas.ts"
     for nome, _, filtro in resumo.METRICAS_SINAL:
@@ -77,16 +127,33 @@ def test_sinais_do_fora_da_curva_iguais_no_front():
 
 
 def test_essencia_das_removidas_igual_no_front():
-    """As views despesas_removidas/receitas_removidas do site usam o MESMO
-    conjunto de colunas de essência do versionamento (src/historico.py) para
-    descartar retransmissões renumeradas."""
+    """As views despesas_removidas/receitas_removidas do site usam a MESMA régua
+    do versionamento (src/historico.py): a IDENTIDADE casa por igualdade e os
+    campos VARIAVEIS são contados, para que nem a retransmissão renumerada (3 de
+    3 iguais) nem a edição de um campo (2 de 3) apareçam como declaração
+    apagada. Se a régua do Python mudar e a do site não, a mesma pergunta passa
+    a ter duas respostas conforme o parquet publicado exista ou não."""
     for tabela, alias in (("despesas_contratadas", "d"), ("receitas", "r")):
-        for coluna in historico.ESSENCIA[tabela]:
+        for coluna in historico.IDENTIDADE[tabela]:
             esperado = f"v.{coluna} = {alias}.{coluna}"
             assert esperado in DUCKDB_TS, (
-                f"coluna de essência {coluna} ({tabela}) fora da view de removidas do site: "
-                f"esperava '{esperado}' em site/src/lib/duckdb.ts"
+                f"coluna de identidade {coluna} ({tabela}) fora da view de removidas do "
+                f"site: esperava '{esperado}' em site/src/lib/duckdb.ts"
             )
+        variaveis = historico.VARIAVEIS[tabela]
+        for coluna in variaveis:
+            esperado = f"v.{coluna} IS NOT DISTINCT FROM {alias}.{coluna}"
+            assert esperado in DUCKDB_TS, (
+                f"campo variável {coluna} ({tabela}) fora da contagem de removidas do "
+                f"site: esperava '{esperado}' em site/src/lib/duckdb.ts"
+            )
+        # o corte tem de ser o mesmo: "pelo menos todos-menos-um campos iguais"
+        assert f">= {len(variaveis) - 1})" in DUCKDB_TS, (
+            f"corte de campos iguais ({tabela}) divergente do backend: "
+            f"esperava '>= {len(variaveis) - 1}' em site/src/lib/duckdb.ts"
+        )
+        # a soma tem de ser mesmo sobre todos os campos variáveis, não um subconjunto
+        assert DUCKDB_TS.count(f"IS NOT DISTINCT FROM {alias}.") == len(variaveis)
 
 
 def test_paginas_nao_burlam_a_view_de_removidas():
