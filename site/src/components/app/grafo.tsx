@@ -154,6 +154,13 @@ export function GrafoConexoes({
     if (!fg || largura <= 0) return;
     enquadrouRef.current = false;
     ajustouFinalRef.current = false;
+    // solta o que o onEngineStop pregou: sem isso a rede nova nasceria
+    // travada nas posições da anterior (o centro segue fixo na origem)
+    for (const n of dados.nodes as No[]) {
+      if (n.nivel === 0) continue;
+      n.fx = undefined;
+      n.fy = undefined;
+    }
     const carga = fg.d3Force('charge') as ForceManyBody<No> | undefined;
     carga?.strength((n) => (n.nivel === 2 ? -18 : -65));
     const link = fg.d3Force('link') as { distance: (fn: (l: Ligacao) => number) => unknown } | undefined;
@@ -209,16 +216,23 @@ export function GrafoConexoes({
             height={altura}
             graphData={dados}
             backgroundColor={PAPEL}
-            // sem warmup: a acomodação acontece NA TELA (entrada fluida);
-            // decaimentos suaves dão movimento com peso, sem travar
-            d3AlphaDecay={0.02}
-            d3VelocityDecay={0.3}
-            cooldownTime={8000}
+            // sem warmup: a acomodação acontece NA TELA (entrada fluida), mas
+            // curta — 8s de física visível com pouco atrito era movimento demais
+            d3AlphaDecay={0.045}
+            d3VelocityDecay={0.45}
+            cooldownTime={3500}
             // reenquadra quando a física para: o enquadramento feito no meio
             // do movimento envelhece e, em tela estreita, a rede terminava
             // encostada num canto. Só no celular — no desktop o comportamento
             // original já cabia na caixa e não vale o risco de mexer.
             onEngineStop={() => {
+              // prega cada nó onde parou: sem isso qualquer reaquecimento
+              // posterior (drag, resize, re-render) põe a rede inteira em
+              // movimento de novo, e ler um grafo que anda é ruim
+              for (const n of dados.nodes as No[]) {
+                n.fx = n.x;
+                n.fy = n.y;
+              }
               if (!estreito || ajustouFinalRef.current) return;
               ajustouFinalRef.current = true;
               const fg = fgRef.current;
@@ -304,35 +318,19 @@ export function GrafoConexoes({
                 : l.tipo === 'doacao' ? 'rgba(180,83,9,0.45)' : 'rgba(38,78,155,0.4)'}
             linkWidth={(l) => l.w}
             onNodeHover={(n) => {
-              const anterior = hoverRef.current;
+              // hover NÃO mexe na física: a versão anterior dava um "sopro" nos
+              // vizinhos e reaquecia a simulação, então o nó apontado escapava
+              // de baixo do cursor — e o próprio hover realimentava o movimento
               hoverRef.current = n?.id != null ? String(n.id) : null;
               if (contRef.current) {
                 contRef.current.style.cursor = n && n.nivel !== 0 ? 'pointer' : 'default';
               }
-              // ondulação: um sopro nos vizinhos do nó sob o mouse — eles se
-              // afastam de leve e as forças os trazem de volta (a rede respira)
-              if (n && String(n.id) !== anterior) {
-                for (const m of dados.nodes as No[]) {
-                  if (m.nivel === 0 || m.id === n.id) continue;
-                  const dx = (m.x ?? 0) - (n.x ?? 0);
-                  const dy = (m.y ?? 0) - (n.y ?? 0);
-                  const d = Math.hypot(dx, dy) || 1;
-                  if (d < 130) {
-                    const forca = 5 * (1 - d / 130);
-                    m.vx = (m.vx ?? 0) + (dx / d) * forca;
-                    m.vy = (m.vy ?? 0) + (dy / d) * forca;
-                  }
-                }
-                fgRef.current?.d3ReheatSimulation();
-              }
             }}
             onNodeDragEnd={(n) => {
-              // solta o nó ao largar (a lib o deixaria pregado): a rede se
-              // reacomoda em volta em vez de ficar rígida
-              if (n.nivel !== 0) {
-                n.fx = undefined;
-                n.fy = undefined;
-              }
+              // fica onde foi solto: a rede em volta está congelada, então
+              // devolver o nó à física só o puxaria de volta ao lugar antigo
+              n.fx = n.x;
+              n.fy = n.y;
             }}
             onNodeClick={(n) => {
               if (n.nivel === 1) {
