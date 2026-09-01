@@ -19,8 +19,14 @@ import re
 VARIAVEL = "RADAR_SAL_CPF"
 
 # colunas que carregam CPF/CNPJ da contraparte ou CPF puro; identificadas pelo
-# nome para sobreviver a colunas novas do TSE sem lista manual por tabela
-_PADRAO_COLUNA_CPF = re.compile(r"CPF|contraparte_id", re.IGNORECASE)
+# nome para sobreviver a colunas novas do TSE sem lista manual por tabela.
+# NR_DOCUMENTO/NR_DOCUMENTO_DOACAO entram porque o TSE grava ali o PRÓPRIO CPF
+# da contraparte em centenas de linhas (medido em 01/09/2026: 245 recibos de
+# doação e 213 documentos de despesa idênticos ao CPF já mascarado na coluna ao
+# lado) — e NM_* porque há linhas com o CPF digitado no campo de nome. Como o
+# mascaramento só toca valores de EXATAMENTE 11 dígitos, nomes e números de
+# nota legítimos passam intactos.
+_PADRAO_COLUNA_CPF = re.compile(r"CPF|contraparte_id|^NR_DOCUMENTO|^NM_", re.IGNORECASE)
 
 # colunas pessoais do consulta_cand que nada no projeto usa — não se publica
 COLUNAS_DESCARTADAS = {"DS_EMAIL", "NR_TITULO_ELEITORAL_CANDIDATO"}
@@ -52,9 +58,23 @@ def sql_pseudonimo(coluna: str, sal_cpf: str) -> str:
     )
 
 
+def sql_hash_publicavel(coluna: str, sal_cpf: str) -> str:
+    """`hash_linha` é md5 do conteúdo cru — CPF incluso. Publicado como está,
+    permitiria a quem já conhece um CPF confirmá-lo (recalculando o md5 com os
+    demais campos, que são públicos). Na publicação ele vira um código salgado
+    `h-…`, estável e ainda utilizável como identidade de linha; só valores com
+    cara de md5 cru são tocados (idempotente, como o pf-…)."""
+    s = sal_cpf.replace("'", "''")
+    return (
+        f"CASE WHEN regexp_matches({coluna}, '^[0-9a-f]{{32}}$') "
+        f"THEN 'h-' || substr(sha256('{s}' || {coluna}), 1, 16) "
+        f"ELSE {coluna} END"
+    )
+
+
 def selecao_publicavel(con, origem: str, sal_cpf: str) -> str:
     """Lista de colunas de `origem` pronta para publicação: CPFs pseudonimizados,
-    colunas pessoais sem uso descartadas, todo o resto intacto."""
+    hash de linha salgado, colunas pessoais sem uso descartadas, o resto intacto."""
     colunas = [
         r[0] for r in con.execute(
             """
@@ -69,5 +89,10 @@ def selecao_publicavel(con, origem: str, sal_cpf: str) -> str:
         if c in COLUNAS_DESCARTADAS:
             continue
         ref = f'"{c}"'
-        partes.append(f"{sql_pseudonimo(ref, sal_cpf)} AS {ref}" if coluna_sensivel(c) else ref)
+        if c == "hash_linha":
+            partes.append(f"{sql_hash_publicavel(ref, sal_cpf)} AS {ref}")
+        elif coluna_sensivel(c):
+            partes.append(f"{sql_pseudonimo(ref, sal_cpf)} AS {ref}")
+        else:
+            partes.append(ref)
     return ", ".join(partes)

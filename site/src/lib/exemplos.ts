@@ -2,6 +2,8 @@
  *  em português com o SQL que as responde. Dados puros, sem React — o script
  *  de verificação e os testes leem este arquivo para validar cada consulta. */
 
+import { CORTE_RECEM_ABERTO } from './consultas';
+
 export interface Exemplo {
   rotulo: string;
   sql: string;
@@ -173,7 +175,7 @@ SELECT f.cnpj, f.razao_social, f.data_abertura, f.uf AS uf_da_empresa,
        ROUND(SUM(d.valor), 2) AS total
 FROM fornecedores f
 JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
-WHERE f.data_abertura >= '2025-10-01'
+WHERE f.data_abertura >= '${CORTE_RECEM_ABERTO}'
 GROUP BY 1, 2, 3, 4
 ORDER BY total DESC
 LIMIT 30`,
@@ -357,16 +359,18 @@ LIMIT 50`,
       },
       {
         pergunta: 'Há despesas registradas com valores redondos repetidos (R$ 10 mil, R$ 50 mil)?',
-        sql: `-- notas de valor redondo (múltiplo de R$ 1.000) repetidas 3+ vezes no mesmo fornecedor
+        sql: `-- valor redondo (múltiplo de R$ 1.000) em 3+ NOTAS DISTINTAS do mesmo fornecedor —
+-- a régua da red flag 7: itens repetidos de uma mesma nota são o padrão dos
+-- arquivos do TSE e não contam como repetição
 SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF,
        COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS fornecedor,
        valor / qt_linhas AS valor_da_nota,
-       SUM(qt_linhas) AS notas,
+       COUNT(DISTINCT SQ_DESPESA) AS notas,
        ROUND(SUM(valor), 2) AS total
 FROM despesas_atual
 WHERE (valor / qt_linhas) >= 1000 AND (valor / qt_linhas) % 1000 = 0
 GROUP BY ALL
-HAVING SUM(qt_linhas) >= 3
+HAVING COUNT(DISTINCT SQ_DESPESA) >= 3
 ORDER BY total DESC
 LIMIT 50`,
       },
@@ -446,7 +450,7 @@ SELECT f.cnpj, f.razao_social, f.data_abertura, f.uf AS uf_da_empresa,
        ROUND(SUM(d.valor), 2) AS total
 FROM fornecedores f
 JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
-WHERE f.data_abertura >= '2025-10-01'
+WHERE f.data_abertura >= '${CORTE_RECEM_ABERTO}'
 GROUP BY 1, 2, 3, 4
 ORDER BY ufs DESC, total DESC
 LIMIT 30`,

@@ -8,7 +8,7 @@ Tudo é derivado; recriar é sempre seguro.
 from src import db
 from src.analises import (
     ADESAO_MINIMA_NORMA,
-    MIN_LINHAS_NORMA,
+    MIN_NOTAS_NORMA,
     SQL_CATEGORIAS_SEM_NOTA_ESPERADA,
     cond_documento_nao_fiscal,
     cond_sem_documento_fiscal,
@@ -37,13 +37,26 @@ _tem = db.existe
 
 
 def _ano_eleicao(con):
-    """Ano da eleição derivado das datas declaradas (nada de constante fixa)."""
-    return con.execute("""
-        SELECT MAX(ano) FROM (
-            SELECT MAX(EXTRACT(year FROM DT)) AS ano FROM v_despesas
+    """Ano da eleição derivado das datas declaradas (nada de constante fixa).
+
+    Pela MODA, não pelo máximo: já há datas declaradas no futuro (dado sujo do
+    TSE), e um único typo "2030" moveria o corte do CNPJ recém-aberto em anos,
+    zerando o indicador em silêncio. A maioria das declarações está sempre no
+    ano da eleição."""
+    # TRY_STRPTIME direto nas tabelas cruas: o STRPTIME estrito das views pode
+    # ser avaliado antes do filtro de placeholder (reordenação do otimizador) e
+    # estourar num '#NULO'
+    linha = con.execute("""
+        SELECT ano FROM (
+            SELECT EXTRACT(year FROM TRY_STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ano
+            FROM despesas_contratadas
             UNION ALL
-            SELECT MAX(EXTRACT(year FROM DT)) FROM v_receitas)
-    """).fetchone()[0]
+            SELECT EXTRACT(year FROM TRY_STRPTIME(DT_RECEITA, '%d/%m/%Y'))
+            FROM receitas)
+        WHERE ano IS NOT NULL
+        GROUP BY 1 ORDER BY COUNT(*) DESC, ano DESC LIMIT 1
+    """).fetchone()
+    return linha[0] if linha else None
 
 
 def _norma_documento(con) -> None:
@@ -59,10 +72,19 @@ def _norma_documento(con) -> None:
     A norma é medida só entre fornecedores PJ: PF não emite nota, e incluí-la
     puxaria a adesão da categoria para baixo por um motivo que não é indício.
     """
+    # a amostra mínima é contada em NOTAS, não em linhas: os arquivos do TSE
+    # fatiam notas em itens, e uma categoria com 91 linhas pode ter só 29 notas
+    # efetivas — o limiar prometia 30 amostras e media itens. SQ_DESPESA = '-1'
+    # (sem id) não permite reagrupar: cada linha conta como uma nota, o mesmo
+    # padrão do benchmark de preços.
+    notas = ("COUNT(DISTINCT CASE WHEN SQ_DESPESA <> '-1' "
+             "THEN SQ_CANDIDATO || '|' || SQ_DESPESA END) "
+             "+ COUNT(*) FILTER (WHERE SQ_DESPESA = '-1')")
     con.execute(f"""
         CREATE OR REPLACE TABLE norma_documento AS
         SELECT DS_ORIGEM_DESPESA,
                COUNT(*) AS linhas,
+               {notas} AS notas,
                ROUND(SUM(VR), 2) AS total,
                ROUND(100.0 * SUM(CASE WHEN NOT ({cond_documento_nao_fiscal()})
                                       THEN VR ELSE 0 END)
@@ -71,7 +93,7 @@ def _norma_documento(con) -> None:
                -- mantém o comportamento antigo (exige nota, salvo lista fixa):
                -- ficar em silêncio no início da campanha seria pior que errar
                (DS_ORIGEM_DESPESA NOT IN ({SQL_CATEGORIAS_SEM_NOTA_ESPERADA})
-                AND (COUNT(*) < {MIN_LINHAS_NORMA}
+                AND ({notas} < {MIN_NOTAS_NORMA}
                      OR 100.0 * SUM(CASE WHEN NOT ({cond_documento_nao_fiscal()})
                                          THEN VR ELSE 0 END)
                         / NULLIF(SUM(VR), 0) >= {ADESAO_MINIMA_NORMA}))
@@ -247,9 +269,13 @@ def _indicadores(con) -> None:
                    ROUND(SUM(CASE WHEN DS_ORIGEM_RECEITA ILIKE '%pr_prio%' THEN VR ELSE 0 END), 2) AS recursos_proprios
             FROM v_receitas GROUP BY 1),
         forn AS (
+            -- o valor anônimo continua no denominador da concentração (dinheiro
+            -- declarado é dinheiro), mas o balde '-1'/'#NULO' não conta como um
+            -- fornecedor a mais em n_fornecedores
             SELECT SQ_CANDIDATO,
                    ROUND(100.0 * MAX(total_forn) / NULLIF(SUM(total_forn), 0), 1) AS pct_maior_fornecedor,
-                   COUNT(*) AS n_fornecedores
+                   COUNT(*) FILTER (
+                       WHERE NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')) AS n_fornecedores
             FROM (SELECT SQ_CANDIDATO, NR_CPF_CNPJ_FORNECEDOR, SUM(VR) AS total_forn
                   FROM v_despesas GROUP BY 1, 2)
             GROUP BY 1),
@@ -391,7 +417,7 @@ def _benchmark_categorias(con) -> None:
 
 def _rede(con) -> None:
     """Arestas agregadas: quem paga e quem doa para cada candidato."""
-    con.execute("""
+    con.execute(f"""
         CREATE OR REPLACE TABLE rede AS
         SELECT 'despesa' AS tipo,
                NR_CPF_CNPJ_FORNECEDOR AS contraparte_id,
@@ -412,6 +438,9 @@ def _rede(con) -> None:
                ROUND(SUM(TRY_CAST(REPLACE(o.VR_RECEITA, ',', '.') AS DOUBLE)), 2), COUNT(*)
         FROM receitas_doador_originario o
         JOIN v_prestadores p USING (SQ_PRESTADOR_CONTAS)
+        -- a tabela é lida crua (não tem view tipada): o filtro de
+        -- linha-placeholder precisa ser aplicado aqui, como nas outras arestas
+        WHERE {filtro_placeholder('o.NR_CPF_CNPJ_DOADOR_ORIGINARIO', 'o.VR_RECEITA')}
         GROUP BY ALL
     """)
     n = con.execute("SELECT COUNT(*) FROM rede").fetchone()[0]

@@ -6,6 +6,16 @@ export const brl = new Intl.NumberFormat('pt-BR', {
   maximumFractionDigits: 0,
 });
 
+/** Com centavos — para quando dois valores diferentes arredondariam para o
+ *  mesmo inteiro (ex.: uma retificação de R$ 100,10 para R$ 100,40, que com
+ *  `brl` viraria o absurdo "R$ 100 → R$ 100"). */
+export const brlCentavos = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 export const num = new Intl.NumberFormat('pt-BR');
 
 export function dataBR(iso: string | null | undefined): string {

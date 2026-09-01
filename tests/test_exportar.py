@@ -63,6 +63,27 @@ def test_valor_do_estado_atual_multiplica_qt_linhas(banco, tmp_path, monkeypatch
     assert linhas == [(3, pytest.approx(30.0))]
 
 
+def test_stamp_codigo_muda_quando_o_pipeline_muda(tmp_path):
+    """O gate da rotina só exporta quando o fingerprint muda — e o fingerprint
+    precisa enxergar o CÓDIGO, não só o dado do TSE. Sem isso, um deploy num dia
+    de 304 nunca chega ao release (aconteceu com despesas_alteradas.parquet em
+    31/08/2026)."""
+    (tmp_path / "a.py").write_text("x = 1", encoding="utf-8")
+    antes = exportar.stamp_codigo(tmp_path)
+    assert antes == exportar.stamp_codigo(tmp_path)  # determinístico
+    (tmp_path / "a.py").write_text("x = 2", encoding="utf-8")
+    assert exportar.stamp_codigo(tmp_path) != antes  # deploy muda o carimbo
+
+
+def test_fingerprint_inclui_o_carimbo_do_codigo(banco, monkeypatch):
+    """Mesmo banco, código 'novo' → fingerprint novo (a rotina exporta)."""
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "100,00"}])
+    fp = exportar.fingerprint(banco)
+    monkeypatch.setattr(exportar, "stamp_codigo", lambda raiz=None: "deploy-novo")
+    assert exportar.fingerprint(banco) != fp
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
 

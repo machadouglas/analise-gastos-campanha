@@ -105,8 +105,11 @@ def verificar(con) -> list[str]:
         ult = con.execute(f"SELECT MAX(dt_ultima_extracao) FROM {hist}").fetchone()[0]
         if ult is None:
             continue
-        essencia = " AND ".join(f"v.{c} = m.{c}" for c in historico.ESSENCIA[tabela])
-        identidade = " AND ".join(f"v.{c} = m.{c}" for c in historico.IDENTIDADE[tabela])
+        # IS NOT DISTINCT FROM, como em historico.py: campo NULL precisa casar
+        essencia = " AND ".join(
+            f"v.{c} IS NOT DISTINCT FROM m.{c}" for c in historico.ESSENCIA[tabela])
+        identidade = " AND ".join(
+            f"v.{c} IS NOT DISTINCT FROM m.{c}" for c in historico.IDENTIDADE[tabela])
         variaveis = historico.VARIAVEIS[tabela]
         iguais = " + ".join(
             f"CASE WHEN v.{c} IS NOT DISTINCT FROM m.{c} THEN 1 ELSE 0 END" for c in variaveis
@@ -158,6 +161,18 @@ def verificar(con) -> list[str]:
     pagas_raw = con.execute("SELECT COUNT(*) FROM despesas_pagas").fetchone()[0]
     pagas_view = con.execute("SELECT COUNT(*) FROM v_despesas_pagas").fetchone()[0]
     checar("v_despesas_pagas sem fan-out no join", pagas_view == pagas_raw, f"view={pagas_view} raw={pagas_raw}")
+
+    # --- v_prestadores é UNION DISTINCT de metadados: se despesa e receita
+    # divergirem no nome/partido do mesmo prestador, ele duplica — e o join
+    # acima dobraria total_pago e as arestas de doação originária
+    if _existe(con, "v_prestadores"):
+        prestadores_dup = con.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT SQ_PRESTADOR_CONTAS FROM v_prestadores
+                GROUP BY 1 HAVING COUNT(*) > 1)
+        """).fetchone()[0]
+        checar("v_prestadores sem prestador duplicado", prestadores_dup == 0,
+               f"{prestadores_dup} prestadores com metadados divergentes")
 
     # --- reconciliação: agregados batem com a fonte
     if _existe(con, "serie_diaria"):

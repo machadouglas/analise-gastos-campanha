@@ -168,8 +168,11 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
                    AND COALESCE(TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
           AND NOT EXISTS (
             SELECT 1 FROM despesas_atual v
-            WHERE v.SQ_CANDIDATO = d.SQ_CANDIDATO
-              AND v.NR_CPF_CNPJ_FORNECEDOR = d.NR_CPF_CNPJ_FORNECEDOR
+            -- IS NOT DISTINCT FROM também na identidade (sincronia com
+            -- src/historico.py): campo NULL precisa casar, senão a
+            -- retransmissão vira falsa remoção
+            WHERE v.SQ_CANDIDATO IS NOT DISTINCT FROM d.SQ_CANDIDATO
+              AND v.NR_CPF_CNPJ_FORNECEDOR IS NOT DISTINCT FROM d.NR_CPF_CNPJ_FORNECEDOR
               AND (CASE WHEN v.DS_DESPESA IS NOT DISTINCT FROM d.DS_DESPESA THEN 1 ELSE 0 END
                  + CASE WHEN v.VR_DESPESA_CONTRATADA IS NOT DISTINCT FROM d.VR_DESPESA_CONTRATADA THEN 1 ELSE 0 END
                  + CASE WHEN v.DT_DESPESA IS NOT DISTINCT FROM d.DT_DESPESA THEN 1 ELSE 0 END) >= 2)`,
@@ -186,8 +189,8 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
                    AND COALESCE(TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
           AND NOT EXISTS (
             SELECT 1 FROM receitas_atual v
-            WHERE v.SQ_CANDIDATO = r.SQ_CANDIDATO
-              AND v.NR_CPF_CNPJ_DOADOR = r.NR_CPF_CNPJ_DOADOR
+            WHERE v.SQ_CANDIDATO IS NOT DISTINCT FROM r.SQ_CANDIDATO
+              AND v.NR_CPF_CNPJ_DOADOR IS NOT DISTINCT FROM r.NR_CPF_CNPJ_DOADOR
               AND (CASE WHEN v.DS_ORIGEM_RECEITA IS NOT DISTINCT FROM r.DS_ORIGEM_RECEITA THEN 1 ELSE 0 END
                  + CASE WHEN v.VR_RECEITA IS NOT DISTINCT FROM r.VR_RECEITA THEN 1 ELSE 0 END
                  + CASE WHEN v.DT_RECEITA IS NOT DISTINCT FROM r.DT_RECEITA THEN 1 ELSE 0 END) >= 2)`,

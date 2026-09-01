@@ -90,13 +90,17 @@ def cmd_rotina(args):
     # fora do `if`: as views seguem a versão do CÓDIGO, não a do TSE. Num dia de
     # 304 o `versionar` não roda, e uma view nova de um deploy recente ficaria
     # ausente — a exportação pularia o arquivo com um aviso e o site degradaria
-    # em silêncio. Recriar é barato e idempotente.
+    # em silêncio. Recriar é barato e idempotente. Vale para as views tipadas
+    # (v_despesas etc., criadas na carga) tanto quanto para as de mudança.
+    carga.criar_views(con)
     historico.criar_views_mudancas(con)
     etapa("enriquecendo CNPJs")
     cnpj.enriquecer_em_massa(con, limite=args.limite_cnpj)
 
-    # gate ANTES do trabalho caro: se nada publicável mudou (o fingerprint lê só
-    # as tabelas-base), não há por que materializar, verificar ou exportar
+    # gate ANTES do trabalho caro: se nada publicável mudou, não há por que
+    # materializar, verificar ou exportar. O fingerprint lê as tabelas-base E o
+    # carimbo do código (stamp_codigo): um deploy que muda o pipeline exporta
+    # uma vez mesmo num dia em que o TSE responde 304
     dt_extracao = con.execute(
         "SELECT MAX(dt_ultima_extracao) FROM hist_despesas_contratadas").fetchone()[0]
     extracao = f"{dt_extracao:%d/%m/%Y}" if dt_extracao else "?"

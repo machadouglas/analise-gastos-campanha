@@ -56,7 +56,7 @@ ATALHOS PRONTOS (prefira estes; já excluem linhas-placeholder do sistema do TSE
 REGRAS OBRIGATÓRIAS:
 - Apenas SELECT/WITH (leitura), UM statement por resposta (o console valida e mostra só o último resultado). Sempre termine com LIMIT (máximo 500), exceto agregações pequenas.
 - Em despesas/receitas (históricas), converta valores assim: TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas
-- Datas declaradas: STRPTIME(DT_DESPESA, '%d/%m/%Y')
+- Datas declaradas: TRY_STRPTIME(DT_DESPESA, '%d/%m/%Y') (há '#NULO' — o STRPTIME estrito quebra)
 - Declarações removidas: use a view despesas_removidas (o filtro cru por dt_ultima_extracao inclui retransmissões renumeradas e placeholders — evite).
 - Nulos do TSE: '#NULO' (vazio), '-1' (sem id), '-4' (anonimizado) — filtre quando relevante.
 - CPFs de pessoa física NÃO são publicados: as colunas de CPF/CNPJ trazem 'pf-' + 16 hex no lugar (código estável — dá para agrupar/juntar pelo código, mas não recuperar o CPF). Pessoa jurídica: 14 dígitos.

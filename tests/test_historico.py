@@ -283,6 +283,97 @@ def test_rotina_cria_as_views_fora_do_caminho_da_carga():
     )
 
 
+def test_retransmissao_com_campo_nulo_nao_vira_remocao():
+    """`NULL = NULL` não casa em SQL: a essência comparada com `=` fazia uma
+    retransmissão idêntica com DT_DESPESA vazia cair como falsa 'declaração
+    apagada' — o erro assimétrico que o projeto não pode cometer (21% das
+    linhas reais têm data NULL)."""
+    con = montar_banco()
+    # SQ regenerado entre os dias (hash muda) e data ausente nos dois
+    con.execute("DELETE FROM despesas_contratadas")
+    con.execute(
+        "INSERT INTO despesas_contratadas VALUES ('20/08/2026', '04:00:00', '160001', "
+        "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '100', 'FORNECEDOR LTDA', "
+        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL)")
+    historico.versionar(con)
+    con.execute("DELETE FROM despesas_contratadas")
+    con.execute(
+        "INSERT INTO despesas_contratadas VALUES ('21/08/2026', '04:00:00', '160001', "
+        "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '999', 'FORNECEDOR LTDA', "
+        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL)")
+    historico.versionar(con)
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+
+
+def test_edicao_com_campo_nulo_nao_vira_remocao():
+    """Mesmo cenário, mas com o valor corrigido: 2 de 3 variáveis iguais (uma
+    delas NULL dos dois lados) é edição, nunca remoção."""
+    con = montar_banco()
+    con.execute(
+        "INSERT INTO despesas_contratadas VALUES ('20/08/2026', '04:00:00', '160001', "
+        "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '100', 'FORNECEDOR LTDA', "
+        "'11222333000144', 'CARRO DE SOM', '50000,00', NULL)")
+    historico.versionar(con)
+    con.execute("DELETE FROM despesas_contratadas")
+    con.execute(
+        "INSERT INTO despesas_contratadas VALUES ('21/08/2026', '04:00:00', '160001', "
+        "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '999', 'FORNECEDOR LTDA', "
+        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL)")
+    historico.versionar(con)
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+    assert contar(con, "SELECT COUNT(*) FROM v_alteradas_pares_despesas_contratadas") == 1
+
+
+def test_conteudo_que_some_e_volta_nao_apaga_o_buraco():
+    """Conteúdo removido que REAPARECE em extração posterior ganha janela nova.
+    Reabrir a janela antiga afirmaria presença nos dias de ausência (a série
+    diária diria 'estava declarado' num dia em que o arquivo não o continha) e
+    apagaria o rastro 'sumiu e voltou', que é indício."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1), ("2", "CARRO DE SOM", "5000,00", 1)])
+    dia(con, "21/08/2026", [("1", "BANDEIRA", "100,00", 1)])                                  # sumiu
+    dia(con, "22/08/2026", [("1", "BANDEIRA", "100,00", 1), ("2", "CARRO DE SOM", "5000,00", 1)])  # voltou
+    janelas = con.execute("""
+        SELECT dt_primeira_extracao, dt_ultima_extracao
+        FROM hist_despesas_contratadas WHERE DS_DESPESA = 'CARRO DE SOM'
+        ORDER BY dt_primeira_extracao
+    """).fetchall()
+    assert [(str(a)[:10], str(b)[:10]) for a, b in janelas] == [
+        ("2026-08-20", "2026-08-20"),   # a janela original fecha no dia 20
+        ("2026-08-22", "2026-08-22"),   # a volta é uma janela NOVA
+    ]
+    # e nenhuma janela cobre o dia 21 (o dia de ausência é preservado)
+    assert contar(con, """
+        SELECT COUNT(*) FROM hist_despesas_contratadas
+        WHERE DS_DESPESA = 'CARRO DE SOM'
+          AND dt_primeira_extracao <= DATE '2026-08-21'
+          AND dt_ultima_extracao >= DATE '2026-08-21'
+    """) == 0
+    # o conteúdo está vivo hoje: não é remoção
+    assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
+
+
+def test_pares_com_hash_multiplicado_nao_infla_sucessores():
+    """Um hash morto pode ter 2+ linhas físicas no hist (a quantidade mudou e
+    depois o conteúdo foi corrigido). O JOIN ingênuo contava combinações: uma
+    única sucessora real aparecia como '1 de 2 possíveis', e o representante
+    do 'antes' oscilava entre linhas."""
+    con = montar_banco()
+    dia(con, "20/08/2026", [("1", "ADESIVO", "100,00", 2)])   # hash H, qt=2
+    dia(con, "21/08/2026", [("1", "ADESIVO", "100,00", 1)])   # hash H, qt=1 (mata qt=2)
+    dia(con, "22/08/2026", [("9", "ADESIVO", "150,00", 1)])   # valor corrigido (hash novo)
+    pares = con.execute("""
+        SELECT valor_antes, valor_depois, sucessores
+        FROM v_alteradas_pares_despesas_contratadas
+    """).fetchall()
+    assert len(pares) == 1
+    valor_antes, valor_depois, sucessores = pares[0]
+    assert sucessores == 1          # UMA sucessora viva de verdade
+    assert valor_depois == 150.0
+    # o "antes" é a última janela do hash morto (qt=1), determinístico
+    assert valor_antes == 100.0
+
+
 def test_registro_de_extracoes_cobre_todos_os_dias():
     con = montar_banco()
     dia(con, "20/08/2026", [("1", "BANDEIRA", "100,00", 1)])

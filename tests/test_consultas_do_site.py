@@ -21,19 +21,33 @@ from src.carga import filtro_placeholder  # noqa: E402
 RAIZ = Path(__file__).parent.parent
 BANCO = RAIZ / "data" / "db" / "gastos.duckdb"
 EXEMPLOS_TS = RAIZ / "site" / "src" / "lib" / "exemplos.ts"
+CONSULTAS_TS = RAIZ / "site" / "src" / "lib" / "consultas.ts"
 
 pytestmark = pytest.mark.skipif(not BANCO.exists(), reason="banco local ainda não carregado")
 
 
+def _corte_recem_aberto() -> str:
+    """CORTE_RECEM_ABERTO de consultas.ts — os exemplos o interpolam."""
+    achado = re.search(
+        r"CORTE_RECEM_ABERTO = '([^']+)'", CONSULTAS_TS.read_text(encoding="utf-8"))
+    assert achado, "CORTE_RECEM_ABERTO não encontrado em consultas.ts"
+    return achado.group(1)
+
+
 def _consultas() -> list[tuple[str, str]]:
     """(rótulo, SQL) de todo `rotulo:`/`pergunta:` seguido de `sql:` no arquivo.
-    Resolve também `sql: NOME_DA_CONST` (consultas reaproveitadas)."""
+    Resolve também `sql: NOME_DA_CONST` (consultas reaproveitadas) e a
+    interpolação de CORTE_RECEM_ABERTO (o visitante recebe o valor resolvido)."""
     fonte = EXEMPLOS_TS.read_text(encoding="utf-8")
     consts = dict(re.findall(r"const (\w+) = `([^`]*)`", fonte))
     achados = re.findall(
         r"(?:rotulo|pergunta): '([^']*)',\s*\n?\s*sql: (?:`([^`]*)`|(\w+))", fonte
     )
-    consultas = [(rotulo, literal or consts[nome]) for rotulo, literal, nome in achados]
+    corte = _corte_recem_aberto()
+    consultas = [
+        (rotulo, (literal or consts[nome]).replace("${CORTE_RECEM_ABERTO}", corte))
+        for rotulo, literal, nome in achados
+    ]
     assert len(consultas) >= 25, f"parser achou só {len(consultas)} consultas em exemplos.ts"
     return consultas
 
@@ -116,6 +130,24 @@ def test_monitores_declaram_que_podem_vir_vazios():
     for rotulo, sql in CONSULTAS:
         if rotulo in MONITORES:
             assert "vem vazio" in sql, f"'{rotulo}' pode vir vazio e não avisa no comentário"
+
+
+def test_corte_recem_aberto_do_site_bate_com_o_backend(con):
+    """O site fixa a data de corte do 'CNPJ recém-aberto' (CORTE_RECEM_ABERTO)
+    porque não tem o dado antes do boot; o backend a deriva dos próprios dados
+    (_ano_eleicao em src/agregados.py). Se a eleição mudar e alguém esquecer o
+    front, este teste quebra."""
+    from src import agregados
+
+    # deriva com a MESMA função do backend, sobre o banco real
+    con.execute(
+        "CREATE OR REPLACE VIEW despesas_contratadas AS SELECT * FROM g.despesas_contratadas")
+    con.execute("CREATE OR REPLACE VIEW receitas AS SELECT * FROM g.receitas")
+    ano = agregados._ano_eleicao(con)
+    assert ano is not None
+    assert _corte_recem_aberto() == f"{int(ano) - 1}-10-01", (
+        f"backend deriva o corte {int(ano) - 1}-10-01; o site fixa {_corte_recem_aberto()}"
+    )
 
 
 def test_toda_pergunta_tem_sql_proprio():

@@ -92,7 +92,7 @@ def versionar(con) -> None:
             FROM {tabela} WHERE 1=0
         """)
         dt = con.execute(
-            f"SELECT MAX(TRY_CAST(STRPTIME(DT_GERACAO, '%d/%m/%Y') AS DATE)) FROM {tabela}"
+            f"SELECT MAX(TRY_CAST(TRY_STRPTIME(DT_GERACAO, '%d/%m/%Y') AS DATE)) FROM {tabela}"
         ).fetchone()[0]
         if dt is None:
             print(f"[aviso] {tabela} vazia — nada a versionar")
@@ -103,12 +103,21 @@ def versionar(con) -> None:
                    COUNT(*) AS qt_linhas
             FROM {tabela} GROUP BY ALL
         """)
-        # conteúdo idêntico (mesmo hash e mesma quantidade) continua vivo
+        anterior = con.execute(
+            "SELECT MAX(dt_extracao) FROM extracoes WHERE dt_extracao < ?", [dt]
+        ).fetchone()[0]
+        # conteúdo idêntico (mesmo hash e mesma quantidade) continua vivo — mas
+        # só se estava vivo na extração imediatamente anterior. Conteúdo que
+        # sumiu e VOLTOU vira linha nova (janela nova, no INSERT abaixo):
+        # reabrir a janela antiga afirmaria presença nos dias de ausência
+        # (reescrevendo retroativamente a série já publicada) e apagaria o
+        # rastro "sumiu e voltou", que é indício.
         con.execute(f"""
             UPDATE {hist} h SET dt_ultima_extracao = ?
             FROM stg s
             WHERE h.hash_linha = s.hash_linha AND h.qt_linhas = s.qt_linhas
-        """, [dt])
+              AND h.dt_ultima_extracao >= COALESCE(?, h.dt_ultima_extracao)
+        """, [dt, anterior])
         # A última extração de um mesmo dia vence (o TSE regenera o arquivo ao
         # longo do dia): conteúdo marcado como vivo em `dt` mas ausente do
         # arquivo atual nasceu-e-sumiu dentro do dia (sai do histórico: não
@@ -121,9 +130,6 @@ def versionar(con) -> None:
             f"DELETE FROM {hist} h WHERE h.dt_primeira_extracao = ? AND {sem_par}",
             [dt, dt],
         )
-        anterior = con.execute(
-            "SELECT MAX(dt_extracao) FROM extracoes WHERE dt_extracao < ?", [dt]
-        ).fetchone()[0]
         if anterior is not None:
             con.execute(
                 f"UPDATE {hist} h SET dt_ultima_extracao = ? WHERE {sem_par}",
@@ -190,7 +196,10 @@ def _condicao_edicao(tabela: str) -> str:
     indício; errar para "removida" afirma que alguém apagou declaração — e essa
     é a acusação que o projeto não pode fazer por engano.
     """
-    ident = " AND ".join(f"v.{c} = m.{c}" for c in IDENTIDADE[tabela])
+    # IS NOT DISTINCT FROM: os arquivos do TSE têm campos NULL aos milhares
+    # (DT_DESPESA em 21% das linhas) e `NULL = NULL` não casa — a comparação
+    # ingênua faria uma retransmissão idêntica cair como falsa remoção
+    ident = " AND ".join(f"v.{c} IS NOT DISTINCT FROM m.{c}" for c in IDENTIDADE[tabela])
     variaveis = VARIAVEIS[tabela]
     iguais = " + ".join(
         f"CASE WHEN v.{c} IS NOT DISTINCT FROM m.{c} THEN 1 ELSE 0 END" for c in variaveis
@@ -215,7 +224,9 @@ def criar_views_mudancas(con) -> None:
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [hist]
         ).fetchone()[0]:
             continue
-        essencia = " AND ".join(f"v.{c} = m.{c}" for c in ESSENCIA[tabela])
+        # IS NOT DISTINCT FROM, nunca `=`: retransmissão idêntica com campo NULL
+        # precisa casar — senão vira falsa "declaração removida"
+        essencia = " AND ".join(f"v.{c} IS NOT DISTINCT FROM m.{c}" for c in ESSENCIA[tabela])
         contraparte, valor = CONTRAPARTE[tabela]
         # conteúdo que estava declarado e não está mais, SEM correspondente de
         # mesma essência na extração atual (filtra o re-registro em massa do SPCE)
@@ -264,7 +275,23 @@ def criar_views_mudancas(con) -> None:
             {sumidas},
             pares AS (
                 SELECT DISTINCT m.hash_linha AS morta, v.hash_linha AS viva
-                FROM sumidas m JOIN vivas v ON {_condicao_edicao(tabela)})
+                FROM sumidas m JOIN vivas v ON {_condicao_edicao(tabela)}),
+            -- quantas declarações vivas serviriam de sucessora desta. Em 76%
+            -- dos casos é 1 e o antes/depois é certo; quando é mais, não dá
+            -- para saber qual substituiu qual, e o site precisa dizer isso em
+            -- vez de escolher uma e apresentá-la como a resposta. Contado
+            -- sobre `pares` (que é DISTINCT morta×viva): imune às linhas
+            -- físicas repetidas de um mesmo hash no hist.
+            suc AS (SELECT morta, COUNT(*) AS sucessores FROM pares GROUP BY 1),
+            -- um hash morto pode ter mais de uma linha física no hist (a
+            -- quantidade mudou e depois o conteúdo foi corrigido): o "antes"
+            -- é a última janela dele, escolhida deterministicamente
+            mortas_rep AS (
+                SELECT h.* FROM {hist} h
+                WHERE h.hash_linha IN (SELECT morta FROM pares)
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY h.hash_linha
+                    ORDER BY h.dt_ultima_extracao DESC, h.dt_primeira_extracao DESC,
+                             h.qt_linhas DESC) = 1)
             SELECT a.SQ_CANDIDATO, a.NM_CANDIDATO, a.SG_PARTIDO, a.DS_CARGO, a.SG_UF,
                    a.{contraparte},
                    {nome_sql} AS nome_contraparte,
@@ -274,23 +301,22 @@ def criar_views_mudancas(con) -> None:
                    ROUND(TRY_CAST(REPLACE(d.{vr}, ',', '.') AS DOUBLE) * d.qt_linhas, 2) AS valor_depois,
                    a.{dt} AS data_antes, d.{dt} AS data_depois,
                    a.dt_primeira_extracao, a.dt_ultima_extracao,
-                   -- quantas declarações vivas serviriam de sucessora desta. Em
-                   -- 76% dos casos é 1 e o antes/depois é certo; quando é mais,
-                   -- não dá para saber qual substituiu qual, e o site precisa
-                   -- dizer isso em vez de escolher uma e apresentá-la como a
-                   -- resposta. A linha é UMA por declaração morta: sem isso o
-                   -- JOIN devolvia todas as combinações (uma nota corrigida
-                   -- virava 12 linhas na tela).
-                   COUNT(*) OVER (PARTITION BY a.hash_linha) AS sucessores
+                   suc.sucessores
             FROM pares
-            JOIN {hist} a ON a.hash_linha = pares.morta
+            JOIN suc ON suc.morta = pares.morta
+            JOIN mortas_rep a ON a.hash_linha = pares.morta
+            -- o "depois" é a linha VIVA do hash sucessor: o mesmo hash pode ter
+            -- irmãs mortas no hist (quantidade que mudou), e elas não são o
+            -- estado atual da declaração
             JOIN {hist} d ON d.hash_linha = pares.viva
-            -- representante determinístico: a versão viva de valor mais próximo
-            -- (empate resolvido pelo hash, para a publicação não oscilar)
+            JOIN ultima ON d.dt_ultima_extracao = ultima.dt
+            -- representante determinístico: a versão viva de valor TOTAL mais
+            -- próximo (a mesma régua do que a tela mostra — VR × qt_linhas;
+            -- empate resolvido pelo hash, para a publicação não oscilar)
             QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY a.hash_linha
-                ORDER BY ABS(COALESCE(TRY_CAST(REPLACE(d.{vr}, ',', '.') AS DOUBLE), 0)
-                           - COALESCE(TRY_CAST(REPLACE(a.{vr}, ',', '.') AS DOUBLE), 0)),
+                ORDER BY ABS(COALESCE(TRY_CAST(REPLACE(d.{vr}, ',', '.') AS DOUBLE), 0) * d.qt_linhas
+                           - COALESCE(TRY_CAST(REPLACE(a.{vr}, ',', '.') AS DOUBLE), 0) * a.qt_linhas),
                          d.hash_linha) = 1
         """)
 

@@ -183,16 +183,27 @@ export function sqlNotasDoCandidato(where: string): string {
     SELECT n.NR_CPF_CNPJ_FORNECEDOR AS cnpj, n.dt, n.categoria, n.descricao,
            n.documento, n.valor, n.itens,
            n.sem_numero, n.valor_repetido,
-           -- red flag 13: o número desta nota aparece para OUTRO candidato
+           -- red flag 13: o número desta nota aparece para OUTRO candidato.
+           -- A régua vale para os DOIS lados do par (como em src/analises.py):
+           -- o documento do outro candidato também tem de ser fiscal e
+           -- numerado — um recibo avulso com o mesmo número não conta.
            CASE WHEN n.numerado = 1 AND EXISTS (
                   SELECT 1 FROM despesas_atual o
                   WHERE o.NR_CPF_CNPJ_FORNECEDOR = n.NR_CPF_CNPJ_FORNECEDOR
                     AND o.NR_DOCUMENTO = n.n_doc
+                    AND ${CONDICAO_DOCUMENTO_NUMERADO}
                     AND o.SQ_CANDIDATO <> (SELECT ANY_VALUE(SQ_CANDIDATO) FROM itens))
                 THEN 1 ELSE 0 END AS doc_de_outro
     FROM notas n
     ORDER BY n.valor DESC`;
 }
+
+/** Corte do "CNPJ recém-aberto": empresa aberta a partir de outubro do ano
+ *  anterior à eleição. O backend deriva a data dos próprios dados
+ *  (`_ano_eleicao` em src/agregados.py); o site não tem o dado antes do boot,
+ *  então o valor vive aqui, num lugar só — tests/test_consultas_do_site.py
+ *  compara com a derivação do backend contra o banco real. */
+export const CORTE_RECEM_ABERTO = '2025-10-01';
 
 /** Margem da razão gasto÷arrecadado para ela contar como sinal: estourar o
  *  arrecadado por poucos por cento é descompasso de calendário (nota
@@ -202,8 +213,10 @@ export function sqlNotasDoCandidato(where: string): string {
  *  texto do SQL dos dois lados; mudar aqui exige mudar lá (e o teste cobra). */
 export const MARGEM_GASTO_ACIMA = 1.1;
 
-// espelha METRICAS_SINAL em src/resumo.py: sinal = métrica estritamente acima
-// do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe).
+// espelha METRICAS_SINAL em src/resumo.py: sinal = métrica ESTRITAMENTE acima
+// do p95 do grupo (cargo×UF; BR-TODAS quando o grupo local não existe) — sem
+// exceção de teto: num grupo em que o p95 satura em 100%, ninguém está "fora
+// da curva" por definição, e o sinal não dispara (mesma régua do backend).
 // razão gasto÷arrecadado só é sinal acima de MARGEM_GASTO_ACIMA — mesma régua.
 export const SINAIS_CTE = `
   metricas AS (
@@ -225,10 +238,7 @@ export const SINAIS_CTE = `
     LEFT JOIN benchmark_indicadores bbr
       ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica
     WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL
-      AND (m.valor > COALESCE(buf.p95, bbr.p95)
-           -- métrica percentual satura: com 5%+ do grupo em 100%, o p95 vai ao
-           -- teto e "estritamente acima" nunca acontece — estar no teto conta
-           OR (m.metrica LIKE 'pct_%' AND COALESCE(buf.p95, bbr.p95) >= 100 AND m.valor >= 100)))`;
+      AND m.valor > COALESCE(buf.p95, bbr.p95))`;
 
 // filtro de segundo nível da visão fora-da-curva: EM QUAL sinal a pessoa
 // destoa ('' = qualquer). Ids espelham METRICAS_SINAL em src/resumo.py.
@@ -532,15 +542,20 @@ export function sqlPainel(base: string, w: string, v: Visao) {
   const colCategoria = eVisaoReceitas(v) ? 'DS_ORIGEM_RECEITA' : 'DS_ORIGEM_DESPESA';
   const colData = eVisaoReceitas(v) ? 'DT_RECEITA' : 'DT_DESPESA';
   return {
+    // sentinelas '-1'/'#NULO' fora da contagem de contrapartes: "declarado sem
+    // contraparte" não é um fornecedor/doador a mais no KPI
     kpis: `SELECT ROUND(SUM(valor),2), COUNT(DISTINCT SQ_CANDIDATO),
-                            COUNT(DISTINCT ${colContraparte}), COUNT(*)
+                            COUNT(DISTINCT ${colContraparte}) FILTER (
+                              WHERE ${colContraparte} NOT IN ('-1', '#NULO')), COUNT(*)
                      FROM ${base} WHERE ${w}`,
     categorias: `SELECT ${colCategoria}, ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
     candidatos: `SELECT NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
-    porDia: `SELECT STRFTIME(STRPTIME(${colData}, '%d/%m/%Y'), '%d/%m') AS dia,
-                            MIN(STRPTIME(${colData}, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
+    // TRY_STRPTIME: o STRPTIME estrito estoura em '#NULO' e o otimizador pode
+    // avaliá-lo antes do filtro que removeria a linha (mesma regra da carga)
+    porDia: `SELECT STRFTIME(TRY_STRPTIME(${colData}, '%d/%m/%Y'), '%d/%m') AS dia,
+                            MIN(TRY_STRPTIME(${colData}, '%d/%m/%Y')) AS ord, ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} AND ${colData} <> '#NULO'
                      GROUP BY 1 ORDER BY ord`,
     mapa: `SELECT SG_UF, ROUND(SUM(valor),2) AS total

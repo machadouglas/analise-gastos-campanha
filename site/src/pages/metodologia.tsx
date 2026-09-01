@@ -98,9 +98,10 @@ export function Metodologia() {
           quando o grupo local tem menos de 20 candidatos). Nunca comparamos um candidato a
           presidente com um a deputado estadual, nem um número absoluto com um limiar inventado —
           cada sinal informa o valor do candidato, a mediana e o p95 do grupo, todos conferíveis
-          na página Consultar. Uma exceção necessária: métricas em porcentagem têm teto de 100%, e
-          quando um vigésimo do grupo já está no teto o próprio p95 vai a 100 — aí "acima do p95"
-          seria impossível por definição, e passamos a contar quem está <em>no</em> teto.
+          na página Consultar. Sem letra miúda: quando uma métrica em porcentagem satura (5% ou
+          mais do grupo em 100%, o que leva o próprio p95 a 100), "acima do p95" é impossível por
+          definição — e o sinal simplesmente não dispara nesse grupo, em vez de marcar todo mundo
+          que está no teto como se fosse exceção.
         </p>
         <p>
           Detalhes de cálculo que evitam falsos positivos: <strong>preços</strong> são comparados

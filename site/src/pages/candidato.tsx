@@ -181,6 +181,7 @@ interface DadosCandidato {
   series: Serie[];
   marcas: MarcaLinha[];
   categorias: ItemBarra[];
+  categoriasFluxo: ItemBarra[];
   origensReceita: NoFluxo[];
   conexoes: NoConexao[];
   conexoesSecundarias: NoSecundario[];
@@ -327,9 +328,11 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
         SELECT STRFTIME(dt_extracao, '%d/%m') AS dia, total_contratado, total_receitas
         FROM serie_diaria WHERE ${w} ORDER BY dt_extracao`)
         : Promise.resolve({ linhas: [] as unknown[][] }),
+      // sem LIMIT: a cauda é agregada em "Outras" adiante — cortar aqui fazia o
+      // sankey somar menos "contratado" do que o KPI da mesma página
       executarSQL(`
       SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
-      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
+      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC`),
       executarSQL(`
       SELECT DS_ORIGEM_RECEITA, ROUND(SUM(valor), 2) AS total
       FROM receitas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC`),
@@ -405,8 +408,10 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
 
   const flags: string[] = [];
   const razao = Number(linha.razao_gasto_receita ?? 0);
-  // mesma régua e mesma frase do sinal do backend (razão acima da margem):
-  // gastou mais do que arrecadou com folga suficiente para não ser calendário
+  // mesma MARGEM do backend, mas régua deliberadamente mais simples que a do
+  // sinal da home (que exige também estar acima do p95 do grupo): o chip da
+  // ficha marca o fato "gastou mais do que arrecadou com folga", documentado
+  // na Metodologia como duas réguas que não se misturam
   if (razao > MARGEM_GASTO_ACIMA) flags.push(metrica('razao_gasto_receita').frase(razao));
   if (Number(linha.pct_maior_fornecedor ?? 0) >= 50 && Number(linha.n_fornecedores) > 1)
     flags.push(`${linha.pct_maior_fornecedor}% do gasto em um único fornecedor`);
@@ -590,6 +595,11 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     origens.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1] ?? 0) })).filter((n) => n.valor > 0),
     6,
   );
+  // os DOIS lados do sankey agregam a cauda: truncar as saídas fazia o rodapé
+  // ("contratado R$ X" e a tesoura) divergir do KPI da própria página
+  const todasCategorias = categorias.linhas.map(
+    (l) => ({ rotulo: String(l[0]), valor: Number(l[1]) }));
+  const categoriasFluxo = agruparCauda(todasCategorias, 8);
 
   return {
     perfil,
@@ -599,7 +609,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       { nome: 'Arrecadado', valores: serie.linhas.map((l) => Number(l[2] ?? 0)) },
     ],
     marcas,
-    categorias: categorias.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
+    categorias: agruparCauda(todasCategorias, 10),
+    categoriasFluxo,
     origensReceita,
     conexoes: [...conexoes.values()],
     conexoesSecundarias,
@@ -864,7 +875,7 @@ export function Candidato() {
           <Ampliavel titulo="Fluxo do dinheiro">
             <FluxoDinheiro
               entradas={dados.origensReceita}
-              saidas={dados.categorias.slice(0, 8)}
+              saidas={dados.categoriasFluxo}
               centro={p.nome}
             />
           </Ampliavel>
