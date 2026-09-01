@@ -162,11 +162,33 @@ CONSULTAS_FINGERPRINT = {
 
 _existe = db.existe
 
+# raiz dos fontes do pipeline — o fingerprint carimba o código junto do dado
+DIR_CODIGO = Path(__file__).parent
+
+
+def stamp_codigo(raiz: Path = DIR_CODIGO) -> str:
+    """Hash dos fontes do pipeline (src/*.py + gastos.py).
+
+    Sem ele, o gate da rotina lia só as tabelas-base do TSE: num dia de 304
+    pós-deploy, uma view/coluna/parquet novo do código jamais chegava ao release
+    até o TSE mudar algum dado (aconteceu com despesas_alteradas.parquet em
+    31/08/2026 — o fix que criava a view não furava o gate que barrava a
+    exportação dela). Com o carimbo, todo deploy que toca o pipeline exporta uma
+    vez; o upload seletivo por md5 continua evitando subir arquivo idêntico."""
+    h = hashlib.md5(usedforsecurity=False)
+    arquivos = sorted(raiz.glob("*.py")) + [raiz.parent / "gastos.py"]
+    for a in arquivos:
+        if a.exists():
+            h.update(a.name.encode("utf-8"))
+            h.update(a.read_bytes())
+    return h.hexdigest()
+
 
 def fingerprint(con) -> str:
-    """Resumo do estado publicável do banco: muda quando (e só quando) algo que
-    o site exibe mudou — extração nova, retificação, cadastro de CNPJ novo."""
-    partes = []
+    """Resumo do estado publicável: muda quando algo que o site exibe PODE ter
+    mudado — extração nova, retificação, cadastro de CNPJ novo, ou deploy que
+    altera o próprio pipeline (ver stamp_codigo)."""
+    partes = [stamp_codigo()]
     for nome, sql in CONSULTAS_FINGERPRINT.items():
         partes.append(str(con.execute(sql).fetchone()) if _existe(con, nome) else "ausente")
     return hashlib.md5("|".join(partes).encode("utf-8"), usedforsecurity=False).hexdigest()
