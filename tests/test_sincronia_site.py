@@ -260,9 +260,9 @@ def test_colunas_de_corrigidas_batem_com_a_view_do_backend():
     h.versionar(con)
 
     corpo = CONSULTAS_TS.split("export function sqlCorrigidas", 1)[1].split("`;", 1)[0]
-    for tabela, view, contraparte in (
-        ("despesas_alteradas", "v_alteradas_pares_despesas_contratadas", "NR_CPF_CNPJ_FORNECEDOR"),
-        ("receitas_alteradas", "v_alteradas_pares_receitas", "NR_CPF_CNPJ_DOADOR"),
+    for view, contraparte in (
+        ("v_alteradas_pares_despesas_contratadas", "NR_CPF_CNPJ_FORNECEDOR"),
+        ("v_alteradas_pares_receitas", "NR_CPF_CNPJ_DOADOR"),
     ):
         colunas_view = {
             r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()
