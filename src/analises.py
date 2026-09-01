@@ -28,7 +28,7 @@ DOCUMENTOS_FISCAIS = ("nota fiscal", "cupom fiscal")
 # emitem NF brasileira), e marcar todo mundo não separa ninguém. Só é indício
 # não ter documento fiscal ONDE O TIPO DE GASTO COSTUMA TER — daí o limiar.
 ADESAO_MINIMA_NORMA = 50.0   # % do valor da categoria declarado com doc. fiscal
-MIN_LINHAS_NORMA = 30        # amostra mínima para a categoria ter norma medida
+MIN_NOTAS_NORMA = 30         # amostra mínima (em NOTAS, não itens) para a norma
 
 
 def cond_documento_nao_fiscal(alias: str = "") -> str:
@@ -118,13 +118,16 @@ def executar_todas(con, numeros=None, uf=None):
       "Percentual alto em um único fornecedor pode indicar direcionamento.",
       f"""
       WITH d AS (
-        SELECT NM_CANDIDATO, NR_CANDIDATO, NR_CPF_CNPJ_FORNECEDOR AS cnpj_cpf,
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, NR_CPF_CNPJ_FORNECEDOR AS cnpj_cpf,
                COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
                DS_CNAE_FORNECEDOR, COUNT(*) AS notas, SUM(VR) AS total
         FROM v_despesas WHERE {f} GROUP BY ALL)
       SELECT NM_CANDIDATO, fornecedor, cnpj_cpf, DS_CNAE_FORNECEDOR, notas,
              ROUND(total,2) AS total,
-             ROUND(100.0 * total / SUM(total) OVER (PARTITION BY NR_CANDIDATO), 1) AS pct_do_candidato
+             -- partição por SQ_CANDIDATO: NR_CANDIDATO repete entre UFs/cargos
+             -- (434 números compartilhados no banco) e, sem filtro de UF, o
+             -- denominador somava candidatos diferentes
+             ROUND(100.0 * total / SUM(total) OVER (PARTITION BY SQ_CANDIDATO), 1) AS pct_do_candidato
       FROM d ORDER BY NM_CANDIDATO, total DESC
       """)
 

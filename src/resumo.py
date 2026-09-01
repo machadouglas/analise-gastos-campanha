@@ -29,15 +29,15 @@ def _registros(con, sql) -> list[dict]:
 # corte em 1 o sinal disparava a 1,01×, e em quase metade dos grupos o p95 fica
 # abaixo de 1, ou seja, esse corte era o único portão que existia.
 # Métricas percentuais têm teto: quando 5% ou mais do grupo está em 100%, o p95
-# satura no teto e "estritamente acima" vira impossível — o sinal nunca dispara
-# (era o caso de pct_sem_nota em TODOS os grupos). Nesses casos, estar no teto é
-# o máximo que existe e conta como sinal.
-TETO_PERCENTUAL = 100.0
+# satura no teto e "estritamente acima" vira impossível — o sinal simplesmente
+# NÃO dispara nesse grupo. Já houve uma exceção que tratava "estar no teto"
+# como sinal (na época pct_sem_nota saturava em todos os grupos e o sinal era
+# mudo), mas ela marcava candidatos demais: num grupo com 15% em 100%, todos os
+# 15% ganhavam o rótulo "fora da curva" — que promete outlier e entregava um
+# sexto do grupo. Com a norma_documento a saturação de pct_sem_nota sumiu, e a
+# exceção saiu: fora da curva é estritamente acima do p95, sem letra miúda.
 MARGEM_GASTO_ACIMA = 1.1
-CONDICAO_SINAL = (
-    "(r.valor > r.p95 OR (r.metrica LIKE 'pct_%' "
-    f"AND r.p95 >= {TETO_PERCENTUAL} AND r.valor >= {TETO_PERCENTUAL}))"
-)
+CONDICAO_SINAL = "r.valor > r.p95"
 
 METRICAS_SINAL = [
     ("total_contratado", "total_contratado", "total_contratado > 0"),
@@ -179,21 +179,30 @@ def gerar(con) -> dict:
     # o topo da Home (medido em 31/08/2026: 62% das linhas e 13 dos 15 maiores
     # já estavam declaradas dias antes).
     chave_essencia = ", ".join(historico.ESSENCIA["despesas_contratadas"])
+    # o join NÃO pode ser USING: campo de essência NULL (DT_DESPESA falta aos
+    # milhares nos arquivos do TSE) não casa em `=`, e a despesa debutante com
+    # data vazia sumiria da lista em silêncio
+    join_essencia = " AND ".join(
+        f"h.{c} IS NOT DISTINCT FROM e.{c}"
+        for c in historico.ESSENCIA["despesas_contratadas"]
+    )
+    pseudo_fornecedor_h = privacidade.sql_pseudonimo(
+        "h.NR_CPF_CNPJ_FORNECEDOR", privacidade.sal())
     novas = _registros(con, f"""
         WITH estreia AS (
             SELECT {chave_essencia}, MIN(dt_primeira_extracao) AS dt
             FROM hist_despesas_contratadas GROUP BY ALL)
         SELECT h.SQ_CANDIDATO, h.NM_CANDIDATO, h.SG_PARTIDO, h.DS_CARGO, h.SG_UF,
                COALESCE(NULLIF(h.NM_FORNECEDOR_RFB,'#NULO'), h.NM_FORNECEDOR) AS fornecedor,
-               {pseudo_fornecedor} AS NR_CPF_CNPJ_FORNECEDOR,
+               {pseudo_fornecedor_h} AS NR_CPF_CNPJ_FORNECEDOR,
                h.DS_ORIGEM_DESPESA, h.DS_DESPESA,
-               ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * h.qt_linhas, 2) AS valor,
+               ROUND(TRY_CAST(REPLACE(h.VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * h.qt_linhas, 2) AS valor,
                h.DT_DESPESA
         FROM hist_despesas_contratadas h
-        JOIN estreia e USING ({chave_essencia})
+        JOIN estreia e ON {join_essencia}
         WHERE h.dt_primeira_extracao = DATE '{dt_extracao}'
           AND e.dt = DATE '{dt_extracao}'
-          AND {filtro_placeholder('NR_CPF_CNPJ_FORNECEDOR', 'VR_DESPESA_CONTRATADA')}
+          AND {filtro_placeholder('h.NR_CPF_CNPJ_FORNECEDOR', 'h.VR_DESPESA_CONTRATADA')}
         ORDER BY valor DESC LIMIT 15
     """)
 
