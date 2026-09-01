@@ -48,7 +48,7 @@ FROM (SELECT SQ_PRESTADOR_CONTAS, SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO,
 CREATE OR REPLACE VIEW v_despesas_pagas AS
 SELECT p.*, c.SQ_CANDIDATO, c.NR_CANDIDATO, c.NM_CANDIDATO, c.SG_PARTIDO, c.DS_CARGO,
        TRY_CAST(REPLACE(p.VR_PAGTO_DESPESA, ',', '.') AS DOUBLE) AS VR,
-       TRY_CAST(STRPTIME(p.DT_PAGTO_DESPESA, '%d/%m/%Y') AS DATE) AS DT
+       TRY_CAST(TRY_STRPTIME(p.DT_PAGTO_DESPESA, '%d/%m/%Y') AS DATE) AS DT
 FROM despesas_pagas p
 LEFT JOIN v_prestadores c USING (SQ_PRESTADOR_CONTAS);
 """
@@ -106,11 +106,14 @@ def criar_views(con) -> None:
         ).fetchone()[0]:
             continue
         filtro = filtro_placeholder(col_contraparte, col_valor) if col_contraparte else "1=1"
+        # TRY_STRPTIME, nunca STRPTIME: o STRPTIME estrito estoura em '#NULO', e
+        # o otimizador pode avaliá-lo ANTES de qualquer filtro que removeria a
+        # linha (dependente do plano — funciona num banco e explode noutro)
         con.execute(f"""
             CREATE OR REPLACE VIEW {view} AS
             SELECT *,
                    TRY_CAST(REPLACE({col_valor}, ',', '.') AS DOUBLE) AS VR,
-                   TRY_CAST(STRPTIME({col_data}, '%d/%m/%Y') AS DATE) AS DT
+                   TRY_CAST(TRY_STRPTIME({col_data}, '%d/%m/%Y') AS DATE) AS DT
             FROM {tabela}
             WHERE {filtro}
         """)
