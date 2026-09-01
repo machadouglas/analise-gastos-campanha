@@ -13,6 +13,7 @@ import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import {
   CONDICAO_DOCUMENTO_NUMERADO,
   CONDICAO_NOTA_SEM_NUMERO,
+  CORTE_RECEM_ABERTO,
   SITUACAO_NAO_ENCONTRADA,
   condicaoSemNota,
   escSQL,
@@ -140,8 +141,8 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
       FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
       executarSQL(`
-      SELECT STRFTIME(STRPTIME(DT_DESPESA, '%d/%m/%Y'), '%d/%m') AS dia,
-             MIN(STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor), 2) AS total
+      SELECT STRFTIME(TRY_STRPTIME(DT_DESPESA, '%d/%m/%Y'), '%d/%m') AS dia,
+             MIN(TRY_STRPTIME(DT_DESPESA, '%d/%m/%Y')) AS ord, ROUND(SUM(valor), 2) AS total
       FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
       GROUP BY 1 ORDER BY ord`),
       executarSQL(`
@@ -152,11 +153,16 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
              -- red flag 12: documento fiscal cujo número não tem um só dígito
              CASE WHEN ${CONDICAO_NOTA_SEM_NUMERO} THEN 1 ELSE 0 END AS "_semNumero",
              -- red flag 13: este fornecedor declarou o MESMO número para outro
-             -- candidato. É um fato do fornecedor — esta é a página dele.
+             -- candidato. É um fato do fornecedor — esta é a página dele. A
+             -- régua vale para os DOIS documentos (como no chip acima e em
+             -- src/analises.py): o do outro candidato também tem de ser fiscal
+             -- e numerado — recibo avulso com o mesmo número não conta.
              CASE WHEN ${CONDICAO_DOCUMENTO_NUMERADO} AND EXISTS (
                     SELECT 1 FROM despesas_atual o
                     WHERE o.NR_CPF_CNPJ_FORNECEDOR = despesas_atual.NR_CPF_CNPJ_FORNECEDOR
                       AND o.NR_DOCUMENTO = despesas_atual.NR_DOCUMENTO
+                      -- sem qualificação, as colunas resolvem para o alias interno
+                      AND ${CONDICAO_DOCUMENTO_NUMERADO}
                       AND o.SQ_CANDIDATO <> despesas_atual.SQ_CANDIDATO)
                   THEN 1 ELSE 0 END AS "_docDeOutro"
       FROM despesas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`),
@@ -234,7 +240,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       ? '1 número de nota declarado para mais de um candidato'
       : `${num.format(docsRepetidos)} números de nota declarados para mais de um candidato`);
   if (valorRemovido > 0) flags.push(`${brl.format(valorRemovido)} em declarações removidas`);
-  if (rfb?.abertura && rfb.abertura >= '2025-10-01')
+  if (rfb?.abertura && rfb.abertura >= CORTE_RECEM_ABERTO)
     flags.push(`CNPJ aberto em ${dataBR(rfb.abertura)}, às vésperas da eleição`);
   if (l[3] != null) flags.push('o fornecedor também é candidato nesta eleição');
 

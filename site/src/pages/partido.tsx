@@ -30,11 +30,17 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
   // as oito consultas são independentes; juntas, o pipeline de leitura dos
   // parquet não fica serializado atrás de cada round-trip
   const [kpis, rec, comp, serie, origens, doadores, compartilhados, candidatos] = await Promise.all([
+    // candidatos = quem movimentou QUALQUER coisa (despesa OU receita): partido
+    // que só arrecadou também tem ficha. Sentinelas '-1'/'#NULO' fora do KPI de
+    // fornecedores — "sem contraparte" não é um fornecedor a mais.
     executarSQL(`
-      SELECT COUNT(DISTINCT SQ_CANDIDATO),
-             ROUND(SUM(valor), 2),
-             COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR)
-      FROM despesas_atual WHERE ${w}`),
+      SELECT (SELECT COUNT(*) FROM (
+                SELECT DISTINCT SQ_CANDIDATO FROM despesas_atual WHERE ${w}
+                UNION
+                SELECT DISTINCT SQ_CANDIDATO FROM receitas_atual WHERE ${w})),
+             (SELECT ROUND(SUM(valor), 2) FROM despesas_atual WHERE ${w}),
+             (SELECT COUNT(DISTINCT NR_CPF_CNPJ_FORNECEDOR) FROM despesas_atual
+              WHERE ${w} AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO'))`),
     executarSQL(`SELECT ROUND(SUM(valor), 2) FROM receitas_atual WHERE ${w}`),
     // mesma régua de src/analises.py: dinheiro público pela FONTE oficial
     // (FUNDO%), recursos próprios pela origem declarada

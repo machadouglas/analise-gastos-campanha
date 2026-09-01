@@ -689,7 +689,7 @@ export function Explorar() {
                     ? 'Receitas removidas do recorte, maiores primeiro'
                     : visao === 'fora-da-curva'
                       ? categoria
-                        ? `Fora da curva em "${categoria}" — quem mais gasta acima do p95 do grupo primeiro`
+                        ? `Fora da curva em "${categoria}" — a tabela traz o gasto nesta categoria; os KPIs e gráficos acima somam TODOS os gastos desses candidatos`
                         : 'Candidatos fora da curva do recorte — mais sinais primeiro (os gráficos acima mostram os gastos deles)'
                       : 'Despesas do recorte, maiores primeiro'} — página {pagina + 1}
               </p>

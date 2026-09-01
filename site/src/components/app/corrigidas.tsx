@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { Secao } from '@/components/app/secao';
 import { Tabela } from '@/components/app/tabela';
-import { brl, celula, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, brlCentavos, celula, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 /** Uma retificação, já pareada pelo backend (v_alteradas_pares_*): a versão que
  *  saiu do ar e a que está no lugar dela. */
@@ -55,7 +55,14 @@ const ROTULO: Record<string, string> = {
 /** O par antes/depois do campo que mudou. Só um campo muda por retificação —
  *  é a própria régua do pareamento (2 de 3 campos iguais). */
 function parDoCampo(c: Corrigida): [antes: string, depois: string] {
-  if (c.campo === 'valor') return [brl.format(c.valorAntes), brl.format(c.valorDepois)];
+  if (c.campo === 'valor') {
+    const [antes, depois] = [brl.format(c.valorAntes), brl.format(c.valorDepois)];
+    // correção de centavos: sem casas decimais, "R$ 100,10 → R$ 100,40" viraria
+    // "R$ 100 → R$ 100" numa linha que afirma que o valor mudou
+    return antes === depois
+      ? [brlCentavos.format(c.valorAntes), brlCentavos.format(c.valorDepois)]
+      : [antes, depois];
+  }
   if (c.campo === 'data') return [c.dataAntes, c.dataDepois];
   return [c.descricaoAntes, c.descricaoDepois];
 }
