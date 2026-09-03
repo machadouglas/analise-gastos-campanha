@@ -56,8 +56,8 @@ CPF_DOADOR_PF = "98765432100"
 
 
 def _cand(i: int) -> dict:
-    """Metadados de um candidato sintético — IDÊNTICOS entre despesa e receita
-    (v_prestadores é UNION DISTINCT; divergência duplicaria o prestador)."""
+    """Metadados de um candidato sintético, iguais entre despesa e receita.
+    (Divergência descritiva é caso do test_verificacao: v_prestadores colapsa.)"""
     return {
         "SQ_CANDIDATO": f"16{i:04d}", "SQ_PRESTADOR_CONTAS": f"90{i:04d}",
         "NM_CANDIDATO": f"CANDIDATO {i:04d}", "NR_CANDIDATO": f"1{i:04d}",

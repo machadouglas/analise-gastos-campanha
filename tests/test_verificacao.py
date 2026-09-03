@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src import verificacao  # noqa: E402
-from tests.conftest import extrair_dia  # noqa: E402
+from tests.conftest import extrair_dia, inserir_pagamento  # noqa: E402
 
 
 def _dia_com_n_despesas(banco, data, n):
@@ -104,3 +104,40 @@ def test_verificacao_reprova_linha_morta_sem_destino(banco):
     """)
     falhas = _falhas_de_mudanca(banco)
     assert "linhas mortas se decompõem sem sobra (despesas_contratadas)" in falhas
+
+
+# --- v_prestadores: metadado divergente do TSE ------------------------------
+# O TSE declarou o mesmo candidato como 'FLAVIO ... SILVA  ALVES' na receita e
+# 'FLAVIO ... SILVA ALVES' na despesa (03/09/2026). Com a view antiga (UNION
+# DISTINCT) o espaço a mais duplicava o prestador e abortava a rotina do dia.
+
+
+def _prestador_com_nome_divergente(banco):
+    """Mesma identidade (SQ_CANDIDATO), nome com um espaço a mais na receita."""
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "NM_CANDIDATO": "FULANO DE TAL"}],
+                receitas=[{"SQ_RECEITA": "1", "NM_CANDIDATO": "FULANO DE  TAL"}])
+
+
+def test_nome_divergente_do_tse_nao_duplica_o_prestador(banco):
+    _prestador_com_nome_divergente(banco)
+    assert banco.execute("SELECT COUNT(*) FROM v_prestadores").fetchone()[0] == 1
+    falhas = verificacao.verificar(banco)
+    assert "v_prestadores sem prestador duplicado" not in falhas
+    assert "prestador aponta para um único candidato" not in falhas
+
+
+def test_nome_divergente_do_tse_nao_dobra_o_pagamento(banco):
+    """O que a duplicação custaria: cada pagamento contado duas vezes."""
+    _prestador_com_nome_divergente(banco)
+    inserir_pagamento(banco, valor="700,00")
+    assert banco.execute("SELECT COUNT(*), SUM(VR) FROM v_despesas_pagas").fetchone() == (1, 700.0)
+
+
+def test_prestador_com_dois_candidatos_bloqueia_publicacao(banco):
+    """Divergência de identidade a view esconde (MIN escolhe um) — e é justamente
+    por isso que ela tem de aparecer aqui: seria dinheiro no candidato errado."""
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "SQ_CANDIDATO": "160001"}],
+                receitas=[{"SQ_RECEITA": "1", "SQ_CANDIDATO": "160002"}])
+    assert "prestador aponta para um único candidato" in verificacao.verificar(banco)
