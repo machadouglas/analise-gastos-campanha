@@ -162,9 +162,9 @@ def verificar(con) -> list[str]:
     pagas_view = con.execute("SELECT COUNT(*) FROM v_despesas_pagas").fetchone()[0]
     checar("v_despesas_pagas sem fan-out no join", pagas_view == pagas_raw, f"view={pagas_view} raw={pagas_raw}")
 
-    # --- v_prestadores é UNION DISTINCT de metadados: se despesa e receita
-    # divergirem no nome/partido do mesmo prestador, ele duplica — e o join
-    # acima dobraria total_pago e as arestas de doação originária
+    # --- v_prestadores agrupa por SQ_PRESTADOR_CONTAS: a unicidade é estrutural,
+    # e esta checagem existe para o dia em que alguém mexer na view (duplicar ali
+    # dobraria total_pago e as arestas de doação originária)
     if _existe(con, "v_prestadores"):
         prestadores_dup = con.execute("""
             SELECT COUNT(*) FROM (
@@ -172,7 +172,22 @@ def verificar(con) -> list[str]:
                 GROUP BY 1 HAVING COUNT(*) > 1)
         """).fetchone()[0]
         checar("v_prestadores sem prestador duplicado", prestadores_dup == 0,
-               f"{prestadores_dup} prestadores com metadados divergentes")
+               f"{prestadores_dup} prestadores com mais de uma linha")
+
+    # --- divergência de metadado descritivo (nome com espaço duplo) a view
+    # colapsa; divergência de IDENTIDADE, não: se o mesmo prestador aparece com
+    # dois SQ_CANDIDATO, o MIN atribuiria pagamento e doação originária ao
+    # candidato errado — em silêncio. Aqui a rotina para.
+    identidades = con.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT SQ_PRESTADOR_CONTAS FROM (
+                SELECT DISTINCT SQ_PRESTADOR_CONTAS, SQ_CANDIDATO FROM despesas_contratadas
+                UNION
+                SELECT DISTINCT SQ_PRESTADOR_CONTAS, SQ_CANDIDATO FROM receitas)
+            GROUP BY 1 HAVING COUNT(*) > 1)
+    """).fetchone()[0]
+    checar("prestador aponta para um único candidato", identidades == 0,
+           f"{identidades} prestadores com SQ_CANDIDATO divergente")
 
     # --- reconciliação: agregados batem com a fonte
     if _existe(con, "serie_diaria"):

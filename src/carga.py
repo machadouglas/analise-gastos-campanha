@@ -34,24 +34,40 @@ def filtro_placeholder(col_contraparte: str, col_valor: str) -> str:
     return (f"NOT ({col_contraparte} IN ('-1', '#NULO') AND "
             f"COALESCE(TRY_CAST(REPLACE({col_valor}, ',', '.') AS DOUBLE), 0) = 0)")
 
-# despesas_pagas não traz colunas do candidato — liga pelo SQ_PRESTADOR_CONTAS
-SQL_VIEWS_PAGAS = """
+# despesas_pagas não traz colunas do candidato — liga pelo SQ_PRESTADOR_CONTAS.
+# Lista de comandos, não um bloco separado por ';': um ponto e vírgula dentro de
+# comentário partiria o SQL ao meio.
+SQL_VIEWS_PAGAS = ["""
+-- UMA linha por prestador, sempre: o join abaixo e o da doação originária
+-- (agregados._rede) multiplicariam pagamento e aresta se o prestador duplicasse.
+-- A identidade do prestador é o SQ_CANDIDATO; nome, número, sigla, cargo e UF são
+-- descritivos, e o TSE os declara divergentes entre despesa e receita (nome com
+-- espaço duplo na receita, p.ex.). Colapsar o descritivo com MIN (determinístico,
+-- ao contrário de ANY_VALUE) tira do TSE o poder de dobrar valor por um espaço.
+-- Divergência de IDENTIDADE não se colapsa em silêncio: `verificar` aborta a
+-- rotina se um prestador apontar para dois candidatos.
 CREATE OR REPLACE VIEW v_prestadores AS
-SELECT DISTINCT SQ_PRESTADOR_CONTAS, SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO,
-                SG_PARTIDO, DS_CARGO, SG_UF
+SELECT SQ_PRESTADOR_CONTAS,
+       MIN(SQ_CANDIDATO) AS SQ_CANDIDATO,
+       MIN(NR_CANDIDATO) AS NR_CANDIDATO,
+       MIN(NM_CANDIDATO) AS NM_CANDIDATO,
+       MIN(SG_PARTIDO) AS SG_PARTIDO,
+       MIN(DS_CARGO) AS DS_CARGO,
+       MIN(SG_UF) AS SG_UF
 FROM (SELECT SQ_PRESTADOR_CONTAS, SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO,
              SG_PARTIDO, DS_CARGO, SG_UF FROM despesas_contratadas
-      UNION
+      UNION ALL
       SELECT SQ_PRESTADOR_CONTAS, SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO,
-             SG_PARTIDO, DS_CARGO, SG_UF FROM receitas);
-
+             SG_PARTIDO, DS_CARGO, SG_UF FROM receitas)
+GROUP BY SQ_PRESTADOR_CONTAS
+""", """
 CREATE OR REPLACE VIEW v_despesas_pagas AS
 SELECT p.*, c.SQ_CANDIDATO, c.NR_CANDIDATO, c.NM_CANDIDATO, c.SG_PARTIDO, c.DS_CARGO,
        TRY_CAST(REPLACE(p.VR_PAGTO_DESPESA, ',', '.') AS DOUBLE) AS VR,
        TRY_CAST(TRY_STRPTIME(p.DT_PAGTO_DESPESA, '%d/%m/%Y') AS DATE) AS DT
 FROM despesas_pagas p
-LEFT JOIN v_prestadores c USING (SQ_PRESTADOR_CONTAS);
-"""
+LEFT JOIN v_prestadores c USING (SQ_PRESTADOR_CONTAS)
+"""]
 
 
 def extrair_zips(ano: int) -> Path:
@@ -122,7 +138,6 @@ def criar_views(con) -> None:
     if con.execute(
         "SELECT count(*) FROM information_schema.tables WHERE table_name = 'despesas_pagas'"
     ).fetchone()[0]:
-        for sql in SQL_VIEWS_PAGAS.split(";"):
-            if sql.strip():
-                con.execute(sql)
+        for sql in SQL_VIEWS_PAGAS:
+            con.execute(sql)
         print("[view] v_prestadores, v_despesas_pagas")
