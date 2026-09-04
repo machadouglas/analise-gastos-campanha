@@ -476,11 +476,17 @@ def _cota_fefc(con) -> None:
             FROM v_receitas
             WHERE DS_FONTE_RECEITA = 'FUNDO ESPECIAL'
             GROUP BY 1, 2, 3, 4),
-        reg AS ({registro})
+        reg AS ({registro}),
+        -- o registro grafa o cargo em CAIXA ALTA ('DEPUTADO FEDERAL') e a
+        -- prestação em Capitalizado ('Deputado Federal'): o casamento é por
+        -- UPPER, e a grafia publicada é a da prestação (a das outras tabelas)
+        cargos AS (
+            SELECT UPPER(DS_CARGO) AS chave, ANY_VALUE(DS_CARGO) AS DS_CARGO
+            FROM v_receitas GROUP BY 1)
         -- FULL JOIN: o grupo que tem candidaturas registradas e nenhum centavo de
         -- fundo é justamente o que a régua de proporcionalidade precisa ver
         SELECT COALESCE(f.SG_PARTIDO, r.SG_PARTIDO) AS SG_PARTIDO,
-               COALESCE(f.DS_CARGO, r.DS_CARGO) AS DS_CARGO,
+               COALESCE(f.DS_CARGO, c.DS_CARGO, r.DS_CARGO) AS DS_CARGO,
                COALESCE(f.genero, r.genero) AS genero,
                COALESCE(f.cor_raca, r.cor_raca) AS cor_raca,
                COALESCE(f.candidatos_fefc, 0) AS candidatos_fefc,
@@ -488,8 +494,9 @@ def _cota_fefc(con) -> None:
                r.candidaturas
         FROM fefc f
         FULL JOIN reg r
-          ON r.SG_PARTIDO = f.SG_PARTIDO AND r.DS_CARGO = f.DS_CARGO
+          ON r.SG_PARTIDO = f.SG_PARTIDO AND UPPER(r.DS_CARGO) = UPPER(f.DS_CARGO)
          AND r.genero = f.genero AND r.cor_raca = f.cor_raca
+        LEFT JOIN cargos c ON c.chave = UPPER(r.DS_CARGO)
     """)
     n, partidos = con.execute(
         "SELECT COUNT(*), COUNT(DISTINCT SG_PARTIDO) FILTER (WHERE fefc > 0) FROM cota_fefc"
