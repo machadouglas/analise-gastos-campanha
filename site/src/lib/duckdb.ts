@@ -16,6 +16,8 @@ const TABELAS_BOOT = [
   'rede',
   'fornecedores',
   'bens',
+  // FEFC por partido × gênero × cor/raça (ficha do partido; agregado pequeno)
+  'cota_fefc',
   // retificações com o antes/depois pronto (v_alteradas_pares_* no backend).
   // Não há derivação de fallback: parear versões é a MESMA régua que decide o
   // que não é remoção, e uma terceira cópia dela no front é justamente o tipo

@@ -46,6 +46,30 @@ def test_queda_brusca_e_recusada(banco):
     assert "10 -> 3" in detalhe
 
 
+def test_data_posterior_a_extracao_avisa_sem_bloquear(banco, capsys):
+    """R$ 90 mil datados de 24/11 numa extração de 20/08: erro do declarante,
+    não do pipeline. A rotina avisa — e publica mesmo assim, porque barrar a
+    série inteira por um typo alheio seria pior do que carregá-lo."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "1", "DT_DESPESA": "24/11/2026", "VR_DESPESA_CONTRATADA": "90000,00"},
+        {"SQ_DESPESA": "2", "DT_DESPESA": "15/08/2026", "VR_DESPESA_CONTRATADA": "10,00"},
+    ])
+    falhas = verificacao.verificar(banco)
+    saida = capsys.readouterr().out
+    assert "aviso  v_despesas: datas posteriores à extração (20/08/2026) — 1 linhas, R$ 90,000.00" in saida
+    assert not any("posteriores" in f for f in falhas)
+    # dentro do ciclo eleitoral, a checagem dura continua passando
+    assert "datas de despesa dentro do ciclo 2025–2027" not in falhas
+
+
+def test_data_fora_do_ciclo_eleitoral_bloqueia_tambem_nas_receitas(banco):
+    """A checagem dura (2025–2027) só existia para despesas."""
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "1", "DT_RECEITA": "10/08/2016", "VR_RECEITA": "1000,00"},
+    ])
+    assert "datas de receita dentro do ciclo 2025–2027" in verificacao.verificar(banco)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
 

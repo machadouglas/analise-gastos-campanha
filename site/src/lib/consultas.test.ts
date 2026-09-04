@@ -1,12 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CATEGORIA_IMPULSIONAMENTO, CONDICAO_DOACAO_DIRETA,
   CONDICAO_DOCUMENTO_NAO_FISCAL, CONDICAO_DOCUMENTO_NUMERADO, CONDICAO_NOTA_SEM_NUMERO,
-  FILTROS_VAZIOS, MINIMO_NOTAS_VALOR_REPETIDO, SINAIS_FILTRO, condicaoSemNota,
+  FILTROS_VAZIOS, MINIMO_NOTAS_VALOR_REPETIDO, ORIGEM_FINANCIAMENTO_COLETIVO, SINAIS_FILTRO, condicaoSemNota,
   condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlDocumentoDaNota, sqlNotasDoCandidato,
   sqlPainel, sqlRegistrosSemMovimento, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
 } from './consultas';
 
 const f = (parcial: Partial<typeof FILTROS_VAZIOS>) => ({ ...FILTROS_VAZIOS, ...parcial });
+
+describe('exclusões de ruído estrutural (plataformas)', () => {
+  it('documento numerado (red flag 13) ignora impulsionamento — número digitado à mão', () => {
+    expect(CONDICAO_DOCUMENTO_NUMERADO).toContain(
+      `COALESCE(DS_ORIGEM_DESPESA, '') <> '${CATEGORIA_IMPULSIONAMENTO}'`,
+    );
+    // e continua exigindo documento fiscal com 3+ dígitos de fornecedor identificado
+    expect(CONDICAO_DOCUMENTO_NUMERADO).toContain("[0-9]{3,}");
+    expect(CONDICAO_DOCUMENTO_NUMERADO).toContain("NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')");
+  });
+
+  it('doação direta (red flag 4) exclui o repasse de financiamento coletivo', () => {
+    expect(CONDICAO_DOACAO_DIRETA).toBe(
+      `COALESCE(DS_ORIGEM_RECEITA, '') <> '${ORIGEM_FINANCIAMENTO_COLETIVO}'`,
+    );
+    expect(ORIGEM_FINANCIAMENTO_COLETIVO).toBe('Recursos de Financiamento Coletivo');
+  });
+});
 
 describe('montarWhere', () => {
   it('sem filtros vira condição neutra', () => {

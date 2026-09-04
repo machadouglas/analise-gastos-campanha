@@ -18,8 +18,30 @@ CHAVES = {
     "gerado_em", "publicado_em", "primeira_extracao", "totais", "mudancas",
     "novas_despesas", "despesas_removidas", "receitas_removidas",
     "fornecedores_compartilhados", "top_candidatos", "fora_da_curva",
-    "serie_nacional",
+    "serie_nacional", "cota_fefc",
 }
+
+
+def test_cota_fefc_no_resumo_compara_fatia_do_fundo_com_fatia_das_candidaturas(banco):
+    """Um homem branco com R$ 7 mil e uma mulher parda com R$ 3 mil de FEFC:
+    ela é metade das candidaturas e leva 30% do fundo — as duas fatias viajam
+    juntas, porque a distância entre elas é o dado."""
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "1", "VR_RECEITA": "7000,00", "DS_FONTE_RECEITA": "FUNDO ESPECIAL"},
+        {"SQ_RECEITA": "2", "VR_RECEITA": "3000,00", "DS_FONTE_RECEITA": "FUNDO ESPECIAL",
+         "SQ_CANDIDATO": "160002", "NM_CANDIDATO": "BELTRANA", "SQ_PRESTADOR_CONTAS": "900002",
+         "DS_GENERO": "Feminino", "DS_COR_RACA": "Parda"},
+    ])
+    agregados.materializar(banco)
+    cota = resumo.gerar(banco)["cota_fefc"]
+    assert [c["SG_PARTIDO"] for c in cota] == ["XYZ"]
+    c = cota[0]
+    assert c["fefc"] == pytest.approx(10000.0)
+    assert c["candidatos_fefc"] == 2
+    assert c["pct_fefc_feminino"] == pytest.approx(30.0)
+    assert c["pct_candidaturas_femininas"] == pytest.approx(50.0)
+    assert c["pct_fefc_negros"] == pytest.approx(30.0)
+    assert c["pct_candidaturas_negras"] == pytest.approx(50.0)
 
 
 def test_resumo_tem_o_contrato_da_home(banco):

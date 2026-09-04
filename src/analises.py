@@ -23,6 +23,19 @@ SQL_CATEGORIAS_SEM_NOTA_ESPERADA = ", ".join(f"'{c}'" for c in CATEGORIAS_SEM_NO
 # nota — a régua antiga o marcava só porque o texto não contém "nota fiscal".
 DOCUMENTOS_FISCAIS = ("nota fiscal", "cupom fiscal")
 
+# Origem das doações que chegam via plataforma de arrecadação (vaquinha): a
+# plataforma aparece como DOADORA (repassa o que arrecadou) e como FORNECEDORA
+# (cobra a taxa) do mesmo candidato — é o modelo de negócio dela, não dinheiro
+# que "volta". Sem esta exclusão a red flag 4 era 22 das 25 maiores ocorrências
+# de plataforma (medido em 03/09/2026), e o caso real ficava soterrado.
+ORIGEM_FINANCIAMENTO_COLETIVO = "Recursos de Financiamento Coletivo"
+
+# Impulsionamento é pago a plataforma estrangeira (Meta, Google), que não emite
+# nota fiscal brasileira sequencial: o "número da nota" é digitado à mão pelo
+# declarante ('001', '12345'...) e repete entre candidatos sem dizer nada sobre
+# o fornecedor. Fora da red flag 13 — 16 dos 17 pares eram esse ruído.
+CATEGORIA_IMPULSIONAMENTO = "Despesa com Impulsionamento de Conteúdos"
+
 # A norma é medida por categoria: em impulsionamento, honorários advocatícios ou
 # militância quase ninguém tem nota (plataforma estrangeira e autônomo não
 # emitem NF brasileira), e marcar todo mundo não separa ninguém. Só é indício
@@ -41,6 +54,13 @@ def cond_documento_nao_fiscal(alias: str = "") -> str:
         f"({p}DS_TIPO_DOCUMENTO IS NULL OR {p}DS_TIPO_DOCUMENTO = '#NULO'"
         f" OR ({faltantes}))"
     )
+
+
+def cond_doacao_direta(alias: str = "") -> str:
+    """Doação que não é repasse de plataforma de arrecadação — a régua do
+    "dinheiro que volta" (red flag 4) só faz sentido sobre estas."""
+    p = f"{alias}." if alias else ""
+    return f"COALESCE({p}DS_ORIGEM_RECEITA, '') <> '{ORIGEM_FINANCIAMENTO_COLETIVO}'"
 
 
 def cond_sem_documento_fiscal(alias: str = "", com_norma: bool = True) -> str:
@@ -148,7 +168,9 @@ def executar_todas(con, numeros=None, uf=None):
       """)
 
     q("Doador que também é fornecedor",
-      "Mesmo CPF/CNPJ doando e recebendo do mesmo candidato: dinheiro que 'volta'.",
+      "Mesmo CPF/CNPJ doando e recebendo do mesmo candidato: dinheiro que 'volta'. "
+      "Repasse de plataforma de arrecadação (vaquinha) fica de fora: ela doa o que "
+      "arrecadou e cobra a taxa — é o modelo de negócio, não indício.",
       f"""
       SELECT r.NM_CANDIDATO, r.NM_DOADOR, r.NR_CPF_CNPJ_DOADOR AS cpf_cnpj,
              ROUND(SUM(r.VR),2) AS doou, COUNT(*) AS doacoes,
@@ -157,6 +179,7 @@ def executar_todas(con, numeros=None, uf=None):
                 AND d.NR_CPF_CNPJ_FORNECEDOR = r.NR_CPF_CNPJ_DOADOR) AS recebeu_como_fornecedor
       FROM v_receitas r
       WHERE {montar_filtro(numeros, uf, 'r')} AND r.NR_CPF_CNPJ_DOADOR NOT IN ('-1','#NULO','-4')
+        AND {cond_doacao_direta('r')}
         AND EXISTS (SELECT 1 FROM v_despesas d WHERE d.SQ_CANDIDATO = r.SQ_CANDIDATO
                     AND d.NR_CPF_CNPJ_FORNECEDOR = r.NR_CPF_CNPJ_DOADOR)
       GROUP BY ALL ORDER BY doou DESC
@@ -233,7 +256,9 @@ def executar_todas(con, numeros=None, uf=None):
     q("Mesmo número de nota em candidatos diferentes",
       "O mesmo fornecedor declarou o MESMO número de documento fiscal para mais "
       "de um candidato. Numeração de nota é sequencial por emitente: repetir "
-      "entre campanhas sugere nota reaproveitada — ou erro de digitação.",
+      "entre campanhas sugere nota reaproveitada — ou erro de digitação. "
+      "Impulsionamento fica de fora: a plataforma não emite nota sequencial e o "
+      "número é digitado à mão pelo declarante.",
       f"""
       SELECT NR_CPF_CNPJ_FORNECEDOR, ANY_VALUE(NM_FORNECEDOR) AS fornecedor,
              NR_DOCUMENTO, COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
@@ -243,6 +268,7 @@ def executar_todas(con, numeros=None, uf=None):
         AND NOT {cond_documento_nao_fiscal()}
         AND regexp_full_match(COALESCE(NR_DOCUMENTO, ''), '[0-9]{{3,}}')
         AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
+        AND COALESCE(DS_ORIGEM_DESPESA, '') <> '{CATEGORIA_IMPULSIONAMENTO}'
       GROUP BY 1, 3 HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1
       ORDER BY candidatos DESC, total DESC
       """)

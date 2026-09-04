@@ -42,6 +42,12 @@ def verificar(con) -> list[str]:
         if not ok:
             falhas.append(nome)
 
+    def avisar(nome: str, ok: bool, detalhe: str = ""):
+        """Fato que merece olho humano mas NÃO barra a publicação: erro do
+        declarante (não do pipeline) que o dado publicado carrega fielmente."""
+        status = "ok" if ok else "aviso"
+        print(f"[verificacao] {status:6} {nome}" + (f" — {detalhe}" if detalhe else ""))
+
     # --- tabelas essenciais não vazias
     for tabela, minimo in [("despesas_contratadas", 100), ("receitas", 100), ("candidatos", 1000)]:
         n = con.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
@@ -58,12 +64,32 @@ def verificar(con) -> list[str]:
         checar(f"{view}: valores numéricos válidos", invalidos == 0, f"{invalidos} não convertidos de {total}")
         checar(f"{view}: sem valores negativos", negativos == 0, f"{negativos} negativos")
 
-    # --- datas dentro do ciclo eleitoral
-    fora = con.execute("""
-        SELECT COUNT(*) FROM v_despesas
-        WHERE DT IS NOT NULL AND (DT < DATE '2025-01-01' OR DT > DATE '2027-03-01')
-    """).fetchone()[0]
-    checar("datas de despesa dentro do ciclo 2025–2027", fora == 0, f"{fora} fora do intervalo")
+    # --- datas dentro do ciclo eleitoral: fora dele é parse quebrado, não typo
+    for view, rotulo in (("v_despesas", "despesa"), ("v_receitas", "receita")):
+        fora = con.execute(f"""
+            SELECT COUNT(*) FROM {view}
+            WHERE DT IS NOT NULL AND (DT < DATE '2025-01-01' OR DT > DATE '2027-03-01')
+        """).fetchone()[0]
+        checar(f"datas de {rotulo} dentro do ciclo 2025–2027", fora == 0, f"{fora} fora do intervalo")
+
+    # --- datas posteriores à própria extração: erro do DECLARANTE (digitou
+    # 24/11 em vez de 24/08), não do pipeline — aviso, nunca falha. Barrar a
+    # publicação inteira por um typo alheio seria pior do que publicar a série
+    # com ele; mas sem o aviso o número passava em silêncio (150 despesas e 32
+    # receitas datadas depois da extração de 03/09/2026, uma em 24/11).
+    for view, hist in (("v_despesas", "hist_despesas_contratadas"),
+                       ("v_receitas", "hist_receitas")):
+        if not _existe(con, hist):
+            continue
+        extracao = con.execute(f"SELECT MAX(dt_ultima_extracao) FROM {hist}").fetchone()[0]
+        if extracao is None:
+            continue
+        futuras, valor = con.execute(
+            f"SELECT COUNT(*), COALESCE(ROUND(SUM(VR), 2), 0) FROM {view} WHERE DT > ?",
+            [extracao],
+        ).fetchone()
+        avisar(f"{view}: datas posteriores à extração ({extracao:%d/%m/%Y})",
+               futuras == 0, f"{futuras} linhas, R$ {valor:,.2f}")
 
     # --- histórico consistente com o retrato atual
     dt_max = con.execute("SELECT MAX(dt_ultima_extracao) FROM hist_despesas_contratadas").fetchone()[0]

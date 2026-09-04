@@ -45,6 +45,62 @@ beforeEach(() => {
   tabelasDisponiveis.add('fornecedores');
 });
 
+describe('ficha do fornecedor · chips do cabeçalho', () => {
+  it('CNAE vazio no TSE vira chip de "sem cadastro na Receita quando declarou"', async () => {
+    responder([
+      [
+        'COUNT(DISTINCT SQ_CANDIDATO), COUNT(DISTINCT SG_PARTIDO)',
+        { linhas: [['2026 COMUNICACAO SPE LTDA', 'Pessoa Jurídica', null, null, 1, 1, 1, 1650000, 1, 0]] },
+      ],
+      CANDIDATOS,
+    ]);
+    renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
+
+    expect(
+      await screen.findByText(/CNPJ sem cadastro na Receita quando a despesa foi declarada/),
+    ).toBeInTheDocument();
+  });
+
+  it('com CNAE preenchido, o chip não aparece', async () => {
+    montar([]);
+    await screen.findByText('GRÁFICA HORIZONTE LTDA');
+    expect(screen.queryByText(/sem cadastro na Receita quando/)).not.toBeInTheDocument();
+  });
+
+  it('plataforma de vaquinha: repasse não vira "também aparece como doador"', async () => {
+    responder([
+      PERFIL,
+      // total doado, candidatos, doado DIRETO (zero: tudo é repasse de financiamento coletivo)
+      ['ROUND(SUM(valor) FILTER (WHERE COALESCE(DS_ORIGEM_RECEITA', { linhas: [[9075564, 833, 0]] }],
+      [
+        'AS "Espécie"',
+        { linhas: [['900000000001', 'ANA FICTÍCIA DE SOUZA', 'PXX/PR', '20/08/2026', 'Recursos de Financiamento Coletivo', 'PIX', 1200, 0]] },
+      ],
+      CANDIDATOS,
+    ]);
+    renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
+
+    expect(await screen.findByText('Repassa doações arrecadadas')).toBeInTheDocument();
+    expect(screen.queryByText(/também aparece como doador/)).not.toBeInTheDocument();
+  });
+
+  it('doação direta continua marcando "também aparece como doador"', async () => {
+    responder([
+      PERFIL,
+      ['ROUND(SUM(valor) FILTER (WHERE COALESCE(DS_ORIGEM_RECEITA', { linhas: [[5000, 1, 5000]] }],
+      [
+        'AS "Espécie"',
+        { linhas: [['900000000001', 'ANA FICTÍCIA DE SOUZA', 'PXX/PR', '20/08/2026', 'Recursos de pessoas jurídicas', 'PIX', 5000, 1]] },
+      ],
+      CANDIDATOS,
+    ]);
+    renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
+
+    expect(await screen.findByText('Também aparece como doador')).toBeInTheDocument();
+    expect(screen.getByText(/também aparece como doador: R\$\s?5\.000/)).toBeInTheDocument();
+  });
+});
+
 describe('ficha do fornecedor · cadastro na Receita', () => {
   it('CNPJ com lápide de 404 mostra o aviso datado no lugar dos campos', async () => {
     montar([

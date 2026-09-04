@@ -22,7 +22,8 @@ import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/a
 import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import {
-  MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas, sqlNotasDoCandidato,
+  CONDICAO_DOACAO_DIRETA, MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas,
+  sqlNotasDoCandidato,
 } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
@@ -354,7 +355,11 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
       SELECT NR_CPF_CNPJ_DOADOR,
              COALESCE(NULLIF(NM_DOADOR_RFB, '#NULO'), NULLIF(NM_DOADOR, '#NULO'),
                       'Doador não identificado') AS nome,
-             ROUND(SUM(valor), 2) AS total
+             ROUND(SUM(valor), 2) AS total,
+             -- doação DIRETA: o repasse de financiamento coletivo não fecha o
+             -- anel do "dinheiro que volta" (a plataforma doa o que arrecadou
+             -- e cobra a taxa — está nos dois papéis por construção)
+             ROUND(SUM(valor) FILTER (WHERE ${CONDICAO_DOACAO_DIRETA}), 2) AS direto
       FROM receitas_atual WHERE ${w}
       GROUP BY 1, 2 ORDER BY total DESC LIMIT 12`),
       // as notas que cada linha de fornecedor esconde (mediana de 2 por
@@ -518,8 +523,13 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     if (id === '-1' || id === '#NULO') continue;
     const existente = conexoes.get(id);
     if (existente) {
-      existente.tipo = 'ambos';
-      existente.detalhe = `pagamentos ${brl.format(existente.valor)} · doações ${brl.format(Number(l[2] ?? 0))}`;
+      if (Number(l[3] ?? 0) > 0) {
+        existente.tipo = 'ambos';
+        existente.detalhe = `pagamentos ${brl.format(existente.valor)} · doações ${brl.format(Number(l[2] ?? 0))}`;
+      } else {
+        // plataforma de arrecadação: fornecedora (taxa) que repassa doações — sem anel
+        existente.detalhe = `taxa ${brl.format(existente.valor)} · repassa ${brl.format(Number(l[2] ?? 0))} arrecadados em financiamento coletivo`;
+      }
       existente.valor += Number(l[2] ?? 0);
     } else {
       conexoes.set(id, { id, rotulo: String(l[1]), valor: Number(l[2] ?? 0), tipo: 'doacao' });

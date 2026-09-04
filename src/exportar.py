@@ -34,6 +34,7 @@ EXPORTS = {
     "benchmark_precos.parquet": "benchmark_precos",
     "benchmark_indicadores.parquet": "benchmark_indicadores",
     "benchmark_categorias.parquet": "benchmark_categorias",
+    "cota_fefc.parquet": "cota_fefc",  # FEFC por partido × gênero × cor (ficha do partido)
     "norma_documento.parquet": "norma_documento",
     "indicadores.parquet": "indicadores",
     "rede.parquet": "rede",

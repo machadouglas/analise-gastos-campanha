@@ -49,6 +49,8 @@ TABELAS DISPONÍVEIS:
 
 12. fornecedores — cadastro RFB dos CNPJs já consultados: cnpj, razao_social, data_abertura, situacao, porte, opcao_mei, cnae_principal, municipio, uf, capital_social, socios, dt_consulta (data da última consulta; o cadastro é reconsultado num ciclo de ~30 dias), situacao_anterior e dt_situacao_anterior (preenchidos quando a situação cadastral mudou entre consultas — ex.: ATIVA que virou BAIXADA)
 
+13. cota_fefc — Fundo Especial (FEFC) que chegou a candidatos, por partido × cargo × gênero × cor/raça: SG_PARTIDO, DS_CARGO, genero ('MASCULINO'/'FEMININO'), cor_raca ('BRANCA'/'PRETA'/'PARDA'/'AMARELA'/'INDÍGENA'), candidatos_fefc (quantos receberam), fefc (R$), candidaturas (registros do TSE no mesmo recorte, inclusive quem não recebeu nada; NULL quando indisponível). Réguas legais: mínimo de 30% do FEFC para candidaturas femininas; distribuição proporcional às candidaturas negras (pretas + pardas). ATENÇÃO: mede só o que chegou a candidato — o partido também gasta FEFC diretamente, então é termômetro, não a conta oficial.
+
 ATALHOS PRONTOS (prefira estes; já excluem linhas-placeholder do sistema do TSE — contraparte '-1'/'#NULO' com valor zero, que não são declarações):
 - despesas_atual e receitas_atual — já filtradas para a extração mais recente e com a coluna "valor" (DOUBLE, já multiplicada por qt_linhas).
 - despesas_removidas e receitas_removidas — declarações que saíram do ar de verdade, já sem os dois falsos positivos: a retransmissão (o TSE renumera as notas, e o mesmo fato continua declarado) e a retificação (a declaração reaparece para o mesmo candidato e a mesma contraparte com um campo corrigido — valor, descrição ou data). Também têm a coluna "valor".
