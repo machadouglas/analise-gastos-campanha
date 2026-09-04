@@ -52,8 +52,11 @@ export function Metodologia() {
         </p>
         <p>
           Antes de publicar, a rotina passa por checagens automáticas de integridade (valores que
-          não convertem, datas impossíveis, totais que não fecham entre visões independentes dos
-          mesmos dados). Se qualquer checagem falha, <strong>nada é publicado</strong> naquele dia.
+          não convertem, datas fora do ciclo eleitoral, totais que não fecham entre visões
+          independentes dos mesmos dados). Se qualquer checagem falha, <strong>nada é publicado</strong>{' '}
+          naquele dia. Erro de quem declarou é outra coisa: uma despesa datada depois da própria
+          extração (24/11 digitado no lugar de 24/08) gera aviso no registro da rotina, mas é
+          publicada como veio — o dado é declaratório, e corrigi-lo não é nosso papel.
           Distinguimos remoção real de reprocessamento técnico e de correção. Quando o sistema do
           TSE renumera notas ao receber uma retransmissão, o fato (candidato, fornecedor,
           descrição, valor e data) continua declarado — não é remoção. E quando a declaração
@@ -104,6 +107,16 @@ export function Metodologia() {
           que está no teto como se fosse exceção.
         </p>
         <p>
+          Duas exclusões de ruído estrutural: <strong>"dinheiro que volta"</strong> (a mesma
+          contraparte doa e fornece ao mesmo candidato) ignora o repasse de{' '}
+          <strong>plataformas de financiamento coletivo</strong> — a vaquinha doa ao candidato o
+          que os apoiadores dele depositaram nela e cobra a taxa como fornecedora, então está nos
+          dois papéis por construção (sem a exclusão, 22 das 25 maiores ocorrências eram
+          plataforma); e <strong>"mesmo número de nota em candidatos diferentes"</strong> ignora
+          impulsionamento, porque a plataforma de anúncios não emite nota fiscal brasileira
+          sequencial e o número declarado é digitado à mão pelo próprio candidato.
+        </p>
+        <p>
           Detalhes de cálculo que evitam falsos positivos: <strong>preços</strong> são comparados
           por <em>nota</em> (soma dos itens de uma mesma nota), não por item, para que notas
           fatiadas não distorçam a régua; <strong>"sem documento fiscal"</strong> só marca gasto com
@@ -130,6 +143,30 @@ export function Metodologia() {
           fornecedor diz isso explicitamente, com a data da consulta: pode ser erro de digitação na
           declaração, empresa aberta há poucos dias e ainda não replicada, ou número que nunca
           existiu — e o radar reconsulta periodicamente.
+        </p>
+      </Bloco>
+
+      <Bloco titulo="Fundo Eleitoral: gênero e cor/raça">
+        <p>
+          A ficha de cada partido mostra que fatia do Fundo Especial de Financiamento de Campanha
+          (o "Fundo Eleitoral") chegou a <strong>candidatas</strong> e a{' '}
+          <strong>candidaturas negras</strong> (pretas e pardas, na classificação do TSE), ao lado
+          da fatia que elas representam entre as candidaturas do partido. Há duas réguas legais
+          por trás: a Constituição exige que ao menos <strong>30%</strong> do fundo seja aplicado
+          em campanhas de mulheres (EC 117/2022), e o TSE exige distribuição{' '}
+          <strong>proporcional</strong> às candidaturas negras (Res. 23.607/2019, art. 17).
+        </p>
+        <p>
+          <strong>O que medimos — e o que não.</strong> Somamos as receitas de fonte "Fundo
+          Especial" declaradas pelos próprios candidatos, por gênero e cor autodeclarados no
+          registro de candidatura. A conta legal é sobre o <em>total</em> aplicado pelo partido,
+          que inclui o que o diretório gasta diretamente sem repassar a candidato, e a prestação
+          de contas segue aberta até depois da eleição. Por isso o número aqui é um termômetro do
+          que já chegou a candidato, não a apuração oficial — um partido abaixo de 30% neste
+          recorte pode fechar a conta no total, e a leitura correta é "até agora, no que chegou às
+          candidatas". A fatia das candidaturas usa o registro do TSE (todas as candidaturas, com
+          ou sem fundo); quando o registro não traz gênero e cor, a ficha diz que a base é só quem
+          já recebeu fundo.
         </p>
       </Bloco>
 

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from src import db, historico, privacidade
+from src import agregados, db, historico, privacidade
 from src.carga import filtro_placeholder
 
 
@@ -127,6 +127,53 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
         })
     saida.sort(key=lambda c: (-len(c["sinais"]), -c["total_contratado"]))
     return saida[:limite]
+
+
+def _cota_fefc(con) -> list[dict]:
+    """Por partido: fatia do Fundo Especial que chegou a candidatas e a
+    candidaturas negras, ao lado da fatia que elas representam entre as
+    candidaturas — a distância entre as duas é o dado. Denominador das
+    candidaturas: o registro (consulta_cand) quando o banco o traz com gênero e
+    cor; senão, quem recebeu FEFC. Só partidos com FEFC declarado."""
+    if not _existe(con, "cota_fefc"):
+        return []
+    return _registros(con, sql_cota_por_partido("1=1"))
+
+
+def sql_cota_por_partido(where: str) -> str:
+    """Uma linha por partido com FEFC declarado. A fatia das candidaturas vem
+    do registro (SUM(candidaturas), só das linhas que o registro tem) quando o
+    partido tem QUALQUER registro com gênero/cor; senão, de quem recebeu — os
+    dois denominadores nunca se misturam. A ficha do partido roda o MESMO SQL
+    (site/src/pages/partido.tsx espelha as colunas na mesma ordem)."""
+    negros = ", ".join(f"'{c}'" for c in agregados.COR_RACA_NEGRA)
+    return f"""
+        WITH p AS (
+            SELECT SG_PARTIDO,
+                   SUM(fefc) AS fefc,
+                   SUM(candidatos_fefc) AS cf,
+                   COALESCE(SUM(fefc) FILTER (WHERE genero = 'FEMININO'), 0) AS fefc_f,
+                   COALESCE(SUM(fefc) FILTER (WHERE cor_raca IN ({negros})), 0) AS fefc_n,
+                   SUM(candidaturas) AS reg,
+                   COALESCE(SUM(candidaturas) FILTER (WHERE genero = 'FEMININO'), 0) AS reg_f,
+                   COALESCE(SUM(candidaturas) FILTER (WHERE cor_raca IN ({negros})), 0) AS reg_n,
+                   COALESCE(SUM(candidatos_fefc) FILTER (WHERE genero = 'FEMININO'), 0) AS cf_f,
+                   COALESCE(SUM(candidatos_fefc) FILTER (WHERE cor_raca IN ({negros})), 0) AS cf_n
+            FROM cota_fefc WHERE {where}
+            GROUP BY 1 HAVING SUM(fefc) > 0)
+        SELECT SG_PARTIDO,
+               ROUND(fefc, 2) AS fefc,
+               cf AS candidatos_fefc,
+               COALESCE(reg, cf) AS candidaturas,
+               reg IS NOT NULL AS base_registro,
+               ROUND(100.0 * fefc_f / fefc, 1) AS pct_fefc_feminino,
+               ROUND(100.0 * (CASE WHEN reg IS NOT NULL THEN reg_f ELSE cf_f END)
+                     / NULLIF(COALESCE(reg, cf), 0), 1) AS pct_candidaturas_femininas,
+               ROUND(100.0 * fefc_n / fefc, 1) AS pct_fefc_negros,
+               ROUND(100.0 * (CASE WHEN reg IS NOT NULL THEN reg_n ELSE cf_n END)
+                     / NULLIF(COALESCE(reg, cf), 0), 1) AS pct_candidaturas_negras
+        FROM p ORDER BY fefc DESC
+    """
 
 
 def _serie_nacional(con) -> list[dict]:
@@ -263,4 +310,5 @@ def gerar(con) -> dict:
         "top_candidatos": top_candidatos,
         "fora_da_curva": _fora_da_curva(con),
         "serie_nacional": _serie_nacional(con),
+        "cota_fefc": _cota_fefc(con),
     }

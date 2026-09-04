@@ -79,6 +79,58 @@ def test_benchmark_exige_minimo_de_notas_e_ordena_quantis(banco):
         assert linha["p25"] <= linha["mediana"] <= linha["p75"] <= linha["p95"] <= linha["maximo"]
 
 
+def _candidata(sq, nome):
+    return {"SQ_CANDIDATO": sq, "NM_CANDIDATO": nome, "SQ_PRESTADOR_CONTAS": f"9{sq}",
+            "DS_GENERO": "Feminino", "DS_COR_RACA": "Parda"}
+
+
+def test_cota_fefc_separa_o_fundo_especial_por_genero_e_cor(banco):
+    """A régua legal é do FEFC: Fundo Partidário e outros recursos não entram.
+    Prestação de contas vem Capitalizada ('Feminino') — a tabela normaliza."""
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "1", "VR_RECEITA": "7000,00", "DS_FONTE_RECEITA": "FUNDO ESPECIAL"},
+        {"SQ_RECEITA": "2", "VR_RECEITA": "3000,00", "DS_FONTE_RECEITA": "FUNDO ESPECIAL",
+         **_candidata("160002", "BELTRANA")},
+        {"SQ_RECEITA": "3", "VR_RECEITA": "9000,00", "DS_FONTE_RECEITA": "FUNDO PARTIDARIO",
+         **_candidata("160002", "BELTRANA")},
+        {"SQ_RECEITA": "4", "VR_RECEITA": "500,00", **_candidata("160002", "BELTRANA")},
+    ])
+    agregados.materializar(banco)
+    linhas = banco.execute("""
+        SELECT genero, cor_raca, candidatos_fefc, fefc, candidaturas
+        FROM cota_fefc ORDER BY genero
+    """).fetchall()
+    # o registro sintético não traz gênero/cor: candidaturas fica NULL (nunca 0)
+    assert linhas == [("FEMININO", "PARDA", 1, pytest.approx(3000.0), None),
+                      ("MASCULINO", "BRANCA", 1, pytest.approx(7000.0), None)]
+
+
+def test_cota_fefc_usa_o_registro_de_candidaturas_como_denominador(banco):
+    """Quando o registro traz gênero e cor (em CAIXA ALTA, como no consulta_cand —
+    inclusive o cargo, 'DEPUTADO ESTADUAL'), o grupo com candidatura e sem um
+    centavo de fundo TEM de aparecer — é o que a régua de proporcionalidade
+    precisa ver — e a grafia publicada do cargo é a da prestação."""
+    banco.execute("ALTER TABLE candidatos ADD COLUMN DS_GENERO VARCHAR")
+    banco.execute("ALTER TABLE candidatos ADD COLUMN DS_COR_RACA VARCHAR")
+    for sq, nome, genero, cor in (("160001", "FULANO", "MASCULINO", "BRANCA"),
+                                  ("160002", "BELTRANA", "FEMININO", "PARDA"),
+                                  ("160003", "CICRANA", "FEMININO", "PRETA")):
+        banco.execute(
+            "INSERT INTO candidatos VALUES (?, '1', ?, ?, 'DEPUTADO ESTADUAL', 'XYZ', 'XX', "
+            "'#NE', ?, ?)", [sq, nome, nome, genero, cor])
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "1", "VR_RECEITA": "7000,00", "DS_FONTE_RECEITA": "FUNDO ESPECIAL"},
+    ])
+    agregados.materializar(banco)
+    linhas = banco.execute("""
+        SELECT DS_CARGO, genero, cor_raca, candidatos_fefc, fefc, candidaturas
+        FROM cota_fefc ORDER BY genero, cor_raca
+    """).fetchall()
+    assert linhas == [("Deputado Estadual", "FEMININO", "PARDA", 0, 0.0, 1),
+                      ("Deputado Estadual", "FEMININO", "PRETA", 0, 0.0, 1),
+                      ("Deputado Estadual", "MASCULINO", "BRANCA", 1, pytest.approx(7000.0), 1)]
+
+
 def test_indicadores_concentracao_sem_nota_e_pessoa_fisica(banco):
     extrair_dia(banco, "20/08/2026", despesas=[
         {"SQ_DESPESA": "1", "NR_CPF_CNPJ_FORNECEDOR": "11222333000144",

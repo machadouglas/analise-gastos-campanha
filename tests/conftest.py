@@ -33,7 +33,7 @@ COLS_RECEITAS = [
     "NM_CANDIDATO", "NR_CANDIDATO", "SG_PARTIDO", "DS_CARGO", "SG_UF",
     "SQ_RECEITA", "NM_DOADOR", "NM_DOADOR_RFB", "NR_CPF_CNPJ_DOADOR",
     "DS_FONTE_RECEITA", "DS_ORIGEM_RECEITA", "DS_ESPECIE_RECEITA",
-    "VR_RECEITA", "DT_RECEITA",
+    "VR_RECEITA", "DT_RECEITA", "DS_GENERO", "DS_COR_RACA",
 ]
 
 DESPESA_PADRAO = {
@@ -63,6 +63,9 @@ RECEITA_PADRAO = {
     "DS_ORIGEM_RECEITA": "Recursos de pessoas jurídicas",
     "DS_ESPECIE_RECEITA": "Transferência eletrônica",
     "VR_RECEITA": "1000,00", "DT_RECEITA": "10/08/2026",
+    # a prestação de contas traz gênero e cor do candidato em Capitalizado
+    # (o registro de candidaturas, em CAIXA ALTA) — cota_fefc normaliza
+    "DS_GENERO": "Masculino", "DS_COR_RACA": "Branca",
 }
 
 

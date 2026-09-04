@@ -8,10 +8,30 @@ import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import { escSQL } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
+/** Mínimo constitucional do FEFC para candidaturas femininas (EC 117/2022). */
+export const PISO_FEFC_FEMININO = 30;
+/** Cor/raça que a regra de proporcionalidade do TSE agrupa como candidaturas
+ *  negras — espelha COR_RACA_NEGRA em src/agregados.py. */
+export const COR_RACA_NEGRA = ['PRETA', 'PARDA'] as const;
+
+/** Fatias do Fundo Especial que chegaram ao partido, por gênero e cor/raça
+ *  (tabela cota_fefc). `baseRegistro` diz se a fatia das candidaturas vem do
+ *  registro do TSE (todas as candidaturas) ou só de quem já recebeu fundo. */
+interface CotaPartido {
+  fefc: number;
+  pctFefcFeminino: number;
+  pctCandidaturasFemininas: number;
+  pctFefcNegros: number;
+  pctCandidaturasNegras: number;
+  candidaturas: number;
+  baseRegistro: boolean;
+}
+
 interface DadosPartido {
   nome: string;
   kpis: { candidatos: number; contratado: number; receitas: number; fornecedores: number };
   composicao: { publico: number; proprios: number; total: number };
+  cota: CotaPartido | null;
   serieRotulos: string[];
   series: Serie[];
   origens: ItemBarra[];
@@ -29,7 +49,8 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
 
   // as oito consultas são independentes; juntas, o pipeline de leitura dos
   // parquet não fica serializado atrás de cada round-trip
-  const [kpis, rec, comp, serie, origens, doadores, compartilhados, candidatos] = await Promise.all([
+  const negros = COR_RACA_NEGRA.map((c) => `'${c}'`).join(', ');
+  const [kpis, rec, comp, serie, origens, doadores, compartilhados, candidatos, cota] = await Promise.all([
     // candidatos = quem movimentou QUALQUER coisa (despesa OU receita): partido
     // que só arrecadou também tem ficha. Sentinelas '-1'/'#NULO' fora do KPI de
     // fornecedores — "sem contraparte" não é um fornecedor a mais.
@@ -78,9 +99,50 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
              ROUND(SUM(d.valor), 2) AS contratado, ANY_VALUE(r.receitas)
       FROM despesas_atual d LEFT JOIN r USING (SQ_CANDIDATO)
       WHERE d.${w} GROUP BY 1 ORDER BY contratado DESC LIMIT 50`),
+    // FEFC por gênero e cor — o MESMO SQL de sql_cota_por_partido em
+    // src/resumo.py: a fatia das candidaturas vem do registro quando o partido
+    // tem qualquer registro com gênero/cor; senão, de quem já recebeu fundo.
+    // Os dois denominadores nunca se misturam.
+    tabelasDisponiveis.has('cota_fefc')
+      ? executarSQL(`
+        WITH p AS (
+          SELECT SUM(fefc) AS fefc,
+                 SUM(candidatos_fefc) AS cf,
+                 COALESCE(SUM(fefc) FILTER (WHERE genero = 'FEMININO'), 0) AS fefc_f,
+                 COALESCE(SUM(fefc) FILTER (WHERE cor_raca IN (${negros})), 0) AS fefc_n,
+                 SUM(candidaturas) AS reg,
+                 COALESCE(SUM(candidaturas) FILTER (WHERE genero = 'FEMININO'), 0) AS reg_f,
+                 COALESCE(SUM(candidaturas) FILTER (WHERE cor_raca IN (${negros})), 0) AS reg_n,
+                 COALESCE(SUM(candidatos_fefc) FILTER (WHERE genero = 'FEMININO'), 0) AS cf_f,
+                 COALESCE(SUM(candidatos_fefc) FILTER (WHERE cor_raca IN (${negros})), 0) AS cf_n
+          FROM cota_fefc WHERE ${w})
+        SELECT ROUND(fefc, 2),
+               ROUND(100.0 * fefc_f / NULLIF(fefc, 0), 1),
+               ROUND(100.0 * (CASE WHEN reg IS NOT NULL THEN reg_f ELSE cf_f END)
+                     / NULLIF(COALESCE(reg, cf), 0), 1),
+               ROUND(100.0 * fefc_n / NULLIF(fefc, 0), 1),
+               ROUND(100.0 * (CASE WHEN reg IS NOT NULL THEN reg_n ELSE cf_n END)
+                     / NULLIF(COALESCE(reg, cf), 0), 1),
+               COALESCE(reg, cf), reg IS NOT NULL
+        FROM p`)
+      : Promise.resolve({ linhas: [] as unknown[][] }),
   ]);
   const [nCand, contratado, nForn] = kpis.linhas[0] ?? [0, 0, 0];
   if (!Number(nCand)) return null;
+
+  const c = cota.linhas[0];
+  const cotaPartido: CotaPartido | null =
+    c && Number(c[0] ?? 0) > 0
+      ? {
+          fefc: Number(c[0]),
+          pctFefcFeminino: Number(c[1] ?? 0),
+          pctCandidaturasFemininas: Number(c[2] ?? 0),
+          pctFefcNegros: Number(c[3] ?? 0),
+          pctCandidaturasNegras: Number(c[4] ?? 0),
+          candidaturas: Number(c[5] ?? 0),
+          baseRegistro: Boolean(c[6]),
+        }
+      : null;
 
   return {
     nome: sigla,
@@ -95,6 +157,7 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
       proprios: Number(comp.linhas[0]?.[1] ?? 0),
       total: Number(comp.linhas[0]?.[2] ?? 0),
     },
+    cota: cotaPartido,
     serieRotulos: serie.linhas.map((l) => String(l[0])),
     series: [
       { nome: 'Contratado', valores: serie.linhas.map((l) => Number(l[1] ?? 0)) },
@@ -112,6 +175,61 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
       receitas: l[5] == null ? null : Number(l[5]),
     })),
   };
+}
+
+const pct = (v: number) => `${num.format(v)}%`;
+
+/** Uma régua: barra navy = fatia do fundo; traço âmbar = fatia das candidaturas;
+ *  traço tracejado = piso legal, quando há. A leitura é a distância entre eles. */
+function ReguaCota({
+  titulo, pctFundo, pctCandidaturas, piso, leitura,
+}: {
+  titulo: string; pctFundo: number; pctCandidaturas: number; piso?: number; leitura: string;
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="text-sm font-semibold text-foreground">{titulo}</p>
+        <p className="text-sm text-muted-foreground">
+          <span className="font-semibold text-[#264E9B]">{pct(pctFundo)} do fundo</span>
+          {' · '}
+          <span className="text-[#B45309]">{pct(pctCandidaturas)} das candidaturas</span>
+          {piso != null && <> · piso legal {pct(piso)}</>}
+        </p>
+      </div>
+      <div className="relative mt-2 h-3 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
+        <div className="h-full rounded-full bg-[#264E9B]" style={{ width: `${Math.min(pctFundo, 100)}%` }} />
+        <div
+          className="absolute inset-y-0 w-0.5 bg-[#B45309]"
+          style={{ left: `calc(${Math.min(pctCandidaturas, 100)}% - 1px)` }}
+          title={`${pct(pctCandidaturas)} das candidaturas`}
+        />
+        {piso != null && (
+          <div
+            className="absolute inset-y-0 w-0.5 border-l-2 border-dashed border-[#10244A]"
+            style={{ left: `calc(${piso}% - 1px)` }}
+            title={`piso legal: ${pct(piso)}`}
+          />
+        )}
+      </div>
+      <p className="mt-1.5 text-sm text-muted-foreground">{leitura}</p>
+    </div>
+  );
+}
+
+function leituraGenero(c: CotaPartido): string {
+  const dist = c.pctFefcFeminino - PISO_FEFC_FEMININO;
+  if (dist < 0)
+    return `${pct(-dist)} abaixo do piso de ${pct(PISO_FEFC_FEMININO)} no que já chegou às candidatas. O piso é sobre o total aplicado pelo partido, que também gasta fundo diretamente — e a prestação está aberta.`;
+  return `Acima do piso de ${pct(PISO_FEFC_FEMININO)} no que já chegou às candidatas.`;
+}
+
+function leituraRaca(c: CotaPartido): string {
+  const dist = c.pctFefcNegros - c.pctCandidaturasNegras;
+  const base = c.baseRegistro ? 'das candidaturas registradas' : 'de quem já recebeu fundo';
+  if (dist < -0.05)
+    return `Candidaturas negras são ${pct(c.pctCandidaturasNegras)} ${base} e receberam ${pct(c.pctFefcNegros)} do fundo — ${pct(-dist)} a menos do que a proporção delas.`;
+  return `Candidaturas negras são ${pct(c.pctCandidaturasNegras)} ${base} e receberam ${pct(c.pctFefcNegros)} do fundo — na proporção ou acima dela.`;
 }
 
 export function Partido() {
@@ -188,6 +306,36 @@ export function Partido() {
                   cor: '#6e6a60',
                 },
               ]}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {dados.cota && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Fundo Eleitoral: gênero e cor/raça</CardTitle>
+            <CardDescription>
+              Do Fundo Especial que já chegou aos candidatos da sigla ({brl.format(dados.cota.fefc)}),
+              quanto foi para candidatas e para candidaturas negras — ao lado da fatia que elas são
+              das candidaturas. A lei exige ao menos 30% do fundo para mulheres e distribuição
+              proporcional para candidaturas negras (pretas e pardas). Isto mede só o que chegou a
+              candidato: termômetro, não a conta oficial.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <ReguaCota
+              titulo="Candidaturas femininas"
+              pctFundo={dados.cota.pctFefcFeminino}
+              pctCandidaturas={dados.cota.pctCandidaturasFemininas}
+              piso={PISO_FEFC_FEMININO}
+              leitura={leituraGenero(dados.cota)}
+            />
+            <ReguaCota
+              titulo="Candidaturas negras (pretas e pardas)"
+              pctFundo={dados.cota.pctFefcNegros}
+              pctCandidaturas={dados.cota.pctCandidaturasNegras}
+              leitura={leituraRaca(dados.cota)}
             />
           </CardContent>
         </Card>

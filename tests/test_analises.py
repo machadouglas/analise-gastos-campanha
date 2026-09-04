@@ -46,6 +46,46 @@ def test_doador_fornecedor_soma_doacoes_de_mesmo_valor(banco):
     assert df.iloc[0]["recebeu_como_fornecedor"] == pytest.approx(500.0)
 
 
+def test_doador_fornecedor_ignora_plataforma_de_financiamento_coletivo(banco):
+    """A vaquinha repassa o que arrecadou (doadora) e cobra a taxa (fornecedora)
+    do mesmo candidato: é o modelo de negócio dela, não dinheiro que volta. Sem
+    esta exclusão, 22 das 25 maiores ocorrências da flag eram plataforma."""
+    inserir_receita(banco, SQ_RECEITA="1", NR_CPF_CNPJ_DOADOR="39000000000100",
+                    NM_DOADOR="VAQUINHA ONLINE", VR_RECEITA="5000,00",
+                    DS_ORIGEM_RECEITA=analises.ORIGEM_FINANCIAMENTO_COLETIVO)
+    inserir_despesa(banco, NR_CPF_CNPJ_FORNECEDOR="39000000000100",
+                    NM_FORNECEDOR="VAQUINHA ONLINE", VR_DESPESA_CONTRATADA="120,00",
+                    DS_ORIGEM_DESPESA="Taxa de Administração de Financiamento Coletivo")
+    df = _resultado(analises.executar_todas(banco), "Doador que também é fornecedor")
+    assert df.empty
+    # a mesma contraparte fazendo uma doação DIRETA continua aparecendo — e só ela conta
+    inserir_receita(banco, SQ_RECEITA="2", NR_CPF_CNPJ_DOADOR="39000000000100",
+                    NM_DOADOR="VAQUINHA ONLINE", VR_RECEITA="300,00")
+    df = _resultado(analises.executar_todas(banco), "Doador que também é fornecedor")
+    assert len(df) == 1
+    assert df.iloc[0]["doou"] == pytest.approx(300.0)
+
+
+def test_mesmo_numero_de_nota_ignora_impulsionamento(banco):
+    """Plataforma de anúncios não emite nota sequencial: o número é digitado à mão
+    ('12345') e repete entre candidatos sem dizer nada — 16 dos 17 pares da flag
+    eram isso. A mesma repetição numa gráfica continua sendo indício."""
+    for sq, nome in (("160001", "FULANO"), ("160002", "BELTRANO")):
+        inserir_despesa(banco, SQ_CANDIDATO=sq, NM_CANDIDATO=nome, SQ_DESPESA=f"i{sq}",
+                        NR_CPF_CNPJ_FORNECEDOR="13000000000100",
+                        NM_FORNECEDOR="PLATAFORMA DE ANUNCIOS",
+                        DS_ORIGEM_DESPESA=analises.CATEGORIA_IMPULSIONAMENTO,
+                        NR_DOCUMENTO="12345")
+    df = _resultado(analises.executar_todas(banco), "Mesmo número de nota")
+    assert df.empty
+    for sq, nome in (("160001", "FULANO"), ("160002", "BELTRANO")):
+        inserir_despesa(banco, SQ_CANDIDATO=sq, NM_CANDIDATO=nome, SQ_DESPESA=f"g{sq}",
+                        NR_DOCUMENTO="26891")
+    df = _resultado(analises.executar_todas(banco), "Mesmo número de nota")
+    assert list(df["NR_DOCUMENTO"]) == ["26891"]
+    assert df.iloc[0]["candidatos"] == 2
+
+
 def test_doador_que_nao_e_fornecedor_fica_de_fora(banco):
     inserir_receita(banco, NR_CPF_CNPJ_DOADOR="11111111000111")
     inserir_despesa(banco, NR_CPF_CNPJ_FORNECEDOR="22222222000122")

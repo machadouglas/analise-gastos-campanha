@@ -26,7 +26,29 @@ JOIN rede o
  AND o.contraparte_id = d.contraparte_id
  AND o.tipo = 'doacao'
 WHERE d.tipo = 'despesa' AND d.contraparte_id NOT IN ('-1', '#NULO')
+  -- plataforma de arrecadação (vaquinha) doa o que arrecadou e cobra a taxa
+  -- do mesmo candidato: é o modelo de negócio dela, não dinheiro que volta
+  AND d.contraparte_id NOT IN (
+    SELECT NR_CPF_CNPJ_DOADOR FROM receitas_atual
+    WHERE DS_ORIGEM_RECEITA = 'Recursos de Financiamento Coletivo')
 ORDER BY recebeu_como_fornecedor DESC
+LIMIT 50`;
+
+const SQL_COTA_FEFC = `-- fatia do Fundo Eleitoral que chegou a candidatas e a candidaturas negras,
+-- ao lado da fatia que elas são das candidaturas (piso legal: 30% para mulheres;
+-- proporcional para negros). Mede só o que chegou a candidato — termômetro, não a conta oficial.
+SELECT SG_PARTIDO,
+       ROUND(SUM(fefc), 2) AS fefc_recebido,
+       ROUND(100.0 * SUM(fefc) FILTER (WHERE genero = 'FEMININO') / SUM(fefc), 1) AS pct_fefc_mulheres,
+       ROUND(100.0 * SUM(COALESCE(candidaturas, candidatos_fefc)) FILTER (WHERE genero = 'FEMININO')
+             / SUM(COALESCE(candidaturas, candidatos_fefc)), 1) AS pct_candidaturas_mulheres,
+       ROUND(100.0 * SUM(fefc) FILTER (WHERE cor_raca IN ('PRETA', 'PARDA')) / SUM(fefc), 1) AS pct_fefc_negros,
+       ROUND(100.0 * SUM(COALESCE(candidaturas, candidatos_fefc)) FILTER (WHERE cor_raca IN ('PRETA', 'PARDA'))
+             / SUM(COALESCE(candidaturas, candidatos_fefc)), 1) AS pct_candidaturas_negros
+FROM cota_fefc
+GROUP BY 1
+HAVING SUM(fefc) > 0
+ORDER BY pct_fefc_mulheres
 LIMIT 50`;
 
 const SQL_FORA_DA_CURVA_CATEGORIA = `-- quem gasta numa categoria muito acima do p95 do grupo (mesmo cargo e UF)
@@ -241,6 +263,10 @@ export const GRUPOS_PERGUNTAS: { titulo: string; perguntas: PerguntaPronta[] }[]
   {
     titulo: 'Perguntas prontas',
     perguntas: [
+      {
+        pergunta: 'Cada partido já destinou ao menos 30% do Fundo Eleitoral a candidatas? E a candidaturas negras, na proporção delas?',
+        sql: SQL_COTA_FEFC,
+      },
       {
         pergunta: 'Quanto cada candidato a governador do meu estado já gastou, e com o quê?',
         sql: `-- troque 'SP' pela sua UF

@@ -11,6 +11,7 @@ import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } fro
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
 import {
+  CONDICAO_DOACAO_DIRETA,
   CONDICAO_DOCUMENTO_NUMERADO,
   CONDICAO_NOTA_SEM_NUMERO,
   CORTE_RECEM_ABERTO,
@@ -59,6 +60,9 @@ interface DadosFornecedor {
   conexoesSecundarias: NoSecundario[];
   candidatos: { sq: string; nome: string; cargo: string; partido: string; uf: string; itens: number; total: number }[];
   doacoes: unknown[][];
+  /** quanto das doações é DIRETO (fora o repasse de financiamento coletivo) —
+   *  zero com doações na tabela = plataforma de arrecadação, não "dinheiro que volta" */
+  totalDoadoDireto: number;
   removidas: unknown[][];
   corrigidas: Corrigida[];
   corrigidasReceitas: Corrigida[];
@@ -124,8 +128,12 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
                STRFTIME(dt_consulta, '%d/%m/%Y')
         FROM fornecedores WHERE cnpj = '${esc(id)}'`)
         : Promise.resolve({ linhas: [] as unknown[][] }),
+      // doação DIRETA à parte: a plataforma de arrecadação doa o que arrecadou e
+      // cobra a taxa do mesmo candidato — aparece nos dois papéis por construção,
+      // e só a doação direta conta como "dinheiro que volta" (red flag 4)
       executarSQL(`
-      SELECT ROUND(SUM(valor), 2), COUNT(DISTINCT SQ_CANDIDATO)
+      SELECT ROUND(SUM(valor), 2), COUNT(DISTINCT SQ_CANDIDATO),
+             ROUND(SUM(valor) FILTER (WHERE ${CONDICAO_DOACAO_DIRETA}), 2)
       FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'`),
       tabelasDisponiveis.has('despesas_removidas')
         ? executarSQL(`
@@ -170,7 +178,8 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
         SELECT SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
                SG_PARTIDO || '/' || SG_UF AS "Partido/UF", DT_RECEITA AS "Data",
                DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
-               ROUND(valor, 2) AS "Valor"
+               ROUND(valor, 2) AS "Valor",
+               CASE WHEN ${CONDICAO_DOACAO_DIRETA} THEN 1 ELSE 0 END AS "_direta"
         FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'
         ORDER BY valor DESC LIMIT 30`).then((x) => x.linhas),
       tabelasDisponiveis.has('despesas_removidas')
@@ -213,7 +222,9 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       }
     : null;
 
-  const totalDoado = Number(doacaoAgg.linhas[0]?.[0] ?? 0);
+  // [0] é o total doado (com repasses) — a tabela lista tudo; o chip e o anel do
+  // grafo olham só o DIRETO
+  const totalDoadoDireto = Number(doacaoAgg.linhas[0]?.[2] ?? 0);
   // MESMA régua do resto do site (view despesas_removidas): retransmissões
   // renumeradas pelo TSE, retificações de um campo e linhas-placeholder não
   // contam como remoção — a consulta crua em `despesas` contava as três e
@@ -226,8 +237,12 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
   const nPartidos = Number(l[5] ?? 0);
   if (nCandidatos > 1)
     flags.push(`recebe de ${num.format(nCandidatos)} candidatos de ${num.format(nPartidos)} partido${nPartidos > 1 ? 's' : ''}`);
-  if (totalDoado > 0) flags.push(`também aparece como doador: ${brl.format(totalDoado)}`);
+  if (totalDoadoDireto > 0) flags.push(`também aparece como doador: ${brl.format(totalDoadoDireto)}`);
   if (/f.sica/i.test(String(l[1] ?? ''))) flags.push('pessoa física prestando serviços de campanha');
+  // CNAE vazio no TSE (DS_CNAE_FORNECEDOR = '#NULO') NÃO vira chip: testado em
+  // 04/09/2026 contra o cadastro completo da Receita, 7,7% desses CNPJs eram
+  // recém-abertos contra 6,6% da base — é atraso do TSE em preencher o cadastro
+  // da declaração recente, não idade da empresa. Sinal de idade é o data_abertura.
   if (semNota > 0) flags.push(`${brl.format(semNota)} sem documento fiscal`);
   const notasSemNumero = Number(l[10] ?? 0);
   if (notasSemNumero > 0)
@@ -269,8 +284,11 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       tipo: 'despesa',
     });
   }
+  // só a doação DIRETA entra no grafo: o repasse de financiamento coletivo é o
+  // candidato recebendo dos próprios apoiadores via plataforma, não dela
   const doadoPorSq = new Map<string, number>();
   for (const d of doacoes) {
+    if (Number(d[7] ?? 1) !== 1) continue;
     const sq = String(d[0]);
     doadoPorSq.set(sq, (doadoPorSq.get(sq) ?? 0) + Number(d[6] ?? 0));
   }
@@ -347,6 +365,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       total: Number(c[6] ?? 0),
     })),
     doacoes,
+    totalDoadoDireto,
     removidas,
     corrigidas: montarCorrigidas(corrigidasDesp.linhas),
     corrigidasReceitas: montarCorrigidas(corrigidasRec.linhas),
@@ -589,7 +608,12 @@ export function Fornecedor() {
       </SecaoRecolhivel>
 
       {dados.doacoes.length > 0 && (
-        <Secao titulo="Também aparece como doador" descricao="Doações declaradas com este mesmo CNPJ/CPF. Fornecedor que também doa para campanhas é o clássico 'dinheiro que volta' — vale conferir se doa para quem o contrata.">
+        <Secao
+          titulo={dados.totalDoadoDireto > 0 ? 'Também aparece como doador' : 'Repassa doações arrecadadas'}
+          descricao={dados.totalDoadoDireto > 0
+            ? "Doações declaradas com este mesmo CNPJ/CPF. Fornecedor que também doa para campanhas é o clássico 'dinheiro que volta' — vale conferir se doa para quem o contrata."
+            : 'Este CNPJ é plataforma de financiamento coletivo: as doações abaixo são o repasse do que os apoiadores de cada candidato depositaram nela, e a taxa de administração é o que ela recebe como fornecedora. Não é "dinheiro que volta" — é o modelo de negócio.'}
+        >
           <Tabela colunas={[{ titulo: 'Candidato' }, { titulo: 'Partido/UF' }, { titulo: 'Data' }, { titulo: 'Origem' }, { titulo: 'Espécie' }, { titulo: 'Valor', numerica: true }]}>
             {dados.doacoes.map((l, i) => (
               <tr key={i} className="hover:bg-muted/40">

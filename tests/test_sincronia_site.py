@@ -81,6 +81,51 @@ def test_reguas_por_nota_iguais_no_front():
     assert "COUNT(DISTINCT SQ_DESPESA) >= ${MINIMO_NOTAS_VALOR_REPETIDO}" in CONSULTAS_TS
 
 
+def test_exclusoes_de_plataforma_iguais_no_front():
+    """Duas exclusões de ruído estrutural, cada uma com constante espelhada:
+    - red flag 4 ("dinheiro que volta") ignora o repasse de plataforma de
+      arrecadação — ela doa o que arrecadou e cobra a taxa do mesmo candidato;
+    - red flag 13 (mesmo nº de nota) ignora impulsionamento — a plataforma não
+      emite nota sequencial e o número é digitado à mão.
+    Se o Python mudar o texto da origem/categoria e o site não, o anel vermelho
+    do grafo e o chip do fornecedor voltam a marcar plataforma."""
+    fonte_analises = (RAIZ / "src" / "analises.py").read_text(encoding="utf-8")
+    exemplos_ts = (RAIZ / "site" / "src" / "lib" / "exemplos.ts").read_text(encoding="utf-8")
+
+    assert f"ORIGEM_FINANCIAMENTO_COLETIVO = '{analises.ORIGEM_FINANCIAMENTO_COLETIVO}'" in CONSULTAS_TS
+    assert "export const CONDICAO_DOACAO_DIRETA =" in CONSULTAS_TS
+    corpo = CONSULTAS_TS.split("export const CONDICAO_DOACAO_DIRETA =", 1)[1].split(";", 1)[0]
+    assert "<> '${ORIGEM_FINANCIAMENTO_COLETIVO}'" in corpo
+    # as duas fichas que desenham o anel do "dinheiro que volta" usam a condição
+    for pagina in ("candidato.tsx", "fornecedor.tsx"):
+        fonte = (RAIZ / "site" / "src" / "pages" / pagina).read_text(encoding="utf-8")
+        assert "CONDICAO_DOACAO_DIRETA" in fonte, f"{pagina} marca 'dinheiro que volta' sem excluir plataforma"
+    # e a consulta pronta do console (texto puro, sem interpolação) leva o literal
+    assert analises.ORIGEM_FINANCIAMENTO_COLETIVO in exemplos_ts
+
+    assert f"CATEGORIA_IMPULSIONAMENTO = '{analises.CATEGORIA_IMPULSIONAMENTO}'" in CONSULTAS_TS
+    numerado = CONSULTAS_TS.split("export const CONDICAO_DOCUMENTO_NUMERADO =", 1)[1].split(";", 1)[0]
+    assert "COALESCE(DS_ORIGEM_DESPESA, '') <> '${CATEGORIA_IMPULSIONAMENTO}'" in numerado
+    assert "COALESCE(DS_ORIGEM_DESPESA, '') <> '{CATEGORIA_IMPULSIONAMENTO}'" in fonte_analises
+
+
+def test_cota_fefc_e_a_tabela_que_o_site_espera():
+    """A ficha do partido lê `cota_fefc` (FEFC por gênero e cor) direto do
+    parquet; o backend precisa publicar esse nome de tabela e essas colunas."""
+    agregados_py = (RAIZ / "src" / "agregados.py").read_text(encoding="utf-8")
+    exportar_py = (RAIZ / "src" / "exportar.py").read_text(encoding="utf-8")
+    partido_tsx = (RAIZ / "site" / "src" / "pages" / "partido.tsx").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE TABLE cota_fefc" in agregados_py
+    assert "cota_fefc.parquet" in exportar_py
+    assert "'cota_fefc'" in DUCKDB_TS
+    for coluna in ("genero", "cor_raca", "candidatos_fefc", "fefc", "candidaturas"):
+        assert coluna in partido_tsx, f"ficha do partido não lê a coluna {coluna} de cota_fefc"
+    # o mesmo grupo de cor/raça nos dois lados da régua racial
+    from src import agregados as ag
+    for cor in ag.COR_RACA_NEGRA:
+        assert f"'{cor}'" in partido_tsx
+
+
 def test_norma_documento_e_a_tabela_que_o_site_espera():
     """O site registra `norma_documento` no boot e lê a coluna exige_documento;
     o backend precisa publicar exatamente esse nome de tabela e de coluna."""

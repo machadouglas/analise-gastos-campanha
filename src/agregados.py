@@ -31,9 +31,19 @@ def materializar(con) -> None:
     _benchmark_indicadores(con)
     _benchmark_categorias(con)
     _rede(con)
+    _cota_fefc(con)
 
 
 _tem = db.existe
+
+
+def _tem_colunas(con, tabela: str, colunas: tuple[str, ...]) -> bool:
+    existentes = {
+        r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", [tabela]
+        ).fetchall()
+    }
+    return set(colunas) <= existentes
 
 
 def _ano_eleicao(con):
@@ -413,6 +423,85 @@ def _benchmark_categorias(con) -> None:
     """)
     n = con.execute("SELECT COUNT(*) FROM benchmark_categorias").fetchone()[0]
     print(f"[agregado] benchmark_categorias: {n} combinações grupo×categoria")
+
+
+# cor/raça que a regra de proporcionalidade do TSE agrupa como candidaturas negras
+COR_RACA_NEGRA = ("PRETA", "PARDA")
+
+
+def _cota_fefc(con) -> None:
+    """Fundo Especial (FEFC) por partido × cargo × gênero × cor/raça — a
+    matéria-prima das duas réguas legais de distribuição do fundo: mínimo de 30%
+    para candidaturas femininas (EC 117/2022, art. 2º) e proporcionalidade às
+    candidaturas negras (Res. TSE 23.607/2019, art. 17, § 4º e ss.).
+
+    Mede o que CHEGOU a candidato como receita de FUNDO ESPECIAL. A conta legal
+    é sobre o total aplicado pelo partido (inclui o gasto direto do diretório) e
+    a prestação está aberta — isto é termômetro, não a conta oficial, e a
+    Metodologia do site diz isso com todas as letras.
+
+    Gênero e cor vêm em caixas diferentes nos dois arquivos do TSE ('Feminino'
+    na prestação de contas, 'FEMININO' no registro): normalizados em maiúsculas.
+    `candidaturas` conta os registros do consulta_cand no mesmo recorte — o
+    denominador da regra racial — e fica NULL quando o registro não traz as
+    colunas (bancos antigos/sintéticos); `candidatos_fefc` é quem recebeu."""
+    if not _tem_colunas(con, "receitas", ("DS_GENERO", "DS_COR_RACA")):
+        con.execute("""
+            CREATE OR REPLACE TABLE cota_fefc (
+                SG_PARTIDO VARCHAR, DS_CARGO VARCHAR, genero VARCHAR, cor_raca VARCHAR,
+                candidatos_fefc BIGINT, fefc DOUBLE, candidaturas BIGINT)
+        """)
+        print("[agregado] cota_fefc: receitas sem DS_GENERO/DS_COR_RACA — tabela vazia")
+        return
+    normaliza = {
+        "genero": "UPPER(COALESCE(NULLIF(DS_GENERO, '#NULO'), 'NÃO INFORMADO'))",
+        "cor_raca": "UPPER(COALESCE(NULLIF(DS_COR_RACA, '#NULO'), 'NÃO INFORMADA'))",
+    }
+    registro = (
+        f"""SELECT SG_PARTIDO, DS_CARGO, {normaliza['genero']} AS genero,
+                   {normaliza['cor_raca']} AS cor_raca,
+                   COUNT(DISTINCT SQ_CANDIDATO) AS candidaturas
+            FROM candidatos GROUP BY 1, 2, 3, 4"""
+        if _tem(con, "candidatos") and _tem_colunas(con, "candidatos", ("DS_GENERO", "DS_COR_RACA"))
+        else """SELECT NULL AS SG_PARTIDO, NULL AS DS_CARGO, NULL AS genero, NULL AS cor_raca,
+                       CAST(NULL AS BIGINT) AS candidaturas WHERE FALSE"""
+    )
+    con.execute(f"""
+        CREATE OR REPLACE TABLE cota_fefc AS
+        WITH fefc AS (
+            SELECT SG_PARTIDO, DS_CARGO, {normaliza['genero']} AS genero,
+                   {normaliza['cor_raca']} AS cor_raca,
+                   COUNT(DISTINCT SQ_CANDIDATO) AS candidatos_fefc,
+                   ROUND(SUM(VR), 2) AS fefc
+            FROM v_receitas
+            WHERE DS_FONTE_RECEITA = 'FUNDO ESPECIAL'
+            GROUP BY 1, 2, 3, 4),
+        reg AS ({registro}),
+        -- o registro grafa o cargo em CAIXA ALTA ('DEPUTADO FEDERAL') e a
+        -- prestação em Capitalizado ('Deputado Federal'): o casamento é por
+        -- UPPER, e a grafia publicada é a da prestação (a das outras tabelas)
+        cargos AS (
+            SELECT UPPER(DS_CARGO) AS chave, ANY_VALUE(DS_CARGO) AS DS_CARGO
+            FROM v_receitas GROUP BY 1)
+        -- FULL JOIN: o grupo que tem candidaturas registradas e nenhum centavo de
+        -- fundo é justamente o que a régua de proporcionalidade precisa ver
+        SELECT COALESCE(f.SG_PARTIDO, r.SG_PARTIDO) AS SG_PARTIDO,
+               COALESCE(f.DS_CARGO, c.DS_CARGO, r.DS_CARGO) AS DS_CARGO,
+               COALESCE(f.genero, r.genero) AS genero,
+               COALESCE(f.cor_raca, r.cor_raca) AS cor_raca,
+               COALESCE(f.candidatos_fefc, 0) AS candidatos_fefc,
+               COALESCE(f.fefc, 0) AS fefc,
+               r.candidaturas
+        FROM fefc f
+        FULL JOIN reg r
+          ON r.SG_PARTIDO = f.SG_PARTIDO AND UPPER(r.DS_CARGO) = UPPER(f.DS_CARGO)
+         AND r.genero = f.genero AND r.cor_raca = f.cor_raca
+        LEFT JOIN cargos c ON c.chave = UPPER(r.DS_CARGO)
+    """)
+    n, partidos = con.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT SG_PARTIDO) FILTER (WHERE fefc > 0) FROM cota_fefc"
+    ).fetchone()
+    print(f"[agregado] cota_fefc: {n} grupos, {partidos} partidos com FEFC declarado")
 
 
 def _rede(con) -> None:

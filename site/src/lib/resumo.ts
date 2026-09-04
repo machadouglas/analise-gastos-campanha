@@ -81,6 +81,22 @@ export interface PontoSerieNacional {
   candidatos: number;
 }
 
+/** FEFC por partido: fatia do fundo que chegou a candidatas / candidaturas
+ *  negras, ao lado da fatia que elas são das candidaturas (espelho de
+ *  _cota_fefc em src/resumo.py). */
+export interface CotaPartido {
+  SG_PARTIDO: string;
+  fefc: number;
+  candidatos_fefc: number;
+  candidaturas: number;
+  /** true = fatia das candidaturas vem do registro do TSE; false = só de quem recebeu fundo */
+  base_registro: boolean;
+  pct_fefc_feminino: number | null;
+  pct_candidaturas_femininas: number | null;
+  pct_fefc_negros: number | null;
+  pct_candidaturas_negras: number | null;
+}
+
 export interface Resumo {
   gerado_em: string;
   /** carimbo por publicação (resumos antigos podem não trazer) */
@@ -99,6 +115,8 @@ export interface Resumo {
   fora_da_curva?: CandidatoForaDaCurva[];
   /** totais do país por dia de extração (sparklines da Home); resumos antigos não trazem */
   serie_nacional?: PontoSerieNacional[];
+  /** FEFC por partido × gênero/cor (resumos antigos não trazem) */
+  cota_fefc?: CotaPartido[];
 }
 
 let promessa: Promise<Resumo | null> | null = null;

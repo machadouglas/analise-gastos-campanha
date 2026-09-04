@@ -48,6 +48,24 @@ export const eVisaoRemocao = (v: Visao) => v === 'removidas' || v === 'removidas
  *  src/cnpj.py (teste automático em tests/test_sincronia_site.py). */
 export const SITUACAO_NAO_ENCONTRADA = 'NAO ENCONTRADO NA BASE PUBLICA';
 
+/** Origem das doações que chegam via plataforma de arrecadação (vaquinha). A
+ *  plataforma aparece como DOADORA (repassa o que arrecadou) e como FORNECEDORA
+ *  (cobra a taxa) do mesmo candidato — é o modelo de negócio dela, não "dinheiro
+ *  que volta". Espelha ORIGEM_FINANCIAMENTO_COLETIVO em src/analises.py (teste
+ *  automático em tests/test_sincronia_site.py). */
+export const ORIGEM_FINANCIAMENTO_COLETIVO = 'Recursos de Financiamento Coletivo';
+
+/** Doação direta — a única que fecha o anel do "dinheiro que volta" (red flag 4).
+ *  Espelha cond_doacao_direta em src/analises.py. */
+export const CONDICAO_DOACAO_DIRETA =
+  `COALESCE(DS_ORIGEM_RECEITA, '') <> '${ORIGEM_FINANCIAMENTO_COLETIVO}'`;
+
+/** Impulsionamento é pago a plataforma estrangeira (Meta, Google), que não emite
+ *  nota fiscal brasileira sequencial: o "número da nota" é digitado à mão e
+ *  repete entre candidatos sem dizer nada sobre o fornecedor. Fora da red flag
+ *  13 — espelha CATEGORIA_IMPULSIONAMENTO em src/analises.py. */
+export const CATEGORIA_IMPULSIONAMENTO = 'Despesa com Impulsionamento de Conteúdos';
+
 // manter em sincronia com CATEGORIAS_SEM_NOTA_ESPERADA em src/analises.py
 // (teste automático em tests/test_sincronia_site.py)
 export const CATEGORIAS_SEM_NOTA_ESPERADA = [
@@ -137,7 +155,8 @@ export const CONDICAO_NOTA_SEM_NUMERO =
 export const CONDICAO_DOCUMENTO_NUMERADO =
   `NOT ${CONDICAO_DOCUMENTO_NAO_FISCAL}`
   + ` AND regexp_full_match(COALESCE(NR_DOCUMENTO, ''), '[0-9]{3,}')`
-  + ` AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')`;
+  + ` AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')`
+  + ` AND COALESCE(DS_ORIGEM_DESPESA, '') <> '${CATEGORIA_IMPULSIONAMENTO}'`;
 
 /** Fracionamento clássico (red flag 7): mesmo valor, mesmo fornecedor, em notas
  *  DISTINTAS. Itens repetidos de uma mesma nota são legítimos — por isso a
