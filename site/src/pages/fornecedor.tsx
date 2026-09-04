@@ -239,13 +239,10 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
     flags.push(`recebe de ${num.format(nCandidatos)} candidatos de ${num.format(nPartidos)} partido${nPartidos > 1 ? 's' : ''}`);
   if (totalDoadoDireto > 0) flags.push(`também aparece como doador: ${brl.format(totalDoadoDireto)}`);
   if (/f.sica/i.test(String(l[1] ?? ''))) flags.push('pessoa física prestando serviços de campanha');
-  // CNAE vazio num CNPJ: o TSE preenche ramo e razão social a partir do cadastro
-  // da Receita ao registrar a despesa; quando não preenche, é porque não achou o
-  // CNPJ lá naquela data — quase sempre empresa aberta há pouco (363 dos 6.268
-  // fornecedores PJ em 03/09/2026, incluindo as duas SPEs de R$ 3,25 mi).
-  // Sinal independente do enriquecimento: não espera consulta nenhuma.
-  if (l[2] == null && /jur/i.test(String(l[1] ?? '')) && /^\d{14}$/.test(id))
-    flags.push('CNPJ sem cadastro na Receita quando a despesa foi declarada — costuma ser empresa recém-aberta');
+  // CNAE vazio no TSE (DS_CNAE_FORNECEDOR = '#NULO') NÃO vira chip: testado em
+  // 04/09/2026 contra o cadastro completo da Receita, 7,7% desses CNPJs eram
+  // recém-abertos contra 6,6% da base — é atraso do TSE em preencher o cadastro
+  // da declaração recente, não idade da empresa. Sinal de idade é o data_abertura.
   if (semNota > 0) flags.push(`${brl.format(semNota)} sem documento fiscal`);
   const notasSemNumero = Number(l[10] ?? 0);
   if (notasSemNumero > 0)

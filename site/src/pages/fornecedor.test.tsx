@@ -46,25 +46,18 @@ beforeEach(() => {
 });
 
 describe('ficha do fornecedor · chips do cabeçalho', () => {
-  it('CNAE vazio no TSE vira chip de "sem cadastro na Receita quando declarou"', async () => {
+  it('CNAE vazio no TSE não vira chip (é atraso de cadastro, não idade da empresa)', async () => {
     responder([
       [
         'COUNT(DISTINCT SQ_CANDIDATO), COUNT(DISTINCT SG_PARTIDO)',
-        { linhas: [['2026 COMUNICACAO SPE LTDA', 'Pessoa Jurídica', null, null, 1, 1, 1, 1650000, 1, 0]] },
+        { linhas: [['EMPRESA SEM RAMO NO TSE LTDA', 'Pessoa Jurídica', null, null, 1, 1, 1, 300000, 4, 0]] },
       ],
       CANDIDATOS,
     ]);
     renderizarRota(<Fornecedor />, { caminho: '/fornecedor/:id', url: `/fornecedor/${CNPJ}` });
 
-    expect(
-      await screen.findByText(/CNPJ sem cadastro na Receita quando a despesa foi declarada/),
-    ).toBeInTheDocument();
-  });
-
-  it('com CNAE preenchido, o chip não aparece', async () => {
-    montar([]);
-    await screen.findByText('GRÁFICA HORIZONTE LTDA');
-    expect(screen.queryByText(/sem cadastro na Receita quando/)).not.toBeInTheDocument();
+    await screen.findByText('EMPRESA SEM RAMO NO TSE LTDA');
+    expect(screen.queryByText(/sem cadastro na Receita/)).not.toBeInTheDocument();
   });
 
   it('plataforma de vaquinha: repasse não vira "também aparece como doador"', async () => {
