@@ -54,18 +54,17 @@ ARQUIVOS = [
 ]
 
 
-def baixar(con, atualizar: bool) -> None:
+def baixar(atualizar: bool) -> None:
+    """Download do release pelo mesmo módulo que o servidor MCP usa (src/publicado.py)."""
+    from src import publicado
+
     CACHE.mkdir(parents=True, exist_ok=True)
-    con.execute("INSTALL httpfs; LOAD httpfs;")
     for nome in ARQUIVOS:
         alvo = CACHE / f"{nome}.parquet"
         if alvo.exists() and not atualizar:
             continue
         print(f"[baixando] {nome}.parquet")
-        con.execute(
-            f"COPY (SELECT * FROM '{BASE}/{nome}.parquet') "
-            f"TO '{alvo.as_posix()}' (FORMAT PARQUET)"
-        )
+        publicado.baixar_arquivo(f"{nome}.parquet", alvo, BASE)
 
 
 def montar(con) -> None:
@@ -121,8 +120,8 @@ def main() -> None:
     os.environ.setdefault("RADAR_SAL_CPF", "previa-local")
     from src import agregados, carga, exportar, historico, verificacao
 
+    baixar(args.atualizar)
     con = duckdb.connect()
-    baixar(con, args.atualizar)
     montar(con)
     carga.criar_views(con)
     historico.criar_views_mudancas(con)

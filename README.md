@@ -65,6 +65,16 @@ FROM 'https://github.com/machadouglas/analise-gastos-campanha/releases/download/
 GROUP BY 1 ORDER BY 2 DESC LIMIT 20;
 ```
 
+## Conecte a sua IA (servidor MCP)
+
+Clientes que falam [MCP](https://modelcontextprotocol.io) — Claude, ChatGPT, Cursor, Claude Code — consultam os mesmos dados direto, sem copiar prompt nem colar SQL:
+
+```
+https://mcp.radardosgastos.com.br/mcp
+```
+
+Ferramentas: `buscar_candidato`, `ficha_candidato`, `ficha_fornecedor`, `ficha_partido`, `fora_da_curva`, `declaracoes_removidas`, `fornecedores_compartilhados`, `sem_nota`, `gastos_por_categoria`, `visao_geral` e `sql` (DuckDB, só leitura). As fichas devolvem o que o site mostra, com as mesmas regras; toda resposta traz a data do dado e a versão do código. O servidor lê só os Parquet publicados (`src/mcp/`, [arquitetura](docs/arquitetura-mcp.md), [deploy](docs/deploy-mcp.md)).
+
 ## Estrutura
 
 ```

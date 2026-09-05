@@ -170,6 +170,37 @@ gráficos por página, declare `aberta` só no que é essencial) e zoom via
 (`docs/deploy-cloudflare.md`). Os dados chegam ao site via Pages Function `/dados/*` que faz
 proxy do GitHub Releases (sem CORS lá).
 
+## Servidor MCP público (`src/mcp/`)
+
+Container Python (SDK oficial `mcp`, Streamable HTTP **stateless**, `json_response`)
+que lê **só os Parquet publicados** no release — nunca o banco da extração — e
+os carrega como tabelas num DuckDB local só-leitura (`dados.py`: boot, poll do
+md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
+`servidor.py`: fichas de candidato/fornecedor/partido, `fora_da_curva`,
+`declaracoes_removidas`, `fornecedores_compartilhados`, `sem_nota`,
+`gastos_por_categoria`, `visao_geral` e `sql` livre. Toda resposta traz
+`versao_dado` (data da extração) e `versao_codigo` (commit da imagem,
+`RADAR_GIT_SHA`, ou `stamp_codigo`).
+
+- **Mesmos números do site**: o SQL das ferramentas (`consultas.py`) espelha
+  `site/src/lib/consultas.ts` e as fichas; as réguas vêm **importadas** de
+  `analises.py`/`resumo.py`/`agregados.py`, nunca copiadas. `instructions` =
+  o trecho CONTEXTO…REGRAS de `site/src/lib/prompt.ts` (`esquema.py`).
+  `tests/test_sincronia_site.py` cobre tudo isso; `test_mcp_ferramentas.py`
+  roda cada consulta de `exemplos.ts` pela ferramenta `sql` e exige resultado
+  idêntico ao cursor cru.
+- **Guarda-corpos da `sql`** (`gate.py` + `dados.Executor`): parser do DuckDB
+  (um statement, tipo SELECT — PIVOT/UNPIVOT recusados, exceção documentada),
+  conexão `read_only` com `enable_external_access=false` e `lock_configuration`,
+  timeout por `interrupt()`, teto de 500 linhas e ~200 KB, semáforo de 8.
+- **Deploy**: `Dockerfile.mcp` (testes no build), aplicação separada no mesmo
+  host da rotina, sem volume nem segredo, atrás de túnel — `docs/deploy-mcp.md`
+  (genérico). Local: `python -m src.mcp.servidor` → `http://localhost:8000/mcp`.
+- `tests/test_mcp_protocolo.py` fala com o app pelo cliente oficial do SDK
+  (initialize, tools/list com `outputSchema` e anotações só-leitura,
+  structuredContent, isError, resources). Rode após mudar `src/mcp/`,
+  `prompt.ts`, `consultas.ts` ou `exemplos.ts`.
+
 ## Alvos do estudo atual
 
 `config/alvos.yaml` (local, fora do git) guarda os candidatos em foco do usuário — leia-o no início da sessão para saber o contexto. Se não existir, copie de `config/alvos.exemplo.yaml` e pergunte ao usuário quem acompanhar. Não cite candidatos específicos na documentação nem em arquivos versionados.

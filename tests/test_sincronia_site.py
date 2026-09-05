@@ -339,3 +339,103 @@ def test_situacao_nao_encontrada_igual_no_front():
     )
     assert achado, "SITUACAO_NAO_ENCONTRADA não encontrada em consultas.ts"
     assert achado.group(1) == cnpj.SITUACAO_NAO_ENCONTRADO
+
+
+# --------------------------------------------------------------------------- #
+# Servidor MCP (src/mcp/): o que ele espelha do site tem de bater
+# --------------------------------------------------------------------------- #
+
+def test_mcp_gate_cobre_os_verbos_do_console_menos_a_excecao_documentada():
+    """VERBOS_LEITURA de sql-gate.ts x gate do MCP (parser do DuckDB). PIVOT e
+    UNPIVOT são a exceção documentada: o parser os reescreve como CREATE +
+    SELECT e o MCP os recusa — registrado aqui em vez de fingir paridade."""
+    from src.mcp import gate
+
+    gate_ts = (RAIZ / "site" / "src" / "lib" / "sql-gate.ts").read_text(encoding="utf-8")
+    achado = re.search(r"VERBOS_LEITURA = /\^\(([a-z|]+)\)", gate_ts)
+    assert achado, "VERBOS_LEITURA não encontrada em sql-gate.ts"
+    verbos = set(achado.group(1).split("|"))
+    excecao = {"pivot", "unpivot"}
+    assert verbos == {"select", "with", "describe", "summarize", "show", "from"} | excecao
+    exemplos = {
+        "select": "SELECT 1", "with": "WITH a AS (SELECT 1) SELECT * FROM a",
+        "describe": "DESCRIBE SELECT 1", "summarize": "SUMMARIZE SELECT 1 AS x",
+        "show": "SHOW TABLES", "from": "FROM range(2)",
+        "pivot": "PIVOT t ON a USING sum(b)", "unpivot": "UNPIVOT t ON a INTO NAME n VALUE v",
+    }
+    for verbo in verbos - excecao:
+        assert gate.validar_leitura(exemplos[verbo])
+    for verbo in excecao:
+        import pytest
+
+        with pytest.raises(gate.ConsultaRecusada, match="PIVOT"):
+            gate.validar_leitura(exemplos[verbo])
+
+
+def test_mcp_instructions_sao_o_prompt_do_console():
+    """O modelo conectado ao MCP lê o MESMO contexto/tabelas/regras que o
+    visitante cola na IA dele (prompt.ts) — mudou lá, mudou aqui."""
+    from src.mcp import esquema
+
+    prompt_ts = (RAIZ / "site" / "src" / "lib" / "prompt.ts").read_text(encoding="utf-8")
+    texto = re.search(r"export const PROMPT_IA = `(.*?)`;", prompt_ts, re.DOTALL).group(1)
+    compartilhado = esquema.trecho_compartilhado(texto)
+    assert compartilhado.startswith("CONTEXTO:")
+    assert "REGRAS OBRIGATÓRIAS" in compartilhado and "EXEMPLOS:" not in compartilhado
+    assert compartilhado in esquema.instrucoes()
+    # as tabelas que as ferramentas usam estão descritas para o modelo
+    for tabela in ("despesas_atual", "receitas_atual", "despesas_removidas", "indicadores",
+                   "benchmark_indicadores", "rede", "fornecedores", "cota_fefc"):
+        assert tabela in compartilhado, f"prompt do console não descreve {tabela}"
+
+
+def _resolver_template(ts: str, corpo: str) -> str:
+    """Resolve ${CONST} de um template literal do consultas.ts pelas constantes
+    do próprio arquivo (um nível basta para as condições das flags)."""
+    consts = dict(re.findall(r"export const (\w+) = '([^']*)'", ts))
+    consts["CONDICAO_DOCUMENTO_NAO_FISCAL"] = _resolver_bloco(ts, "CONDICAO_DOCUMENTO_NAO_FISCAL")
+    for nome, valor in consts.items():
+        corpo = corpo.replace("${" + nome + "}", valor)
+    return corpo
+
+
+def _resolver_bloco(ts: str, nome: str) -> str:
+    """Concatena as partes `...` + `...` de uma constante de texto do TS."""
+    corpo = ts.split(f"export const {nome} =", 1)[1].split(";", 1)[0]
+    return "".join(re.findall(r"`([^`]*)`", corpo))
+
+
+def test_mcp_reguas_por_nota_iguais_ao_site():
+    """As condições das red flags 12/13 e o rótulo do documento em
+    src/mcp/consultas.py são o mesmo SQL de consultas.ts, caractere a caractere
+    após normalizar espaços — uma divergência marcaria nota de gente real."""
+    from src.mcp import consultas as c
+
+    for nome, do_mcp in (("CONDICAO_NOTA_SEM_NUMERO", c.CONDICAO_NOTA_SEM_NUMERO),
+                         ("CONDICAO_DOCUMENTO_NUMERADO", c.CONDICAO_DOCUMENTO_NUMERADO),
+                         ("CONDICAO_DOACAO_DIRETA", c.CONDICAO_DOACAO_DIRETA)):
+        do_site = _resolver_template(CONSULTAS_TS, _resolver_bloco(CONSULTAS_TS, nome))
+        assert _normalizar(do_site) == _normalizar(do_mcp), f"{nome} divergente entre site e MCP"
+
+    assert f"MINIMO_NOTAS_VALOR_REPETIDO = {c.MINIMO_NOTAS_VALOR_REPETIDO};" in CONSULTAS_TS
+    assert c.MARGEM_GASTO_ACIMA == resumo.MARGEM_GASTO_ACIMA
+
+    corpo = CONSULTAS_TS.split("export function sqlDocumentoDaNota", 1)[1].split("\n}", 1)[0]
+    do_site = re.search(r"return `(.*?)`;", corpo, re.DOTALL).group(1)
+    do_site = do_site.replace("${num}", "COALESCE(NR_DOCUMENTO, '')").replace("${numero}", "NR_DOCUMENTO")
+    do_site = do_site.replace("${tipo}", "DS_TIPO_DOCUMENTO")
+    assert _normalizar(do_site) == _normalizar(c.sql_documento_da_nota())
+
+
+def test_mcp_sinais_e_cte_iguais_ao_site():
+    """SINAIS do MCP == SINAIS_FILTRO do site == METRICAS_SINAL do backend, e a
+    CTE gerada carrega cada filtro de elegibilidade e o p95 com fallback BR-TODAS."""
+    from src.mcp import consultas as c
+
+    bloco = re.search(r"SINAIS_FILTRO = \[(.*?)\]", CONSULTAS_TS, re.DOTALL)
+    assert re.findall(r"'([^']+)'", bloco.group(1)) == c.SINAIS
+    cte = c.sinais_cte()
+    for nome, _, filtro in resumo.METRICAS_SINAL:
+        assert f"'{nome}'" in cte and filtro in cte
+    assert "m.valor > COALESCE(buf.p95, bbr.p95)" in cte
+    assert "LIKE 'pct_%'" not in cte

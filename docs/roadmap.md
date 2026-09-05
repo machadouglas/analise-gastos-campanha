@@ -27,3 +27,11 @@ Falta a red flag em si:
 
 Documentado em [deploy-cloudflare.md](deploy-cloudflare.md#plano-de-escala-migrar-dados-para-r2-público-não-implementado).
 Só quando o tráfego justificar.
+
+## 3. Servidor MCP público
+
+Implementado em `src/mcp/` (arquitetura em [arquitetura-mcp.md](arquitetura-mcp.md),
+deploy em [deploy-mcp.md](deploy-mcp.md)). Pendente: aplicação no host (Dockerfile.mcp,
+domínio `mcp.<domínio>` no túnel), regra de rate limit, validação com clientes reais
+em produção e registro no MCP Registry. Medir após duas semanas: proporção de `sql`,
+latência, 429/timeout.
