@@ -7,7 +7,7 @@ const REPO = 'https://github.com/machadouglas/analise-gastos-campanha';
 const navegacao = [
   { nome: 'Radar', href: '/', icone: Radar },
   { nome: 'Explorar', href: '/explorar', icone: BarChart3 },
-  { nome: 'Consultar (SQL + IA)', href: '/consultar', icone: Terminal },
+  { nome: 'Conecte sua IA no radar', href: '/consultar', icone: Terminal },
   // a tese do site é o método — a metodologia merece porta de entrada no topo
   { nome: 'Metodologia', href: '/metodologia', icone: BookOpen },
 ];
@@ -31,7 +31,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <span className="inline-flex items-center gap-1.5 sm:gap-2">
               <Radar className="h-5 w-5 shrink-0 text-[#264E9B] sm:h-6 sm:w-6" />
               <span className="whitespace-nowrap text-base font-bold tracking-tight sm:text-lg">
-                Radar<span className="text-brand"> das Contas</span>
+                Radar<span className="text-brand"> dos Gastos</span>
               </span>
             </span>
           </Link>

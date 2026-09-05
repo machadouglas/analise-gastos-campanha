@@ -61,7 +61,7 @@ export async function gerarCartaoCandidato(d: DadosCartao): Promise<Blob | null>
   ctx.fillRect(0, 0, L, 76);
   ctx.fillStyle = PAPEL;
   ctx.font = '600 30px Inter, system-ui, sans-serif';
-  ctx.fillText('Radar das Contas', 48, 49);
+  ctx.fillText('Radar dos Gastos', 48, 49);
   ctx.font = '400 22px Inter, system-ui, sans-serif';
   ctx.fillStyle = 'rgba(255,253,250,0.75)';
   ctx.textAlign = 'right';
