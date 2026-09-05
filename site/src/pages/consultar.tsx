@@ -17,6 +17,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { executarSQL, garantirTabelasCompletas, type ResultadoConsulta } from '@/lib/duckdb';
 import { validarLeitura } from '@/lib/sql-gate';
 import { PROMPT_IA, IAS_SUGERIDAS } from '@/lib/prompt';
+import { CLIENTES_MCP, URL_MCP } from '@/lib/mcp';
 import { CONSULTA_INICIAL, GRUPOS_EXEMPLOS, GRUPOS_PERGUNTAS } from '@/lib/exemplos';
 import { celula, brl, num } from '@/lib/format';
 import { BarrasHorizontais, LinhaTemporal } from '@/components/app/graficos';
@@ -112,6 +113,50 @@ function BlocoIA({ aoEscolher }: { aoEscolher: (sql: string) => void }) {
             </pre>
           </details>
         </div>
+        <details className="rounded-lg border bg-muted/30 p-3 text-sm" data-testid="conecte-sua-ia">
+          <summary className="cursor-pointer select-none font-semibold">
+            Ou conecte a sua IA direto (servidor MCP){' '}
+            <span className="font-normal text-muted-foreground">
+              — ela consulta os mesmos dados sozinha, sem copiar nada
+            </span>
+          </summary>
+          <div className="mt-3 space-y-3">
+            <p className="text-muted-foreground">
+              Clientes que falam MCP (Claude, ChatGPT, Cursor, Claude Code…) ganham as fichas de
+              candidato, fornecedor e partido, as red flags e uma consulta SQL livre — as mesmas
+              regras e os mesmos números deste site. Público, só leitura, sem cadastro.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="rounded border bg-background px-2 py-1 text-xs">{URL_MCP}</code>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => {
+                  navigator.clipboard
+                    .writeText(URL_MCP)
+                    .then(() => toast.success('URL do servidor MCP copiada.'))
+                    .catch(() => toast.error('Não foi possível copiar.'));
+                }}
+              >
+                <ClipboardCopy className="h-3.5 w-3.5" /> Copiar URL
+              </Button>
+            </div>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {CLIENTES_MCP.map((c) => (
+                <li key={c.nome} className="rounded-lg border bg-background/60 p-3">
+                  <p className="font-medium">{c.nome}</p>
+                  <p className="text-xs text-muted-foreground">{c.passos}</p>
+                  {c.codigo && (
+                    <pre className="mt-1 overflow-auto whitespace-pre-wrap rounded border bg-muted/40 p-2 text-[11px] leading-relaxed">
+                      {c.codigo}
+                    </pre>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
         {GRUPOS_PERGUNTAS.map((grupo, g) => {
           const Icone = icones[g] ?? MessageSquareText;
           return (

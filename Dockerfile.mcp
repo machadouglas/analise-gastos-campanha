@@ -1,0 +1,35 @@
+# Servidor MCP público (src/mcp/) — lê SÓ os Parquet publicados no release.
+# Sem volume, sem segredo: as únicas variáveis de ambiente que fazem sentido
+# são GH_REPO (num fork) e os limites MCP_* documentados em src/mcp/servidor.py.
+FROM python:3.12-slim
+
+# commit da imagem, exposto como versao_codigo em toda resposta. O Coolify
+# preenche SOURCE_COMMIT no build; localmente: --build-arg SOURCE_COMMIT=$(git rev-parse HEAD)
+ARG SOURCE_COMMIT=desconhecido
+ENV RADAR_GIT_SHA=$SOURCE_COMMIT \
+    PYTHONUNBUFFERED=1 \
+    MCP_DIR_CACHE=/app/data/mcp
+
+WORKDIR /app
+COPY requirements.txt requirements-mcp.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-mcp.txt
+
+# o MCP precisa de src/ e do prompt do site (instructions); os testes do build
+# precisam das consultas do console (exemplos.ts) e do fixture E2E
+COPY src/ src/
+COPY tests/ tests/
+COPY site/src/lib/*.ts site/src/lib/
+COPY gastos.py .
+
+# imagem quebrada não sobe: gate, ferramentas contra o fixture E2E e protocolo
+RUN python -m pytest tests/test_mcp_gate.py tests/test_mcp_ferramentas.py \
+    tests/test_mcp_protocolo.py -q
+
+RUN useradd -m -u 10001 app && mkdir -p /app/data/mcp && chown -R app:app /app
+USER app
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/saude', timeout=4).status == 200 else 1)"
+
+CMD ["python", "-m", "src.mcp.servidor"]

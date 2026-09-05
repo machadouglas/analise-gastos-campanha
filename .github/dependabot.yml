@@ -1,0 +1,22 @@
+# Bumps por PR: o SDK do MCP (revisão nova da especificação chega por aqui) e
+# o DuckDB entram só quando os testes de protocolo e de ferramentas passam.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+    groups:
+      site:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

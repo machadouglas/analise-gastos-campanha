@@ -134,6 +134,9 @@ def exportar(con) -> tuple[list[Path], dict[str, str]]:
     destino = DIR_EXPORT / "resumo.json"
     conteudo = resumo_mod.gerar(con)
     conteudo["arquivos"] = hashes
+    # com qual pipeline o dado foi gerado — o MCP expõe ao lado da versão do
+    # próprio código, para a janela entre deploy e republicação ser visível
+    conteudo["versao_codigo"] = stamp_codigo()
     destino.write_text(json.dumps(conteudo, ensure_ascii=False), encoding="utf-8")
     print(f"[exportado] {destino} ({destino.stat().st_size / 1e3:.0f} kB)")
     gerados.append(destino)
