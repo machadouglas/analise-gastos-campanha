@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowRight, Bot, EyeOff, Megaphone, Search, Wallet,
+  AlertTriangle, ArrowRight, Bot, Cable, EyeOff, Megaphone, Search, Wallet,
   type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -60,6 +60,12 @@ const PERGUNTAS: { icone: LucideIcon; pergunta: string; detalhe: string; href: s
     detalhe: 'Use a sua IA (ChatGPT, Claude, Gemini…) para gerar consultas e rode no console aberto.',
     href: '/consultar',
   },
+  {
+    icone: Cable,
+    pergunta: 'Conecte a sua IA direto (MCP)',
+    detalhe: 'Claude, ChatGPT, Cursor… consultam os mesmos dados sozinhos: fichas, red flags e SQL livre.',
+    href: '/consultar#conecte-sua-ia',
+  },
 ];
 
 function PerguntasSection() {
@@ -68,7 +74,7 @@ function PerguntasSection() {
       <h2 className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
         O que dá para descobrir
       </h2>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {PERGUNTAS.map((p) => {
           const interno = p.href.startsWith('/');
           const conteudo = (

@@ -172,7 +172,7 @@ proxy do GitHub Releases (sem CORS lá).
 
 ## Servidor MCP público (`src/mcp/`)
 
-Container Python (SDK oficial `mcp`, Streamable HTTP **stateless**, `json_response`)
+Container Python (SDK oficial `mcp` 2.x, classe `MCPServer`; Streamable HTTP **stateless**, `json_response`; negocia a revisão 2026-07-28 e atende o `initialize` clássico)
 que lê **só os Parquet publicados** no release — nunca o banco da extração — e
 os carrega como tabelas num DuckDB local só-leitura (`dados.py`: boot, poll do
 md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
@@ -197,8 +197,11 @@ md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
   host da rotina, sem volume nem segredo, atrás de túnel — `docs/deploy-mcp.md`
   (genérico). Local: `python -m src.mcp.servidor` → `http://localhost:8000/mcp`.
 - `tests/test_mcp_protocolo.py` fala com o app pelo cliente oficial do SDK
-  (initialize, tools/list com `outputSchema` e anotações só-leitura,
-  structuredContent, isError, resources). Rode após mudar `src/mcp/`,
+  (o `Client` 2.x negocia `LATEST_PROTOCOL_VERSION` via discover; o
+  `ClientSession` clássico ainda inicializa; tools/list com `output_schema` e
+  anotações só-leitura, `structured_content`, `is_error`, resources). Campos
+  do SDK 2.x são snake_case; o transporte é configurado em
+  `streamable_http_app()`, não no construtor. Rode após mudar `src/mcp/`,
   `prompt.ts`, `consultas.ts` ou `exemplos.ts`.
 
 ## Alvos do estudo atual

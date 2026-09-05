@@ -1,8 +1,8 @@
 # Servidor MCP (src/mcp/). Instale junto do requirements.txt:
 #   pip install -r requirements.txt -r requirements-mcp.txt
-# SDK oficial fixado por faixa compatível: revisão nova da especificação chega
-# por bump deliberado aqui, autorizado pelos testes de protocolo.
-mcp~=1.29.1
-# usado diretamente pelo teste de protocolo (cliente em processo) — declarado
-# aqui para não depender de vir de carona com o SDK
-httpx~=0.28.1
+# SDK oficial 2.x (MCPServer), fixado por faixa compatível: revisão nova da
+# especificação chega por bump deliberado aqui, autorizado pelos testes de
+# protocolo. A 2.1 negocia a revisão 2026-07-28.
+mcp~=2.1.1
+# cliente HTTP do SDK 2.x; usado diretamente pelo teste de protocolo (em processo)
+httpx2~=2.12.0

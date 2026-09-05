@@ -112,7 +112,7 @@ def test_buscar_e_ficha_do_candidato(banco):
     f = _rodar(servidor.ficha_candidato("161050"))
     assert f["sem_movimento"] is True and f["indicadores"] is None
 
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     with pytest.raises(ToolError):
         _rodar(servidor.ficha_candidato("999999"))
@@ -153,7 +153,7 @@ def test_ficha_do_fornecedor_e_privacidade(banco):
     assert f["tipo_id"] == "pessoa_fisica_pseudonimizada" and f["cadastro_rfb"] is None
     _sem_cpf_cru(f)
 
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     with pytest.raises(ToolError):
         _rodar(servidor.ficha_fornecedor("123"))
@@ -173,7 +173,7 @@ def test_ficha_do_partido_e_visoes(banco):
     for cand in fc["candidatos"]:
         assert cand["sinais"] and all(s["valor"] > s["p95_do_grupo"] for s in cand["sinais"])
 
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     with pytest.raises(ToolError):
         _rodar(servidor.fora_da_curva(sinal="inexistente"))
@@ -200,7 +200,7 @@ def test_sql_devolve_o_mesmo_que_a_execucao_direta(banco, rotulo, consulta):
 
 
 def test_sql_recusa_e_explica(banco):
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     with pytest.raises(ToolError, match="recusada"):
         _rodar(servidor.sql("DELETE FROM despesas_atual"))
