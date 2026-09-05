@@ -24,8 +24,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # imagem quebrada não sobe: o deploy falha aqui se algum teste falhar
-# (os testes de dados reais se auto-pulam — não há data/ no contexto de build)
-RUN python -m pytest tests/ -q
+# (os testes de dados reais se auto-pulam — não há data/ no contexto de build).
+# Os testes do servidor MCP (tests/test_mcp_*.py) importam o SDK `mcp`, que
+# esta imagem não instala nem precisa: eles rodam no build do Dockerfile.mcp
+# e no CI. Sem o ignore, o deploy da rotina quebrava na coleta (05/09/2026).
+RUN python -m pytest tests/ -q --ignore-glob='tests/test_mcp_*.py'
 
 # roda sem root: um RCE na cadeia de parsing não vira root com GH_TOKEN no ambiente.
 # ATENÇÃO em volume já existente (criado como root): rode uma vez
