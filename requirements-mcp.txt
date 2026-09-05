@@ -3,3 +3,6 @@
 # SDK oficial fixado por faixa compatível: revisão nova da especificação chega
 # por bump deliberado aqui, autorizado pelos testes de protocolo.
 mcp~=1.27.1
+# usado diretamente pelo teste de protocolo (cliente em processo) — declarado
+# aqui para não depender de vir de carona com o SDK
+httpx~=0.28.1
