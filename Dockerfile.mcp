@@ -10,6 +10,12 @@ ENV RADAR_GIT_SHA=$SOURCE_COMMIT \
     PYTHONUNBUFFERED=1 \
     MCP_DIR_CACHE=/app/data/mcp
 
+# curl: o healthcheck do Coolify roda curl/wget DENTRO do container (a imagem
+# slim não traz nenhum dos dois, e sem isso o deploy é revertido com o servidor
+# saudável). Também é o que o HEALTHCHECK abaixo usa.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt requirements-mcp.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-mcp.txt
@@ -30,6 +36,6 @@ USER app
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/saude', timeout=4).status == 200 else 1)"
+  CMD curl -fsS http://127.0.0.1:8000/saude > /dev/null || exit 1
 
 CMD ["python", "-m", "src.mcp.servidor"]

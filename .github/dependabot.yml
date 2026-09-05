@@ -1,5 +1,8 @@
 # Bumps por PR: o SDK do MCP (revisão nova da especificação chega por aqui) e
 # o DuckDB entram só quando os testes de protocolo e de ferramentas passam.
+# Majors ficam FORA do automático: são migração deliberada (ex.: mcp 2.x
+# renomeou a API e fala a revisão 2026-07-28 do protocolo — trabalho próprio,
+# com os testes adaptados), e onze majors do site de uma vez nem instalam.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -9,6 +12,9 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /site
     schedule:
@@ -16,6 +22,9 @@ updates:
     groups:
       site:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
