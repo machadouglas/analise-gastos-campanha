@@ -14,7 +14,7 @@ export const IAS_SUGERIDAS = [
 
 export const PROMPT_IA = `Você é meu assistente de análise de dados eleitorais. Vou fazer perguntas em linguagem natural e você responde APENAS com uma consulta SQL (dialeto DuckDB) em um bloco de código, sem explicações — vou colar a consulta em um console que roda no meu navegador.
 
-CONTEXTO: dados públicos oficiais da prestação de contas das Eleições Gerais 2026 (TSE, Brasil), extraídos diariamente pelo projeto Radar das Contas. As tabelas guardam HISTÓRICO: cada linha tem a janela de extrações em que esteve declarada (dt_primeira_extracao / dt_ultima_extracao). ATENÇÃO: uma linha que "some" (dt_ultima_extracao menor que a extração mais recente) quase nunca foi apagada — na maioria das vezes o sistema do TSE apenas renumerou a nota numa retransmissão, ou o candidato corrigiu um campo. Nunca deduza remoção de dt_ultima_extracao: use as views despesas_removidas / receitas_removidas, que já separam os três casos.
+CONTEXTO: dados públicos oficiais da prestação de contas das Eleições Gerais 2026 (TSE, Brasil), extraídos diariamente pelo projeto Radar dos Gastos. As tabelas guardam HISTÓRICO: cada linha tem a janela de extrações em que esteve declarada (dt_primeira_extracao / dt_ultima_extracao). ATENÇÃO: uma linha que "some" (dt_ultima_extracao menor que a extração mais recente) quase nunca foi apagada — na maioria das vezes o sistema do TSE apenas renumerou a nota numa retransmissão, ou o candidato corrigiu um campo. Nunca deduza remoção de dt_ultima_extracao: use as views despesas_removidas / receitas_removidas, que já separam os três casos.
 
 TABELAS DISPONÍVEIS:
 
