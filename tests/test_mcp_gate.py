@@ -84,7 +84,7 @@ def executor(banco):
     servico = dados.Servico(banco.caminho.parent)
     servico.banco = banco
     return dados.Executor(servico, timeout=1.0, max_simultaneas=2, espera_fila=0.2,
-                          max_linhas=100, max_bytes=10_000)
+                          max_linhas=100, max_bytes=10_000, max_simultaneas_sql=1)
 
 
 def _rodar(coro):
@@ -159,3 +159,22 @@ def test_tabela_ausente_degrada_para_none(executor):
     assert _rodar(executor.consultar_opcional("SELECT 1", ("nao_existe",))) is None
     assert _rodar(executor.consultar_opcional("SELECT * FROM nao_existe")) is None
     assert _rodar(executor.consultar_opcional("SELECT 1 AS a")).linhas == [{"a": 1}]
+
+
+def test_sql_livre_tem_fila_propria_e_nao_esgota_as_ferramentas(executor):
+    """Medido em produção com uma fila só: cross joins na `sql` tomavam todas
+    as vagas e as fichas recebiam "ocupado". Com filas separadas, a sql cheia
+    recusa só sql; a ferramenta curada passa."""
+    pesada = "SELECT COUNT(*) FROM range(100000000) a, range(100000) b"
+
+    async def cenario():
+        lenta = asyncio.create_task(executor.consultar(pesada, fila="sql"))
+        await asyncio.sleep(0.05)
+        with pytest.raises(dados.Ocupado, match="SQL livres"):
+            await executor.consultar("SELECT 1", fila="sql")
+        r = await executor.consultar("SELECT 1 AS a")  # fila das ferramentas, livre
+        assert r.linhas == [{"a": 1}]
+        with pytest.raises(dados.TempoEsgotado):
+            await lenta
+
+    _rodar(cenario())

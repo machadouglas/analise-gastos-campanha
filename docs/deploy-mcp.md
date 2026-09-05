@@ -44,7 +44,8 @@ Nunca crie registro A/AAAA na zona: o objetivo é o IP não aparecer.
    e o site responde 502. Mudou porta ou domínio? Só vale no próximo deploy.
 3. **Environment Variables**: nenhuma obrigatória. Num fork, `GH_REPO` com
    `usuario/fork`. Limites opcionais: `MCP_TIMEOUT` (s por consulta, padrão
-   10), `MCP_MAX_SIMULTANEAS` (8), `MCP_MEMORIA` (`512MB`), `MCP_THREADS` (2),
+   10), `MCP_MAX_SIMULTANEAS` (8, ferramentas curadas), `MCP_MAX_SIMULTANEAS_SQL`
+   (4, fila própria da `sql` livre), `MCP_MEMORIA` (`512MB`), `MCP_THREADS` (2),
    `MCP_INTERVALO` (s entre verificações do release, 300).
 4. **Storages**: nenhum. O cache de Parquet vive no container e é rebaixado
    no boot (~30 MB); um redeploy nunca perde nada.
