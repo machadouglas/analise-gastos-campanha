@@ -63,9 +63,13 @@ _executor: dados.Executor | None = None
 
 
 def versao_codigo() -> str:
-    sha = os.environ.get("RADAR_GIT_SHA")
-    if sha:
-        return sha[:12]
+    """Commit da imagem: RADAR_GIT_SHA (build arg) ou SOURCE_COMMIT (o Coolify
+    injeta em runtime, mas não como build arg — o deploy de 05/09 saiu
+    'desconhecido'); sem os dois, o stamp do pipeline."""
+    for nome in ("RADAR_GIT_SHA", "SOURCE_COMMIT"):
+        sha = os.environ.get(nome, "").strip()
+        if sha and sha != "desconhecido":
+            return sha[:12]
     from src import exportar
 
     return "pipeline-" + exportar.stamp_codigo()[:12]
