@@ -191,8 +191,14 @@ modelo se comportar; todos ficam no DuckDB e no container.
   com aviso.
 - **Erros voltam como texto útil**, não como stack: mensagem do DuckDB +
   lembrete do esquema + dica das views prontas.
-- **Concorrência limitada** por processo (semáforo, ex.: 8 consultas
-  simultâneas); o excedente espera até um limite curto e recebe 429.
+- **Concorrência limitada** por processo, em **duas filas**: as ferramentas
+  curadas (consultas conhecidas, baratas; 8 vagas) e a `sql` livre (custo
+  imprevisível; 4 vagas). Medido em 05/09/2026 com uma fila só: 40 chamadas
+  simultâneas, as 8 vagas tomadas por cross joins, e todas as leves recusadas
+  — a `sql` não pode esgotar o que as fichas usam. O excedente espera até 5 s
+  e recebe "ocupado". Sob 8 consultas pesadas simultâneas o processo foi de
+  179 MB para 344 MB e voltou; o timeout de 10 s interrompe cada uma e o
+  servidor segue respondendo em milissegundos.
 
 ## 6. A borda
 

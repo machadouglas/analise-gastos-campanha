@@ -266,26 +266,34 @@ def json_seguro(v: Any) -> Any:
 
 
 class Executor:
+    """Duas filas: as ferramentas curadas (consultas conhecidas, baratas) e a
+    `sql` livre (custo imprevisível). Medido em 05/09/2026 com uma fila só:
+    40 chamadas simultâneas, as 8 vagas tomadas por cross joins pesados, e
+    TODAS as chamadas leves recusadas com "ocupado" — a sql não pode
+    esgotar o que as fichas usam."""
+
     def __init__(self, servico: Servico, timeout: float = 10, max_simultaneas: int = 8,
-                 espera_fila: float = 5, max_linhas: int = 500, max_bytes: int = 200_000):
+                 espera_fila: float = 5, max_linhas: int = 500, max_bytes: int = 200_000,
+                 max_simultaneas_sql: int = 4):
         self.servico = servico
         self.timeout = timeout
         self.espera_fila = espera_fila
         self.max_linhas = max_linhas
         self.max_bytes = max_bytes
-        self.max_simultaneas = max_simultaneas
-        # o semáforo nasce no primeiro uso, preso ao loop que o usa (um Semaphore
-        # criado fora de loop se prende ao primeiro e quebra num loop novo)
+        self.max_simultaneas = {"ferramentas": max_simultaneas, "sql": max_simultaneas_sql}
+        # os semáforos nascem no primeiro uso, presos ao loop que os usa (um
+        # Semaphore criado fora de loop se prende ao primeiro e quebra num novo)
         self._semaforo_loop: asyncio.AbstractEventLoop | None = None
-        self._semaforo_obj: asyncio.Semaphore | None = None
+        self._semaforos: dict[str, asyncio.Semaphore] = {}
 
-    @property
-    def _semaforo(self) -> asyncio.Semaphore:
+    def _semaforo(self, fila: str) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
-        if self._semaforo_obj is None or self._semaforo_loop is not loop:
+        if self._semaforo_loop is not loop:
             self._semaforo_loop = loop
-            self._semaforo_obj = asyncio.Semaphore(self.max_simultaneas)
-        return self._semaforo_obj
+            self._semaforos = {}
+        if fila not in self._semaforos:
+            self._semaforos[fila] = asyncio.Semaphore(self.max_simultaneas[fila])
+        return self._semaforos[fila]
 
     @property
     def banco(self) -> Banco:
@@ -297,16 +305,20 @@ class Executor:
         return nome in self.banco.tabelas
 
     async def consultar(self, sql: str, parametros: list | None = None,
-                        max_linhas: int | None = None) -> Resultado:
+                        max_linhas: int | None = None, fila: str = "ferramentas") -> Resultado:
         teto = min(max_linhas or self.max_linhas, self.max_linhas)
+        semaforo = self._semaforo(fila)
         try:
-            await asyncio.wait_for(self._semaforo.acquire(), timeout=self.espera_fila)
+            await asyncio.wait_for(semaforo.acquire(), timeout=self.espera_fila)
         except TimeoutError:
-            raise Ocupado("servidor ocupado — tente de novo em alguns segundos") from None
+            raise Ocupado(
+                "servidor ocupado" + (" com consultas SQL livres" if fila == "sql" else "")
+                + " — tente de novo em alguns segundos"
+            ) from None
         try:
             return await self._executar(sql, parametros or [], teto)
         finally:
-            self._semaforo.release()
+            semaforo.release()
 
     async def _executar(self, sql: str, parametros: list, teto: int) -> Resultado:
         cur = self.banco.cursor()

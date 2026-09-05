@@ -4,7 +4,8 @@
 
 Variáveis de ambiente (todas opcionais): GH_REPO (repo do release),
 MCP_PORTA, MCP_DIR_CACHE, MCP_INTERVALO (s entre verificações do release),
-MCP_TIMEOUT (s por consulta), MCP_MAX_SIMULTANEAS, MCP_MEMORIA, MCP_THREADS,
+MCP_TIMEOUT (s por consulta), MCP_MAX_SIMULTANEAS (ferramentas curadas),
+MCP_MAX_SIMULTANEAS_SQL (fila própria da sql livre), MCP_MEMORIA, MCP_THREADS,
 RADAR_GIT_SHA (commit da imagem, para versao_codigo).
 """
 
@@ -37,6 +38,7 @@ DIR_CACHE = Path(os.environ.get("MCP_DIR_CACHE", "data/mcp"))
 INTERVALO = float(os.environ.get("MCP_INTERVALO", "300"))
 TIMEOUT = float(os.environ.get("MCP_TIMEOUT", "10"))
 MAX_SIMULTANEAS = int(os.environ.get("MCP_MAX_SIMULTANEAS", "8"))
+MAX_SIMULTANEAS_SQL = int(os.environ.get("MCP_MAX_SIMULTANEAS_SQL", "4"))
 MAX_LINHAS = 500
 SITE = "https://radardosgastos.com.br"
 
@@ -80,6 +82,7 @@ def usar_banco(banco: dados.Banco, **kw_executor) -> dados.Executor:
     _servico = servico
     _executor = dados.Executor(servico, timeout=kw_executor.pop("timeout", TIMEOUT),
                                max_simultaneas=kw_executor.pop("max_simultaneas", MAX_SIMULTANEAS),
+                               max_simultaneas_sql=kw_executor.pop("max_simultaneas_sql", MAX_SIMULTANEAS_SQL),
                                max_linhas=MAX_LINHAS, **kw_executor)
     return _executor
 
@@ -416,7 +419,8 @@ async def sql(consulta: str, limite: int = MAX_LINHAS) -> dict[str, Any]:
     mensagem do DuckDB para você corrigir e tentar de novo."""
     try:
         texto = gate.validar_leitura(consulta)
-        r = await executor().consultar(texto, max_linhas=min(max(int(limite), 1), MAX_LINHAS))
+        r = await executor().consultar(texto, max_linhas=min(max(int(limite), 1), MAX_LINHAS),
+                                       fila="sql")
     except Exception as e:  # noqa: BLE001
         raise _erro_de_consulta(e) from None
     saida = r.como_dict()
@@ -489,7 +493,7 @@ def criar_app(servico: dados.Servico | None = None):
             _servico = servico or dados.Servico(DIR_CACHE, intervalo=INTERVALO)
             await asyncio.to_thread(_servico.iniciar)
             _executor = dados.Executor(_servico, timeout=TIMEOUT, max_simultaneas=MAX_SIMULTANEAS,
-                                       max_linhas=MAX_LINHAS)
+                                       max_simultaneas_sql=MAX_SIMULTANEAS_SQL, max_linhas=MAX_LINHAS)
             iniciado_aqui = _servico
         async with ciclo_mcp(app_):
             yield

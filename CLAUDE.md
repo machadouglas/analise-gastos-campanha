@@ -192,7 +192,9 @@ md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
 - **Guarda-corpos da `sql`** (`gate.py` + `dados.Executor`): parser do DuckDB
   (um statement, tipo SELECT — PIVOT/UNPIVOT recusados, exceção documentada),
   conexão `read_only` com `enable_external_access=false` e `lock_configuration`,
-  timeout por `interrupt()`, teto de 500 linhas e ~200 KB, semáforo de 8.
+  timeout por `interrupt()`, teto de 500 linhas e ~200 KB, duas filas (8 vagas
+  para as ferramentas curadas, 4 para a `sql` livre — medido: uma fila só deixava
+  cross joins esgotarem as vagas das fichas).
 - **Deploy**: `Dockerfile.mcp` (testes no build), aplicação separada no mesmo
   host da rotina, sem volume nem segredo, atrás de túnel — `docs/deploy-mcp.md`
   (genérico). Local: `python -m src.mcp.servidor` → `http://localhost:8000/mcp`.
