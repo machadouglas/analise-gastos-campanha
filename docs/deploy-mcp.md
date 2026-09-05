@@ -33,7 +33,15 @@ Nunca crie registro A/AAAA na zona: o objetivo é o IP não aparecer.
 
 1. **+ New → Application**, mesmo repositório da rotina, branch `main`.
    Build Pack **Dockerfile**, **Dockerfile Location** `/Dockerfile.mcp`.
-2. **Port**: `8000`. **Domain**: `http://mcp.<domínio>` (HTTP — ver §0).
+   Pode ficar no mesmo projeto do extrator: projeto no Coolify é agrupamento,
+   não isolamento; o que importa é ser uma aplicação separada (sem os segredos
+   e o volume da rotina). Não use "Clone" da aplicação do extrator — o clone
+   copia as variáveis de ambiente.
+2. **Ports exposes**: `8000`. **Domain**: `http://mcp.<domínio>` (HTTP — ver
+   §0), **sem porta no fim**: no Coolify, porta escrita no domínio
+   (`http://host:80`) significa "roteie para esta porta do container" e
+   sobrepõe o Ports exposes — o Traefik passa a bater na porta 80 do container
+   e o site responde 502. Mudou porta ou domínio? Só vale no próximo deploy.
 3. **Environment Variables**: nenhuma obrigatória. Num fork, `GH_REPO` com
    `usuario/fork`. Limites opcionais: `MCP_TIMEOUT` (s por consulta, padrão
    10), `MCP_MAX_SIMULTANEAS` (8), `MCP_MEMORIA` (`512MB`), `MCP_THREADS` (2),
@@ -41,11 +49,14 @@ Nunca crie registro A/AAAA na zona: o objetivo é o IP não aparecer.
 4. **Storages**: nenhum. O cache de Parquet vive no container e é rebaixado
    no boot (~30 MB); um redeploy nunca perde nada.
 5. **Health check**: caminho `/saude`, porta 8000, start period de 2 minutos
-   (o boot baixa o release e monta o banco). O Dockerfile já declara um
+   (o boot baixa o release e monta o banco). O Coolify executa o check com
+   `curl` DENTRO do container — por isso a imagem instala `curl` (sem ele o
+   deploy é revertido com o servidor saudável). O Dockerfile declara um
    `HEALTHCHECK` equivalente.
 6. **Auto Deploy** ligado (webhook do GitHub App). O build roda os testes do
-   MCP (`tests/test_mcp_*.py`); imagem quebrada não sobe. O Coolify passa
-   `SOURCE_COMMIT` ao build, que vira `versao_codigo` em toda resposta.
+   MCP (`tests/test_mcp_*.py`); imagem quebrada não sobe. O Coolify injeta
+   `SOURCE_COMMIT` no container em runtime (não como build arg), e é dele que
+   sai o `versao_codigo` de toda resposta.
 7. Deploy. Primeiro boot: ~1 min (download + montagem do banco).
 
 Watch paths sugeridos (só reconstrói quando o MCP muda):
