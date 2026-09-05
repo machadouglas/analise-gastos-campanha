@@ -30,8 +30,8 @@ Só quando o tráfego justificar.
 
 ## 3. Servidor MCP público
 
-Implementado em `src/mcp/` (arquitetura em [arquitetura-mcp.md](arquitetura-mcp.md),
-deploy em [deploy-mcp.md](deploy-mcp.md)). Pendente: aplicação no host (Dockerfile.mcp,
-domínio `mcp.<domínio>` no túnel), regra de rate limit, validação com clientes reais
-em produção e registro no MCP Registry. Medir após duas semanas: proporção de `sql`,
-latência, 429/timeout.
+No ar desde 05/09/2026 (`src/mcp/`, SDK 2.x, revisão 2026-07-28 do protocolo;
+arquitetura em [arquitetura-mcp.md](arquitetura-mcp.md), deploy em
+[deploy-mcp.md](deploy-mcp.md)), com rate limit na borda e host sem IP exposto.
+Pendente: validação com clientes reais (Claude, ChatGPT) e registro no MCP Registry.
+Medir após duas semanas: proporção de `sql`, latência, 429/timeout.

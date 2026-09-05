@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
@@ -41,20 +41,17 @@ MAX_LINHAS = 500
 SITE = "https://radardosgastos.com.br"
 
 SOMENTE_LEITURA = ToolAnnotations(
-    readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False
+    read_only_hint=True, idempotent_hint=True, destructive_hint=False, open_world_hint=False
 )
 
-mcp = FastMCP(
+# SDK 2.x (MCPServer): o transporte é configurado em streamable_http_app(), em
+# criar_app(); aqui só identidade e instructions. O SDK negocia a revisão mais
+# recente da especificação que ele implementa (2026-07-28 na 2.1).
+mcp = MCPServer(
     name="Radar dos Gastos",
+    title="Radar dos Gastos — prestação de contas das Eleições 2026",
     instructions=esquema.instrucoes(),
     website_url=SITE,
-    stateless_http=True,
-    json_response=True,
-    host=HOST,
-    port=PORTA,
-    # servidor público atrás de proxy: a proteção contra DNS rebinding é para
-    # servidores locais e recusaria o Host do domínio público
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 # preenchidos no boot (ver ciclo_de_vida) ou por usar_banco() nos testes
@@ -469,12 +466,19 @@ async def raiz(_: Request) -> JSONResponse:
 
 
 def criar_app(servico: dados.Servico | None = None):
-    """App ASGI com o boot do banco no ciclo do Starlette (em modo stateless o
-    SDK entra no lifespan do MCP a cada requisição — o boot não pode viver lá)."""
-    # o gerenciador de sessão do SDK só pode ser iniciado uma vez por instância;
-    # cada app criado ganha o seu (em produção criar_app roda uma vez)
-    mcp._session_manager = None
-    app = mcp.streamable_http_app()
+    """App ASGI com o boot do banco no ciclo do Starlette. Stateless: qualquer
+    processo responde qualquer requisição; resposta JSON (sem SSE) — mais
+    simples de atravessar proxies e túneis."""
+    # cada app ganha o próprio gerenciador de sessão (só pode iniciar uma vez)
+    if hasattr(mcp, "_session_manager"):
+        mcp._session_manager = None
+    app = mcp.streamable_http_app(
+        stateless_http=True,
+        json_response=True,
+        # servidor público atrás de proxy: a proteção contra DNS rebinding é para
+        # servidores locais e recusaria o Host do domínio público
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
     ciclo_mcp = app.router.lifespan_context
 
     @asynccontextmanager

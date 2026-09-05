@@ -97,9 +97,15 @@ O MCP segue a **última revisão publicada** da especificação
 (https://modelcontextprotocol.io/specification) e nada de transporte ou
 comportamento legado. Compromissos verificáveis, não intenção:
 
-- **SDK oficial `mcp` (Python) fixado por versão** em `requirements.txt`, com
-  atualização automática por PR (Dependabot). Revisão nova da especificação
-  chega pelo SDK; o teste de conformidade abaixo é o que autoriza o merge.
+- **SDK oficial `mcp` 2.x (Python, classe `MCPServer`) fixado por faixa** em
+  `requirements-mcp.txt`. A 2.1 implementa a revisão **2026-07-28**; patches e
+  minors chegam por PR do Dependabot, majors são migração deliberada (o
+  Dependabot os ignora). `tests/test_mcp_protocolo.py` compara a revisão
+  negociada com `LATEST_PROTOCOL_VERSION` do SDK: um bump que traga revisão
+  nova é cobrado ali.
+- **Duas eras ao mesmo tempo**: o cliente novo negocia a revisão mais recente
+  por `server/discover`; clientes antigos seguem pelo `initialize` clássico
+  (2025-11-25). O mesmo servidor atende os dois, sem transporte legado (SSE).
 - **Streamable HTTP** com negociação de versão pelo cabeçalho
   `MCP-Protocol-Version`. O proxy do host repassa esse cabeçalho e o
   `Mcp-Session-Id` sem tocar.
@@ -113,9 +119,10 @@ comportamento legado. Compromissos verificáveis, não intenção:
 - **Erros no padrão JSON-RPC**, com o erro de execução da ferramenta (SQL
   inválido, timeout) devolvido como `isError=true` no resultado — é o que a
   especificação distingue de erro de protocolo.
-- **Conformidade em CI**: o build roda o MCP Inspector (modo CLI) contra o
-  container e falha se `initialize`, `tools/list`, `tools/call` e
-  `resources/read` não cumprirem a revisão que o SDK declara.
+- **Conformidade em CI**: `test_mcp_protocolo.py` fala com o app pelo
+  cliente oficial do SDK, em processo (Streamable HTTP de verdade sobre ASGI):
+  discover/initialize, `tools/list`, `tools/call`, `resources/read` e `/saude`.
+  O build da imagem roda essa suíte; imagem quebrada não sobe.
 - **Autenticação, quando vier** (chave para cota maior): OAuth 2.1 como
   *resource server*, com metadados de recurso protegido (RFC 9728) e
   `WWW-Authenticate` no 401. Nada de chave em query string.

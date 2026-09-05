@@ -113,7 +113,13 @@ function BlocoIA({ aoEscolher }: { aoEscolher: (sql: string) => void }) {
             </pre>
           </details>
         </div>
-        <details className="rounded-lg border bg-muted/30 p-3 text-sm" data-testid="conecte-sua-ia">
+        <details
+          id="conecte-sua-ia"
+          className="scroll-mt-24 rounded-lg border bg-muted/30 p-3 text-sm"
+          data-testid="conecte-sua-ia"
+          // chegou pela âncora (cartão da Home): já abre no bloco certo
+          open={typeof window !== 'undefined' && window.location.hash === '#conecte-sua-ia'}
+        >
           <summary className="cursor-pointer select-none font-semibold">
             Ou conecte a sua IA direto (servidor MCP){' '}
             <span className="font-normal text-muted-foreground">
