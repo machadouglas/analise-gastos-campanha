@@ -52,3 +52,6 @@ export async function executarSQL(sql: string): Promise<ResultadoConsulta> {
     ms: 0,
   };
 }
+
+/** O console pede o catálogo completo antes de executar; aqui não há boot. */
+export async function garantirTabelasCompletas(): Promise<void> {}

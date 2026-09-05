@@ -34,7 +34,9 @@ def cond_uf(uf: str | None, prefixo: str = "") -> str | None:
         return None
     if len(lista) == 1:
         return f"{prefixo}SG_UF = '{esc(lista[0])}'"
-    return f"{prefixo}SG_UF IN ({', '.join(repr(esc(u)) for u in lista)})"
+    # sempre aspas simples de SQL: repr() trocaria para aspas duplas (identificador)
+    # quando o valor traz apóstrofo, e escaparia barras e controles à moda do Python
+    return f"{prefixo}SG_UF IN ({', '.join(f"'{esc(u)}'" for u in lista)})"
 
 
 def cond_texto(termo: str | None, colunas: list[str], plural: bool = False) -> str | None:

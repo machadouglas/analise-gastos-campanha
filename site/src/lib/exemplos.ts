@@ -1,6 +1,11 @@
 /** Consultas prontas do console (Consultar): exemplos por grupo e perguntas
  *  em português com o SQL que as responde. Dados puros, sem React — o script
- *  de verificação e os testes leem este arquivo para validar cada consulta. */
+ *  de verificação e os testes leem este arquivo para validar cada consulta.
+ *
+ *  Curadoria (05/09/2026): a página passou a ser MCP-first e o console virou
+ *  a segunda porta. Ficou só o que traz resultado forte ou que nenhuma outra
+ *  página do site responde; o que era variação de tema (combustível, gráfica,
+ *  advogados…) o visitante pede à IA — o prompt e o MCP cobrem. */
 
 import { CORTE_RECEM_ABERTO } from './consultas';
 
@@ -69,6 +74,7 @@ WHERE g.total_categoria > b.p95
 ORDER BY g.total_categoria - b.p95 DESC
 LIMIT 30`;
 
+/** Chips do console: um clique põe o SQL no editor. */
 export const GRUPOS_EXEMPLOS: { rotulo: string; exemplos: Exemplo[] }[] = [
   {
     rotulo: 'Comece por aqui',
@@ -84,15 +90,6 @@ export const GRUPOS_EXEMPLOS: { rotulo: string; exemplos: Exemplo[] }[] = [
        ROUND(SUM(valor), 2) AS total
 FROM despesas_atual
 WHERE NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
-GROUP BY 1
-ORDER BY total DESC
-LIMIT 30`,
-      },
-      {
-        rotulo: 'Gasto com carro de som por UF',
-        sql: `SELECT SG_UF, COUNT(DISTINCT SQ_CANDIDATO) AS candidatos, ROUND(SUM(valor), 2) AS total
-FROM despesas_atual
-WHERE DS_ORIGEM_DESPESA ILIKE '%carro%som%'
 GROUP BY 1
 ORDER BY total DESC
 LIMIT 30`,
@@ -142,16 +139,16 @@ LIMIT 30`,
         sql: SQL_DOADOR_FORNECEDOR,
       },
       {
-        rotulo: 'Nota fiscal declarada sem número',
-        sql: `-- documento fiscal cujo número não tem um só dígito (ex.: "SN"):
--- a nota é afirmada, mas não há como localizá-la para conferir.
-SELECT NM_CANDIDATO, SG_PARTIDO || '/' || SG_UF AS partido_uf,
-       NM_FORNECEDOR, NR_DOCUMENTO, DS_ORIGEM_DESPESA,
-       COUNT(*) AS notas, ROUND(SUM(valor), 2) AS total
-FROM despesas_atual
-WHERE (DS_TIPO_DOCUMENTO ILIKE '%nota fiscal%' OR DS_TIPO_DOCUMENTO ILIKE '%cupom fiscal%')
-  AND NOT regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')
-GROUP BY ALL
+        rotulo: 'Fornecedores recém-abertos',
+        sql: `-- empresas abertas às vésperas da eleição (out/2025 em diante) já recebendo de campanha
+SELECT f.cnpj, f.razao_social, f.data_abertura, f.uf AS uf_da_empresa,
+       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
+       COUNT(DISTINCT d.SG_UF) AS ufs_atendidas,
+       ROUND(SUM(d.valor), 2) AS total
+FROM fornecedores f
+JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
+WHERE f.data_abertura >= '${CORTE_RECEM_ABERTO}'
+GROUP BY 1, 2, 3, 4
 ORDER BY total DESC
 LIMIT 30`,
       },
@@ -173,39 +170,10 @@ HAVING COUNT(DISTINCT SQ_CANDIDATO) > 1
 ORDER BY candidatos DESC, total DESC
 LIMIT 30`,
       },
-      {
-        rotulo: 'Situação cadastral alterada',
-        sql: `-- fornecedores cujo CNPJ mudou de situação na Receita entre as nossas consultas
--- (ex.: ATIVA que virou BAIXADA depois de receber da campanha).
--- Monitor contínuo: vem vazio enquanto nenhuma mudança tiver sido detectada.
-SELECT f.cnpj, f.razao_social, f.situacao_anterior, f.situacao, f.dt_situacao_anterior,
-       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
-       ROUND(SUM(d.valor), 2) AS recebido_na_campanha
-FROM fornecedores f
-JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
-WHERE f.situacao_anterior IS NOT NULL
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY recebido_na_campanha DESC
-LIMIT 30`,
-      },
-      {
-        rotulo: 'Fornecedores recém-abertos',
-        sql: `-- empresas abertas às vésperas da eleição (out/2025 em diante) já recebendo de campanha
-SELECT f.cnpj, f.razao_social, f.data_abertura, f.uf AS uf_da_empresa,
-       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
-       COUNT(DISTINCT d.SG_UF) AS ufs_atendidas,
-       ROUND(SUM(d.valor), 2) AS total
-FROM fornecedores f
-JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
-WHERE f.data_abertura >= '${CORTE_RECEM_ABERTO}'
-GROUP BY 1, 2, 3, 4
-ORDER BY total DESC
-LIMIT 30`,
-      },
     ],
   },
   {
-    rotulo: 'Cruzamentos avançados',
+    rotulo: 'Cruzamentos',
     exemplos: [
       {
         rotulo: 'Fornecedor em vários estados',
@@ -221,15 +189,6 @@ WHERE NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
 GROUP BY 1, 2
 HAVING COUNT(DISTINCT SG_UF) >= 3
 ORDER BY total DESC
-LIMIT 30`,
-      },
-      {
-        rotulo: 'Preço de impulsionamento por UF',
-        sql: `-- mediana do preço POR NOTA em cada estado; 'BR-TODAS' é a régua nacional
-SELECT SG_UF, notas, ROUND(mediana, 2) AS mediana, ROUND(p95, 2) AS p95
-FROM benchmark_precos
-WHERE DS_ORIGEM_DESPESA ILIKE '%impulsionamento%'
-ORDER BY mediana DESC
 LIMIT 30`,
       },
       {
@@ -291,16 +250,6 @@ ORDER BY candidatos DESC, total DESC
 LIMIT 50`,
       },
       {
-        pergunta: 'Algum candidato removeu ou alterou despesas que já tinha declarado?',
-        sql: `-- a view já filtra retransmissões renumeradas (não são remoções de verdade)
-SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF,
-       COUNT(*) AS itens_removidos, ROUND(SUM(valor), 2) AS valor_removido
-FROM despesas_removidas
-GROUP BY 1, 2, 3
-ORDER BY valor_removido DESC
-LIMIT 50`,
-      },
-      {
         pergunta: 'Quem está contratando muito acima do que declarou ter arrecadado?',
         sql: `SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF, DS_CARGO,
        ROUND(total_contratado, 2) AS contratado,
@@ -309,27 +258,6 @@ LIMIT 50`,
 FROM indicadores
 WHERE razao_gasto_receita > 1.1 AND total_contratado > 10000
 ORDER BY razao_gasto_receita DESC
-LIMIT 50`,
-      },
-      {
-        pergunta: 'Quanto do Fundo Eleitoral já chegou aos candidatos, por partido?',
-        sql: `SELECT SG_PARTIDO,
-       ROUND(SUM(valor), 2) AS fundo_eleitoral,
-       COUNT(DISTINCT SQ_CANDIDATO) AS candidatos
-FROM receitas_atual
-WHERE DS_FONTE_RECEITA ILIKE '%FUNDO ESPECIAL%'
-GROUP BY 1
-ORDER BY fundo_eleitoral DESC
-LIMIT 50`,
-      },
-      {
-        pergunta: 'Quais os maiores gastos com impulsionamento de redes sociais até agora?',
-        sql: `SELECT NM_CANDIDATO, SG_PARTIDO, SG_UF,
-       COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS fornecedor,
-       DS_DESPESA, ROUND(valor, 2) AS valor
-FROM despesas_atual
-WHERE DS_ORIGEM_DESPESA ILIKE '%impulsionamento%'
-ORDER BY valor DESC
 LIMIT 50`,
       },
       {
@@ -346,21 +274,6 @@ ORDER BY total DESC
 LIMIT 50`,
       },
       {
-        pergunta: 'Que candidatos usam a mesma gráfica ou o mesmo carro de som?',
-        sql: `SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS fornecedor,
-       DS_ORIGEM_DESPESA,
-       COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
-       STRING_AGG(DISTINCT NM_CANDIDATO, ' | ' ORDER BY NM_CANDIDATO) AS quem,
-       ROUND(SUM(valor), 2) AS total
-FROM despesas_atual
-WHERE (DS_ORIGEM_DESPESA ILIKE '%impresso%' OR DS_ORIGEM_DESPESA ILIKE '%carro%som%')
-  AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
-GROUP BY 1, 2
-HAVING COUNT(DISTINCT SQ_CANDIDATO) >= 2
-ORDER BY candidatos DESC, total DESC
-LIMIT 50`,
-      },
-      {
         pergunta: 'Quais pessoas físicas (sem empresa) mais receberam dinheiro de campanha?',
         sql: `-- o CPF não é publicado: pessoa física aparece com código estável 'pf-…'
 SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS pessoa,
@@ -370,16 +283,6 @@ SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB, '#NULO'), NM_FORNECEDOR) AS pessoa,
 FROM despesas_atual
 WHERE DS_TIPO_FORNECEDOR ILIKE 'PESSOA F%'
 GROUP BY 1, 2
-ORDER BY total DESC
-LIMIT 50`,
-      },
-      {
-        pergunta: 'Quanto os candidatos à Presidência gastaram com advogados e contadores?',
-        sql: `SELECT NM_CANDIDATO, SG_PARTIDO, DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
-FROM despesas_atual
-WHERE DS_CARGO ILIKE '%presidente%'
-  AND (DS_ORIGEM_DESPESA ILIKE '%advoc%' OR DS_ORIGEM_DESPESA ILIKE '%contab%')
-GROUP BY 1, 2, 3
 ORDER BY total DESC
 LIMIT 50`,
       },
@@ -401,16 +304,6 @@ ORDER BY total DESC
 LIMIT 50`,
       },
       {
-        pergunta: 'Qual candidato mais gastou com combustível no meu estado?',
-        sql: `-- troque 'SP' pela sua UF
-SELECT NM_CANDIDATO, SG_PARTIDO, DS_CARGO, ROUND(SUM(valor), 2) AS total
-FROM despesas_atual
-WHERE SG_UF = 'SP' AND DS_ORIGEM_DESPESA ILIKE '%combust%'
-GROUP BY 1, 2, 3
-ORDER BY total DESC
-LIMIT 30`,
-      },
-      {
         pergunta: 'Quais doadores aparecem doando para candidatos de partidos rivais?',
         sql: `-- doadores identificados com doações diretas a 2+ partidos
 SELECT COALESCE(NULLIF(NM_DOADOR_RFB, '#NULO'), NM_DOADOR) AS doador,
@@ -425,89 +318,6 @@ GROUP BY 1, 2
 HAVING COUNT(DISTINCT SG_PARTIDO) >= 2
 ORDER BY partidos DESC, total_doado DESC
 LIMIT 50`,
-      },
-      {
-        pergunta: 'Algum fornecedor de campanha também é doador do mesmo candidato?',
-        sql: SQL_DOADOR_FORNECEDOR,
-      },
-    ],
-  },
-  {
-    titulo: 'Investigações avançadas — cruzando estados e tabelas',
-    perguntas: [
-      {
-        pergunta: 'Quais empresas atendem candidatos em três ou mais estados — e quanto recebem em cada um?',
-        sql: `-- empresas presentes em 3+ estados, com o total recebido em cada um
-WITH multi AS (
-  SELECT NR_CPF_CNPJ_FORNECEDOR AS cnpj
-  FROM despesas_atual
-  WHERE LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14
-  GROUP BY 1
-  HAVING COUNT(DISTINCT SG_UF) >= 3
-)
-SELECT COALESCE(NULLIF(d.NM_FORNECEDOR_RFB, '#NULO'), d.NM_FORNECEDOR) AS fornecedor,
-       d.NR_CPF_CNPJ_FORNECEDOR AS cnpj, d.SG_UF,
-       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
-       ROUND(SUM(d.valor), 2) AS total_na_uf
-FROM despesas_atual d
-JOIN multi ON multi.cnpj = d.NR_CPF_CNPJ_FORNECEDOR
-GROUP BY 1, 2, 3
-ORDER BY fornecedor, total_na_uf DESC
-LIMIT 200`,
-      },
-      {
-        pergunta: 'Compare o preço mediano de impulsionamento digital entre SP, RJ e a mediana nacional.',
-        sql: `-- troque as UFs à vontade; 'BR-TODAS' é a régua nacional
-SELECT SG_UF, DS_ORIGEM_DESPESA, notas,
-       ROUND(mediana, 2) AS mediana, ROUND(p75, 2) AS p75, ROUND(p95, 2) AS p95
-FROM benchmark_precos
-WHERE DS_ORIGEM_DESPESA ILIKE '%impulsionamento%'
-  AND SG_UF IN ('SP', 'RJ', 'BR-TODAS')
-ORDER BY SG_UF
-LIMIT 30`,
-      },
-      {
-        pergunta: 'Quais empresas abertas depois de outubro de 2025 já recebem de campanha — e em quantos estados?',
-        sql: `-- empresas criadas às vésperas da eleição; as que atendem vários estados vêm primeiro
-SELECT f.cnpj, f.razao_social, f.data_abertura, f.uf AS uf_da_empresa,
-       COUNT(DISTINCT d.SG_UF) AS ufs,
-       STRING_AGG(DISTINCT d.SG_UF, ', ' ORDER BY d.SG_UF) AS estados,
-       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
-       ROUND(SUM(d.valor), 2) AS total
-FROM fornecedores f
-JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
-WHERE f.data_abertura >= '${CORTE_RECEM_ABERTO}'
-GROUP BY 1, 2, 3, 4
-ORDER BY ufs DESC, total DESC
-LIMIT 30`,
-      },
-      {
-        pergunta: 'Monte o ranking de estados por percentual de gasto sem nota fiscal, só entre quem gastou acima de R$ 100 mil.',
-        sql: `-- percentual do gasto sem documento fiscal por UF (candidatos com R$ 100 mil+ contratados)
-SELECT SG_UF,
-       COUNT(*) AS candidatos,
-       ROUND(SUM(valor_sem_nota), 2) AS sem_nota,
-       ROUND(SUM(total_contratado), 2) AS contratado,
-       ROUND(100.0 * SUM(valor_sem_nota) / NULLIF(SUM(total_contratado), 0), 1) AS pct_sem_nota
-FROM indicadores
-WHERE total_contratado > 100000
-GROUP BY 1
-ORDER BY pct_sem_nota DESC
-LIMIT 30`,
-      },
-      {
-        pergunta: 'Algum fornecedor teve o CNPJ baixado na Receita depois de começar a receber da campanha?',
-        sql: `-- situação cadastral que mudou para BAIXADA entre as nossas consultas à Receita.
--- Monitor contínuo: vem vazio enquanto nenhuma baixa tiver sido detectada.
-SELECT f.cnpj, f.razao_social, f.situacao_anterior, f.situacao, f.dt_situacao_anterior,
-       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
-       ROUND(SUM(d.valor), 2) AS recebido
-FROM fornecedores f
-JOIN despesas_atual d ON d.NR_CPF_CNPJ_FORNECEDOR = f.cnpj
-WHERE f.situacao_anterior IS NOT NULL AND f.situacao ILIKE '%BAIX%'
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY recebido DESC
-LIMIT 30`,
       },
       {
         pergunta: 'Quais doadores originários estão por trás de repasses partidários a candidatos de estados diferentes?',
@@ -525,6 +335,20 @@ ORDER BY total DESC
 LIMIT 30`,
       },
       {
+        pergunta: 'Monte o ranking de estados por percentual de gasto sem nota fiscal, só entre quem gastou acima de R$ 100 mil.',
+        sql: `-- percentual do gasto sem documento fiscal por UF (candidatos com R$ 100 mil+ contratados)
+SELECT SG_UF,
+       COUNT(*) AS candidatos,
+       ROUND(SUM(valor_sem_nota), 2) AS sem_nota,
+       ROUND(SUM(total_contratado), 2) AS contratado,
+       ROUND(100.0 * SUM(valor_sem_nota) / NULLIF(SUM(total_contratado), 0), 1) AS pct_sem_nota
+FROM indicadores
+WHERE total_contratado > 100000
+GROUP BY 1
+ORDER BY pct_sem_nota DESC
+LIMIT 30`,
+      },
+      {
         pergunta: 'Qual a evolução do gasto declarado dos candidatos a governador, comparando três estados?',
         sql: `-- "como estava declarado em cada dia de extração" — troque as UFs à vontade
 SELECT dt_extracao, SG_UF, ROUND(SUM(total_contratado), 2) AS total_declarado
@@ -533,10 +357,6 @@ WHERE DS_CARGO ILIKE '%governador%' AND SG_UF IN ('SP', 'RJ', 'MG')
 GROUP BY 1, 2
 ORDER BY 1, 2
 LIMIT 500`,
-      },
-      {
-        pergunta: 'Quem gasta com uma categoria muito acima do p95 do seu grupo de comparação?',
-        sql: SQL_FORA_DA_CURVA_CATEGORIA,
       },
     ],
   },

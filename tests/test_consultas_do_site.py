@@ -48,7 +48,7 @@ def _consultas() -> list[tuple[str, str]]:
         (rotulo, (literal or consts[nome]).replace("${CORTE_RECEM_ABERTO}", corte))
         for rotulo, literal, nome in achados
     ]
-    assert len(consultas) >= 25, f"parser achou só {len(consultas)} consultas em exemplos.ts"
+    assert len(consultas) >= 20, f"parser achou só {len(consultas)} consultas em exemplos.ts"
     return consultas
 
 
@@ -108,9 +108,7 @@ def con():
 # Monitores: dependem de um evento que pode não ter acontecido ainda (mudança
 # de situação cadastral entre duas consultas à Receita). Vazio é resposta
 # legítima — o SQL declara isso num comentário para o visitante.
-MONITORES = {"Situação cadastral alterada",
-              "Mesmo número de nota em candidatos diferentes",
-             "Algum fornecedor teve o CNPJ baixado na Receita depois de começar a receber da campanha?"}
+MONITORES = {"Mesmo número de nota em candidatos diferentes"}
 
 
 @pytest.mark.parametrize("rotulo,sql", CONSULTAS, ids=[r for r, _ in CONSULTAS])
@@ -156,4 +154,4 @@ def test_toda_pergunta_tem_sql_proprio():
     perguntas = re.findall(r"pergunta: '([^']*)'", fonte)
     com_sql = {r for r, _ in CONSULTAS}
     assert set(perguntas) <= com_sql, f"perguntas sem SQL: {set(perguntas) - com_sql}"
-    assert len(perguntas) >= 20
+    assert len(perguntas) >= 10

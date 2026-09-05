@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   Bot,
+  Cable,
   Check,
   ClipboardCopy,
   Database,
   Download,
   MessageSquareText,
   Play,
-  Sparkles,
-  TerminalSquare,
+  Wrench,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,10 +17,12 @@ import { Spinner } from '@/components/ui/spinner';
 import { executarSQL, garantirTabelasCompletas, type ResultadoConsulta } from '@/lib/duckdb';
 import { validarLeitura } from '@/lib/sql-gate';
 import { PROMPT_IA, IAS_SUGERIDAS } from '@/lib/prompt';
-import { CLIENTES_MCP, URL_MCP } from '@/lib/mcp';
+import { CLIENTES_MCP, FERRAMENTAS_MCP, URL_MCP } from '@/lib/mcp';
 import { CONSULTA_INICIAL, GRUPOS_EXEMPLOS, GRUPOS_PERGUNTAS } from '@/lib/exemplos';
+import { carregarResumo, type Resumo } from '@/lib/resumo';
 import { celula, brl, num } from '@/lib/format';
 import { BarrasHorizontais, LinhaTemporal } from '@/components/app/graficos';
+import { ConversaMCP } from '@/components/app/conversa-mcp';
 import { detectarGrafico } from '@/lib/grafico-auto';
 
 /** Catálogo clicável: um clique roda DESCRIBE e mostra as colunas da tabela. */
@@ -51,144 +53,137 @@ const CATALOGO: { rotulo: string; tabelas: string[] }[] = [
 const LIMITE_EXIBICAO = 500;
 const CHAVE_SQL_SESSAO = 'consultar-sql';
 
-function BlocoIA({ aoEscolher }: { aoEscolher: (sql: string) => void }) {
-  const [copiado, setCopiado] = useState(false);
-
-  async function copiar() {
-    try {
-      await navigator.clipboard.writeText(PROMPT_IA);
-      setCopiado(true);
-      toast.success('Prompt copiado! Cole na sua IA favorita.');
-      setTimeout(() => setCopiado(false), 2500);
-    } catch {
-      toast.error('Não foi possível copiar. Selecione o texto manualmente.');
-    }
+function copiar(texto: string, ok: string) {
+  const area = navigator.clipboard;
+  if (!area) {
+    toast.error('Não foi possível copiar. Selecione o texto manualmente.');
+    return Promise.resolve(false);
   }
+  return area.writeText(texto).then(
+    () => {
+      toast.success(ok);
+      return true;
+    },
+    () => {
+      toast.error('Não foi possível copiar. Selecione o texto manualmente.');
+      return false;
+    },
+  );
+}
 
-  const icones = [MessageSquareText, Sparkles] as const;
-
+/** A porta principal: o servidor MCP, com a URL, os clientes e a conversa
+ *  simulada com os dados do dia. */
+function BlocoMCP({ resumo }: { resumo: Resumo | null }) {
   return (
-    <Card className="border-[#264E9B]/25">
+    <Card id="conecte-sua-ia" className="scroll-mt-24 border-[#264E9B]/25" data-testid="conecte-sua-ia">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
-          <Bot className="h-5 w-5 text-[#264E9B]" />
-          Use a sua IA — qualquer uma
+          <Cable className="h-5 w-5 text-[#264E9B]" />
+          Conecte a sua IA aos dados (servidor MCP)
         </CardTitle>
         <CardDescription className="leading-relaxed">
-          Você não precisa saber SQL. Copie o prompt abaixo, cole na sua IA de preferência (
-          {IAS_SUGERIDAS.join(', ')}…), faça a sua pergunta em português — <em>"quanto o candidato
-          X gastou com carro de som?"</em> — e cole aqui a consulta que ela devolver.
+          Cole uma URL no seu cliente de IA e ela passa a consultar os dados sozinha: fichas de
+          candidato, fornecedor e partido, as red flags e uma consulta SQL livre — as mesmas regras
+          e os mesmos números deste site. Público, só leitura, sem cadastro.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <ol className="grid gap-3 text-sm sm:grid-cols-3">
-          {[
-            { icone: ClipboardCopy, texto: 'Copie o prompt e cole no chat da sua IA' },
-            { icone: MessageSquareText, texto: 'Pergunte em português o que quiser saber' },
-            { icone: TerminalSquare, texto: 'Cole o SQL gerado no console abaixo e execute' },
-          ].map((passo, i) => (
-            <li key={i} className="flex items-start gap-3 rounded-lg border bg-muted/40 p-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[#10244A] to-[#264E9B] text-xs font-bold text-white">
-                {i + 1}
-              </span>
-              <span className="leading-snug">
-                <passo.icone className="mb-1 h-4 w-4 text-[#264E9B]" />
-                <br />
-                {passo.texto}
-              </span>
-            </li>
-          ))}
-        </ol>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={copiar} className="gap-2">
-            {copiado ? <Check className="h-4 w-4" /> : <ClipboardCopy className="h-4 w-4" />}
-            {copiado ? 'Copiado!' : 'Copiar prompt para a sua IA'}
+      <CardContent className="space-y-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <code className="rounded border bg-background px-2 py-1 text-xs">{URL_MCP}</code>
+          <Button
+            size="sm"
+            className="gap-1"
+            onClick={() => void copiar(URL_MCP, 'URL do servidor MCP copiada.')}
+          >
+            <ClipboardCopy className="h-3.5 w-3.5" /> Copiar URL
           </Button>
-          <details className="text-sm text-muted-foreground">
-            <summary className="cursor-pointer select-none hover:text-foreground">
-              Ver o prompt
-            </summary>
-            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-4 text-xs leading-relaxed">
-              {PROMPT_IA}
-            </pre>
-          </details>
         </div>
-        <details
-          id="conecte-sua-ia"
-          className="scroll-mt-24 rounded-lg border bg-muted/30 p-3 text-sm"
-          data-testid="conecte-sua-ia"
-          // chegou pela âncora (cartão da Home): já abre no bloco certo
-          open={typeof window !== 'undefined' && window.location.hash === '#conecte-sua-ia'}
-        >
-          <summary className="cursor-pointer select-none font-semibold">
-            Ou conecte a sua IA direto (servidor MCP){' '}
-            <span className="font-normal text-muted-foreground">
-              — ela consulta os mesmos dados sozinha, sem copiar nada
-            </span>
-          </summary>
-          <div className="mt-3 space-y-3">
-            <p className="text-muted-foreground">
-              Clientes que falam MCP (Claude, ChatGPT, Cursor, Claude Code…) ganham as fichas de
-              candidato, fornecedor e partido, as red flags e uma consulta SQL livre — as mesmas
-              regras e os mesmos números deste site. Público, só leitura, sem cadastro.
+
+        {/* grid-cols-1 + min-w-0: sem eles a coluna da conversa cresce até a
+            linha mais longa do JSON e o celular ganha rolagem lateral */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+          <div className="min-w-0 space-y-3 lg:col-span-3">
+            <p className="text-sm font-semibold">
+              Como fica, na prática{' '}
+              <span className="font-normal text-muted-foreground">
+                — a IA chama as ferramentas e responde com os dados
+              </span>
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <code className="rounded border bg-background px-2 py-1 text-xs">{URL_MCP}</code>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={() => {
-                  navigator.clipboard
-                    .writeText(URL_MCP)
-                    .then(() => toast.success('URL do servidor MCP copiada.'))
-                    .catch(() => toast.error('Não foi possível copiar.'));
-                }}
-              >
-                <ClipboardCopy className="h-3.5 w-3.5" /> Copiar URL
-              </Button>
-            </div>
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {CLIENTES_MCP.map((c) => (
-                <li key={c.nome} className="rounded-lg border bg-background/60 p-3">
-                  <p className="font-medium">{c.nome}</p>
-                  <p className="text-xs text-muted-foreground">{c.passos}</p>
-                  {c.codigo && (
-                    <pre className="mt-1 overflow-auto whitespace-pre-wrap rounded border bg-muted/40 p-2 text-[11px] leading-relaxed">
-                      {c.codigo}
-                    </pre>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <ConversaMCP resumo={resumo} />
           </div>
-        </details>
-        {GRUPOS_PERGUNTAS.map((grupo, g) => {
-          const Icone = icones[g] ?? MessageSquareText;
-          return (
-            <div key={grupo.titulo}>
-              <p className="mb-2 text-sm font-semibold">
-                {grupo.titulo}{' '}
-                <span className="font-normal text-muted-foreground">
-                  (clique e o SQL pronto vai para o console)
-                </span>
-              </p>
-              <ul className="grid gap-1.5 sm:grid-cols-2">
-                {grupo.perguntas.map((p) => (
-                  <li key={p.pergunta}>
-                    <button
-                      onClick={() => aoEscolher(p.sql)}
-                      className="group flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <Icone className="mt-0.5 h-4 w-4 shrink-0 text-[#264E9B] opacity-60 group-hover:opacity-100" />
-                      {p.pergunta}
-                    </button>
+          <div className="min-w-0 space-y-5 lg:col-span-2">
+            <div className="space-y-3">
+              <p className="text-sm font-semibold">Onde colar a URL</p>
+              <ul className="grid gap-2">
+                {CLIENTES_MCP.map((c) => (
+                  <li key={c.nome} className="rounded-lg border bg-background/60 p-3">
+                    <p className="text-sm font-medium">{c.nome}</p>
+                    <p className="text-xs text-muted-foreground">{c.passos}</p>
+                    {c.codigo && (
+                      <pre className="mt-1 overflow-auto whitespace-pre-wrap rounded border bg-muted/40 p-2 text-[11px] leading-relaxed">
+                        {c.codigo}
+                      </pre>
+                    )}
                   </li>
                 ))}
               </ul>
             </div>
-          );
-        })}
+            <div className="space-y-3">
+              <p className="text-sm font-semibold">
+                <Wrench className="mr-1.5 inline h-4 w-4 text-[#264E9B]" />
+                As {FERRAMENTAS_MCP.length} ferramentas que a IA ganha
+              </p>
+              <ul className="grid gap-1.5">
+                {FERRAMENTAS_MCP.map((f) => (
+                  <li key={f.nome} className="rounded-md border bg-background/60 px-2.5 py-1.5">
+                    <code className="text-xs font-semibold text-[#264E9B]">{f.nome}</code>
+                    <span className="block text-xs text-muted-foreground">{f.descricao}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** A alternativa sem conector: copiar o prompt e trazer o SQL para o console. */
+function BlocoPrompt() {
+  const [copiado, setCopiado] = useState(false);
+
+  async function copiarPrompt() {
+    if (await copiar(PROMPT_IA, 'Prompt copiado! Cole na sua IA favorita.')) {
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2500);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Bot className="h-5 w-5 text-[#264E9B]" />
+          Sem conector? Copie o prompt
+        </CardTitle>
+        <CardDescription className="leading-relaxed">
+          Cole o prompt na sua IA ({IAS_SUGERIDAS.join(', ')}…), pergunte em português —{' '}
+          <em>"quanto o candidato X gastou com carro de som?"</em> — e traga o SQL que ela devolver
+          para o console abaixo.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" onClick={copiarPrompt} className="gap-2">
+          {copiado ? <Check className="h-4 w-4" /> : <ClipboardCopy className="h-4 w-4" />}
+          {copiado ? 'Copiado!' : 'Copiar prompt para a sua IA'}
+        </Button>
+        <details className="text-sm text-muted-foreground">
+          <summary className="cursor-pointer select-none hover:text-foreground">Ver o prompt</summary>
+          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-4 text-xs leading-relaxed">
+            {PROMPT_IA}
+          </pre>
+        </details>
       </CardContent>
     </Card>
   );
@@ -207,7 +202,19 @@ export function Consultar() {
   const [jaExecutou, setJaExecutou] = useState(false);
   const [resultado, setResultado] = useState<ResultadoConsulta | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  // o resumo do dia alimenta a conversa simulada (mesma fonte da Home; não é DuckDB)
+  const [resumo, setResumo] = useState<Resumo | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    void carregarResumo().then((r) => {
+      if (vivo) setResumo(r);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -255,10 +262,15 @@ export function Consultar() {
 
   function levarAoConsole(consulta: string) {
     setSql(consulta);
-    editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    editorRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
     editorRef.current?.focus({ preventScroll: true });
     // a cópia é um extra (colar na IA para adaptar): só prometemos se deu certo
-    navigator.clipboard.writeText(consulta).then(
+    const area = navigator.clipboard;
+    if (!area) {
+      toast.success('SQL pronto no console — é só executar.');
+      return;
+    }
+    area.writeText(consulta).then(
       () => toast.success('SQL pronto no console (e copiado) — é só executar.'),
       () => toast.success('SQL pronto no console — é só executar.'),
     );
@@ -296,20 +308,23 @@ export function Consultar() {
     <div className="mx-auto max-w-7xl space-y-8 px-4 py-10 sm:px-6 sm:py-12">
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">
-          Console aberto
+          A sua IA + os dados
         </p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-          Consulte os dados você mesmo
+          Pergunte à sua IA — ela consulta os dados sozinha
         </h1>
         <p className="mt-3 max-w-3xl leading-relaxed text-muted-foreground">
-          As consultas rodam <strong className="text-foreground">no seu navegador</strong> (DuckDB
-          WebAssembly), direto sobre os dados públicos que extraímos diariamente do TSE — nada é
-          enviado a servidor nenhum. Na primeira execução o navegador baixa o motor e os dados
-          necessários; as seguintes são rápidas.
+          Claude, ChatGPT, Cursor e qualquer cliente que fale MCP ligam direto no nosso servidor
+          público e respondem em português com os números do dia. Prefere as mãos na massa? O
+          console SQL continua aqui embaixo, rodando{' '}
+          <strong className="text-foreground">no seu navegador</strong> (DuckDB WebAssembly) —
+          nada é enviado a servidor nenhum.
         </p>
       </div>
 
-      <BlocoIA aoEscolher={levarAoConsole} />
+      <BlocoMCP resumo={resumo} />
+
+      <BlocoPrompt />
 
       <Card>
         <CardHeader>
@@ -318,31 +333,35 @@ export function Consultar() {
             Console SQL
           </CardTitle>
           <CardDescription>
-            Clique numa tabela para ver as colunas dela. Os atalhos já vêm filtrados (sem
-            linhas-placeholder) e com a coluna <code>valor</code> numérica pronta — o prompt da IA
-            acima descreve tudo em detalhe.
+            Perguntas prontas com o SQL que as responde, atalhos por tabela e um editor livre. Na
+            primeira execução o navegador baixa o motor e os dados necessários; as seguintes são
+            rápidas.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
-            {CATALOGO.map((grupo) => (
-              <div key={grupo.rotulo} className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
-                <span className="w-full text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:w-24 sm:shrink-0">
-                  {grupo.rotulo}
+        <CardContent className="space-y-5">
+          {GRUPOS_PERGUNTAS.map((grupo) => (
+            <div key={grupo.titulo}>
+              <p className="mb-2 text-sm font-semibold">
+                {grupo.titulo}{' '}
+                <span className="font-normal text-muted-foreground">
+                  (clique e o SQL pronto vai para o editor)
                 </span>
-                {grupo.tabelas.map((tabela) => (
-                  <button
-                    key={tabela}
-                    onClick={() => descrever(tabela)}
-                    title={`Ver as colunas de ${tabela}`}
-                    className="rounded-md border border-transparent bg-background px-1.5 py-0.5 font-mono text-xs text-foreground/80 shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-[#264E9B]"
-                  >
-                    {tabela}
-                  </button>
+              </p>
+              <ul className="grid gap-1.5 sm:grid-cols-2">
+                {grupo.perguntas.map((p) => (
+                  <li key={p.pergunta}>
+                    <button
+                      onClick={() => levarAoConsole(p.sql)}
+                      className="group flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <MessageSquareText className="mt-0.5 h-4 w-4 shrink-0 text-[#264E9B] opacity-60 group-hover:opacity-100" />
+                      {p.pergunta}
+                    </button>
+                  </li>
                 ))}
-              </div>
-            ))}
-          </div>
+              </ul>
+            </div>
+          ))}
 
           <div className="space-y-1.5">
             {GRUPOS_EXEMPLOS.map((grupo) => (
@@ -360,6 +379,30 @@ export function Consultar() {
                     className="rounded-full border border-[#264E9B]/20 bg-[#264E9B]/5 px-3 py-1 text-xs font-medium text-[#264E9B] transition-colors hover:border-[#264E9B]/40"
                   >
                     {ex.rotulo}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
+            <p className="text-xs text-muted-foreground">
+              Clique numa tabela para ver as colunas. Os atalhos já vêm sem linhas-placeholder e
+              com a coluna <code>valor</code> numérica pronta.
+            </p>
+            {CATALOGO.map((grupo) => (
+              <div key={grupo.rotulo} className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+                <span className="w-full text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:w-24 sm:shrink-0">
+                  {grupo.rotulo}
+                </span>
+                {grupo.tabelas.map((tabela) => (
+                  <button
+                    key={tabela}
+                    onClick={() => descrever(tabela)}
+                    title={`Ver as colunas de ${tabela}`}
+                    className="rounded-md border border-transparent bg-background px-1.5 py-0.5 font-mono text-xs text-foreground/80 shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-[#264E9B]"
+                  >
+                    {tabela}
                   </button>
                 ))}
               </div>

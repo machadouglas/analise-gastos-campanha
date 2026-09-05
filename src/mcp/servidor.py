@@ -116,7 +116,7 @@ async def _uma(sql: str, tabelas: tuple[str, ...] = ()) -> dict | None:
 def _erro_de_consulta(e: Exception) -> ToolError:
     if isinstance(e, gate.ConsultaRecusada):
         return ToolError(f"consulta recusada: {e}")
-    if isinstance(e, dados.TempoEsgotado | dados.Ocupado):
+    if isinstance(e, dados.TempoEsgotado | dados.Ocupado | dados.ResultadoLargo):
         return ToolError(str(e))
     if isinstance(e, duckdb.Error):
         return ToolError(
@@ -412,7 +412,8 @@ async def visao_geral() -> dict[str, Any]:
 @mcp.tool(annotations=SOMENTE_LEITURA)
 async def sql(consulta: str, limite: int = MAX_LINHAS) -> dict[str, Any]:
     """Consulta livre em SQL (dialeto DuckDB) sobre todas as tabelas publicadas
-    — só leitura, um statement, até 500 linhas, 10 s. O esquema está nas
+    — só leitura, um statement, até 500 linhas e 100 colunas, texto cortado em
+    2.000 caracteres por célula, 10 s. O esquema está nas
     instruções do servidor e no recurso radar://esquema. Prefira despesas_atual
     e receitas_atual (extração mais recente, coluna `valor` pronta) e as views
     despesas_removidas/receitas_removidas para remoções. Erros voltam com a

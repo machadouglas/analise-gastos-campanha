@@ -439,3 +439,17 @@ def test_mcp_sinais_e_cte_iguais_ao_site():
         assert f"'{nome}'" in cte and filtro in cte
     assert "m.valor > COALESCE(buf.p95, bbr.p95)" in cte
     assert "LIKE 'pct_%'" not in cte
+
+
+def test_mcp_ferramentas_listadas_no_site_sao_as_do_servidor():
+    """A página Consultar lista as ferramentas do MCP (FERRAMENTAS_MCP em
+    site/src/lib/mcp.ts); ferramenta nova ou renomeada em src/mcp/servidor.py
+    tem de aparecer lá — senão o site promete uma lista velha."""
+    servidor = (RAIZ / "src" / "mcp" / "servidor.py").read_text(encoding="utf-8")
+    no_servidor = set(re.findall(r"@mcp\.tool\([^)]*\)\s*async def (\w+)\(", servidor))
+    mcp_ts = (RAIZ / "site" / "src" / "lib" / "mcp.ts").read_text(encoding="utf-8")
+    bloco = mcp_ts[mcp_ts.index("FERRAMENTAS_MCP: FerramentaMCP[]"):]
+    no_site = set(re.findall(r"nome: '(\w+)'", bloco))
+    assert no_servidor, "nenhuma ferramenta encontrada em servidor.py (mudou o decorator?)"
+    assert no_site == no_servidor, (
+        f"faltam no site: {no_servidor - no_site}; sobram no site: {no_site - no_servidor}")
