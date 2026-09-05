@@ -121,3 +121,12 @@ docker run --rm -p 8000:8000 radar-mcp
 - Logo após um deploy que muda o esquema exportado, o MCP pode rodar código
   novo sobre o Parquet do dia anterior até a rotina republicar: tabelas
   ausentes viram campos nulos, nunca erro de boot.
+- **Dê um limite de memória ao container** (no Coolify: Advanced → Resources,
+  ex.: 1 GB) — é o último guarda-corpo, e o único que o processo não consegue
+  furar. O `memory_limit` do DuckDB (`MCP_MEMORIA`) só cobre o buffer manager:
+  medido em 05/09/2026, `SELECT range(5000000) FROM range(20)` chegou a 511 MB
+  de RSS com `memory_limit=64MB`. A projeção limitada do executor (célula de
+  2.000 caracteres, 100 colunas) impede que isso vaze para o Python, mas a
+  materialização dentro do DuckDB continua sem teto rígido. Com o limite no
+  container, o pior caso é o Docker reiniciar o processo (health check em
+  `/saude`) — sem ele, é o host inteiro que sente.

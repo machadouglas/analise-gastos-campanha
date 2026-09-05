@@ -20,6 +20,11 @@ import duckdb
 # DESCRIBE/SUMMARIZE/SHOW/FROM viram SELECT no DuckDB; PIVOT/UNPIVOT não.
 TIPOS_ACEITOS = {"SELECT"}
 INICIO_PIVOT = re.compile(r"^\s*(un)?pivot\b", re.IGNORECASE)
+# O parser roda no event loop, antes do timeout da execução. Ele é rápido e
+# recusa aninhamento fundo ("memory exhausted"), mas o texto não precisa ser
+# ilimitado: o corpo HTTP já é limitado em 4 MB pelo SDK; aqui, folga larga
+# para qualquer consulta legítima.
+MAX_CHARS_SQL = 50_000
 
 
 class ConsultaRecusada(ValueError):
@@ -37,6 +42,11 @@ def validar_leitura(sql: str) -> str:
     texto = (sql or "").strip().rstrip(";").strip()
     if not texto:
         raise ConsultaRecusada("consulta vazia.")
+    if len(texto) > MAX_CHARS_SQL:
+        raise ConsultaRecusada(
+            f"consulta longa demais ({len(texto)} caracteres; o teto é {MAX_CHARS_SQL}). "
+            "Use tabelas prontas e filtros em vez de listas literais gigantes."
+        )
     if INICIO_PIVOT.match(_sem_comentarios(texto)):
         raise ConsultaRecusada(
             "PIVOT/UNPIVOT não são aceitos nesta versão (o parser os reescreve como "

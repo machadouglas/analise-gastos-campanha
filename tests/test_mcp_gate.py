@@ -178,3 +178,71 @@ def test_sql_livre_tem_fila_propria_e_nao_esgota_as_ferramentas(executor):
             await lenta
 
     _rodar(cenario())
+
+
+# --------------------------------------------------------------------------- #
+# revisão de segurança de 05/09/2026: o que o memory_limit do DuckDB NÃO cobre
+# --------------------------------------------------------------------------- #
+
+def test_celula_gigante_e_limitada_dentro_do_duckdb(executor):
+    """Medido antes da correção: 20 strings de 50 MB (20 linhas!) levavam o
+    processo a 2 GB e travavam o event loop por 1 s; uma lista de 5 M inteiros
+    por linha segurava a thread 56 s depois do interrupt(). A conversão para
+    Python não é interrompível — a limitação tem de acontecer no DuckDB."""
+    r = _rodar(executor.consultar(
+        "SELECT repeat('x', 5000000) AS s, range(100000) AS l, [1, 2] AS pequena, 7 AS n"))
+    linha = r.linhas[0]
+    assert len(linha["s"]) == dados.MAX_CHARS_CELULA
+    assert linha["l"] is None                # aninhado grande demais vira NULL
+    assert linha["pequena"] == [1, 2] and linha["n"] == 7   # o resto passa intacto
+
+
+def test_colunas_demais_e_recusado_antes_de_executar(executor):
+    sql = "SELECT " + ", ".join(f"1 AS c{i}" for i in range(dados.MAX_COLUNAS + 1))
+    with pytest.raises(dados.ResultadoLargo, match="colunas"):
+        _rodar(executor.consultar(sql))
+
+
+def test_projecao_limitada_preserva_ordem_nomes_e_comentario_final(executor):
+    r = _rodar(executor.consultar(
+        'SELECT id, nome AS "n m" FROM coisas ORDER BY id DESC -- comentário no fim',
+        max_linhas=3))
+    assert r.colunas == ["id", "n m"]
+    assert [linha["id"] for linha in r.linhas] == [1999, 1998, 1997]
+    r = _rodar(executor.consultar("DESCRIBE coisas"))
+    assert [linha["column_name"] for linha in r.linhas] == ["id", "nome"]
+    r = _rodar(executor.consultar("SELECT 1 AS a, 2 AS a"))   # nome duplicado
+    assert r.linhas == [{"a": 1, "a_1": 2}]
+
+
+def test_gate_recusa_sql_longo_demais():
+    sql = "SELECT 1 WHERE 'a' IN (" + ",".join(["'b'"] * 20000) + ")"
+    with pytest.raises(gate.ConsultaRecusada, match="longa demais"):
+        gate.validar_leitura(sql)
+
+
+def test_nome_de_parquet_do_resumo_nao_vira_caminho(tmp_path, monkeypatch):
+    """O nome vem do resumo.json baixado e vira caminho de escrita no container:
+    '../x.parquet', 'sub/x.parquet' ou 'X.parquet' são ignorados com aviso,
+    nunca baixados (release comprometido não escreve fora do cache)."""
+    chamados = []
+    monkeypatch.setattr(dados.publicado, "baixar_arquivo",
+                        lambda nome, alvo, base=None, **kw: chamados.append(nome))
+    resumo = {"arquivos": {"../fora.parquet": "0" * 32, "sub/dir.parquet": "0" * 32,
+                           "Maiuscula.parquet": "0" * 32, "x.duckdb": "0" * 32}}
+    b = dados.baixar_e_construir(tmp_path, resumo=resumo)
+    try:
+        assert chamados == [] and b.tabelas == []
+    finally:
+        b.fechar()
+
+
+def test_filtro_de_uf_com_apostrofo_continua_literal():
+    """repr() trocava para aspas duplas (identificador em SQL) quando o valor
+    trazia apóstrofo; agora é sempre literal com aspas simples escapadas."""
+    from src.mcp import consultas
+    assert consultas.cond_uf("SP,X'Y") == "SG_UF IN ('SP', 'X''Y')"
+    assert consultas.cond_uf("a\\b, \x00") == "SG_UF IN ('A\\B', '\x00')"
+    n = duckdb.sql("SELECT count(*) FROM (SELECT 'SP' AS SG_UF) WHERE "
+                   + consultas.cond_uf("SP,X'Y")).fetchone()[0]
+    assert n == 1

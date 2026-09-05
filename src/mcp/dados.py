@@ -30,6 +30,7 @@ from src import publicado
 log = logging.getLogger("radar.mcp")
 
 NOME_TABELA = re.compile(r"^[a-z][a-z0-9_]*$")
+NOME_PARQUET = re.compile(r"^[a-z][a-z0-9_]*\.parquet$")
 
 # Configuração da conexão de leitura: sem acesso externo (read_csv/httpfs/glob/
 # getenv fora), memória e threads limitadas, e tudo travado — uma consulta não
@@ -136,6 +137,11 @@ def baixar_e_construir(dir_cache: Path, base: str | None = None,
     dir_cache.mkdir(parents=True, exist_ok=True)
     parquets: dict[str, Path] = {}
     for nome in _nomes_parquet(resumo):
+        # o nome vem do resumo.json baixado e vira caminho de escrita: só
+        # `nome.parquet` simples (sem '/', '..' ou maiúscula) chega ao disco
+        if not NOME_PARQUET.match(nome):
+            log.warning("nome de arquivo inesperado no resumo.json, ignorado: %r", nome)
+            continue
         alvo = dir_cache / nome
         md5_esperado = esperados.get(nome)
         if not (alvo.exists() and md5_esperado and publicado.md5(alvo) == md5_esperado):
@@ -231,6 +237,46 @@ class Ocupado(Exception):
     pass
 
 
+class ResultadoLargo(Exception):
+    """Resultado com colunas demais — a mensagem é para o modelo corrigir."""
+
+
+# Teto por célula e por número de colunas. O memory_limit do DuckDB só cobre o
+# DuckDB: medido em 05/09/2026, `SELECT repeat('x', 50000000) FROM range(20)`
+# (20 linhas) levava o processo a 2 GB e travava o event loop por 1 s, e uma
+# lista de 5 M inteiros por linha segurava a thread 56 s depois do interrupt()
+# — a conversão para Python e o json.dumps não são interrompíveis. Por isso a
+# limitação acontece DENTRO do DuckDB, numa projeção externa montada a partir
+# do esquema do resultado (ver Executor._executar).
+MAX_COLUNAS = 100
+MAX_CHARS_CELULA = 2_000
+
+# Tipos cuja célula tem tamanho fixo pequeno: passam sem tratamento. O resto
+# (VARCHAR, BLOB, BIT, JSON, VARINT, LIST/STRUCT/MAP/UNION/ARRAY...) é limitado.
+_TIPOS_COMPACTOS = re.compile(
+    r"^(BOOLEAN|U?(TINY|SMALL|BIG|HUGE)?INT(EGER)?|FLOAT|DOUBLE|DECIMAL\([^\[]*\)"
+    r"|DATE|TIME[A-Z_ ]*|INTERVAL|UUID|ENUM\([^\[]*\))$",   # o $ importa: 'BIGINT[]' é lista
+    re.IGNORECASE,
+)
+
+
+def expressao_limitada(coluna: str, tipo: str) -> str:
+    """Expressão de projeção que devolve a coluna com a célula limitada a
+    MAX_CHARS_CELULA: texto é cortado; tipo aninhado grande demais vira NULL
+    (cortar uma lista pela metade mudaria o significado)."""
+    q = '"' + coluna.replace('"', '""') + '"'
+    tipo = tipo.strip().upper()
+    if _TIPOS_COMPACTOS.match(tipo):
+        return q
+    if tipo == "VARCHAR":
+        return f"left({q}, {MAX_CHARS_CELULA}) AS {q}"
+    condicao = f"length(CAST({q} AS VARCHAR)) <= {MAX_CHARS_CELULA}"
+    if tipo.endswith("]"):  # LIST/ARRAY: len() antes do CAST poupa a string gigante
+        # (medido: 20 listas de 5 M inteiros — 1.263 MB só com o CAST, 491 MB assim)
+        condicao = f"len({q}) <= {MAX_CHARS_CELULA} AND {condicao}"
+    return f"CASE WHEN {condicao} THEN {q} END AS {q}"
+
+
 @dataclass
 class Resultado:
     colunas: list[str]
@@ -323,12 +369,40 @@ class Executor:
     async def _executar(self, sql: str, parametros: list, teto: int) -> Resultado:
         cur = self.banco.cursor()
         inicio = time.perf_counter()
+        # a quebra de linha antes do ')' protege um comentário `--` no fim
+        interno = f"(\n{sql.strip().rstrip(';')}\n)"
+        max_bytes = self.max_bytes
 
         def rodar():
-            cur.execute(sql, parametros)
-            colunas = [d[0] for d in (cur.description or [])]
-            linhas = cur.fetchmany(teto + 1)
-            return colunas, linhas
+            # 1) só o esquema do resultado (LIMIT 0 não executa o plano): é o
+            #    que permite montar a projeção limitada antes de materializar
+            cur.execute(f"SELECT * FROM {interno} LIMIT 0", parametros)
+            descricao = cur.description or []
+            if len(descricao) > MAX_COLUNAS:
+                raise ResultadoLargo(
+                    f"a consulta devolve {len(descricao)} colunas; o teto é {MAX_COLUNAS}. "
+                    "Selecione só as colunas necessárias."
+                )
+            colunas = [d[0] for d in descricao]
+            projecao = ", ".join(expressao_limitada(d[0], str(d[1])) for d in descricao)
+            # 2) a consulta de verdade, já com cada célula limitada DENTRO do
+            #    DuckDB (memória limitada e interrompível) — nada gigante chega
+            #    ao Python
+            cur.execute(f"SELECT {projecao} FROM {interno} LIMIT {teto + 1}", parametros)
+            brutas = cur.fetchmany(teto + 1)
+            truncado = len(brutas) > teto
+            # 3) serialização aqui, na thread, com orçamento de bytes numa
+            #    passada só — o event loop nunca vê o resultado cru
+            linhas: list[dict[str, Any]] = []
+            tamanho, truncado_bytes = 2, False
+            for linha in brutas[:teto]:
+                d = dict(zip(colunas, (json_seguro(v) for v in linha), strict=True))
+                tamanho += len(json.dumps(d, ensure_ascii=False)) + 2
+                if linhas and tamanho > max_bytes:
+                    truncado_bytes = True
+                    break
+                linhas.append(d)
+            return colunas, linhas, truncado, truncado_bytes
 
         tarefa = asyncio.get_running_loop().run_in_executor(None, rodar)
         # asyncio.wait não cancela a tarefa (cancelar não interrompe o DuckDB);
@@ -347,17 +421,9 @@ class Executor:
                 "(indicadores, rede, benchmark_*)."
             )
         try:
-            colunas, brutas = tarefa.result()
+            colunas, linhas, truncado, truncado_bytes = tarefa.result()
         finally:
             cur.close()
-        truncado = len(brutas) > teto
-        linhas = [dict(zip(colunas, (json_seguro(v) for v in linha), strict=True))
-                  for linha in brutas[:teto]]
-        truncado_bytes = False
-        while linhas and len(json.dumps(linhas, ensure_ascii=False)) > self.max_bytes:
-            corte = max(1, len(linhas) // 2)
-            linhas = linhas[:corte] if corte < len(linhas) else linhas[:-1]
-            truncado_bytes = True
         return Resultado(colunas, linhas, truncado, truncado_bytes,
                          int((time.perf_counter() - inicio) * 1000))
 

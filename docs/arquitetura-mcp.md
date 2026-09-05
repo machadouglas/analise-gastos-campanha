@@ -186,9 +186,21 @@ modelo se comportar; todos ficam no DuckDB e no container.
 - **Timeout por interrupção** (ex.: 10 s): a consulta roda numa thread;
   passado o prazo, `con.interrupt()`. O processo sobrevive; o modelo recebe
   "consulta demorou demais — restrinja por UF/cargo ou use as views prontas".
-- **Teto de linhas e bytes**: `LIMIT 500` imposto por subconsulta
-  (`SELECT * FROM (<consulta>) LIMIT 500`) e resposta truncada em ~200 KB
-  com aviso.
+- **Teto de linhas, colunas, célula e bytes**: a consulta roda em duas
+  passadas. A primeira, `SELECT * FROM (<consulta>) LIMIT 0`, só devolve o
+  esquema do resultado (não executa o plano); com ele o executor monta uma
+  projeção externa que corta texto em 2.000 caracteres (`left`) e anula
+  aninhado maior que isso, recusa mais de 100 colunas e impõe `LIMIT 501`.
+  A segunda passada é essa projeção — e é por isso que nada gigante chega ao
+  Python. Motivo, medido em 05/09/2026: o `memory_limit` do DuckDB não cobre
+  a conversão para objetos Python nem o `json.dumps`, e o `interrupt()` não os
+  interrompe. `SELECT repeat('x', 50000000) FROM range(20)` (20 linhas)
+  levava o processo a 2 GB e travava o event loop por 1 s; uma lista de 5 M
+  inteiros por linha segurava a thread 56 s depois do timeout. Depois da
+  projeção, a serialização acontece na própria thread, com orçamento de
+  ~200 KB numa passada só, e o resultado volta com aviso quando truncado.
+  O texto do SQL é limitado a 50 mil caracteres antes do parser (que roda
+  no event loop).
 - **Erros voltam como texto útil**, não como stack: mensagem do DuckDB +
   lembrete do esquema + dica das views prontas.
 - **Concorrência limitada** por processo, em **duas filas**: as ferramentas

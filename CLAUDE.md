@@ -130,8 +130,13 @@ inclui `serie_nacional` para os sparklines dos cartões; a Home NÃO carrega Duc
 Explorar (visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica; sem
 categoria vira lista de cards com foto e chips), removidas, removidas-receitas, compartilhados,
 sem-nota, pessoa-fisica — combináveis com os filtros; mapa de tiles por UF clicável) e Consultar
-(DuckDB-WASM no navegador + prompt copiável para a IA pessoal do visitante gerar SQL —
-`site/src/lib/prompt.ts`; mantenha esse prompt sincronizado com o schema). Fichas
+(MCP-first: URL do servidor, clientes, a lista de ferramentas — `FERRAMENTAS_MCP` em
+`lib/mcp.ts`, conferida contra `servidor.py` pelo teste de sincronia — e uma conversa
+simulada, `components/app/conversa-mcp.tsx`, em que a IA chama as ferramentas com os
+números do `resumo.json` do dia e cai num exemplo declaradamente fictício sem ele; depois
+o prompt copiável para a IA pessoal gerar SQL — `site/src/lib/prompt.ts`; mantenha esse
+prompt sincronizado com o schema — e o console DuckDB-WASM, com as consultas prontas de
+`lib/exemplos.ts` reduzidas ao que traz resultado forte ou que nenhuma outra página responde). Fichas
 `/candidato/:sq` (composição da receita, sankey do fluxo, beeswarm do grupo, grafo de conexões,
 cartão de compartilhamento em PNG via `lib/cartao.ts`), `/partido/:sigla` e `/fornecedor/:id`
 (id = NR_CPF_CNPJ_FORNECEDOR; linke só ids com `temFichaFornecedor`) consomem os Parquet
@@ -192,7 +197,11 @@ md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
 - **Guarda-corpos da `sql`** (`gate.py` + `dados.Executor`): parser do DuckDB
   (um statement, tipo SELECT — PIVOT/UNPIVOT recusados, exceção documentada),
   conexão `read_only` com `enable_external_access=false` e `lock_configuration`,
-  timeout por `interrupt()`, teto de 500 linhas e ~200 KB, duas filas (8 vagas
+  timeout por `interrupt()`, teto de 500 linhas e ~200 KB, **célula limitada a
+  2.000 caracteres e 100 colunas por uma projeção externa montada dentro do DuckDB**
+  (o `memory_limit` não cobre a conversão para Python nem o `json.dumps`, e o
+  `interrupt()` não os interrompe — 20 strings de 50 MB levavam o processo a 2 GB),
+  SQL de até 50 mil caracteres, duas filas (8 vagas
   para as ferramentas curadas, 4 para a `sql` livre — medido: uma fila só deixava
   cross joins esgotarem as vagas das fichas).
 - **Deploy**: `Dockerfile.mcp` (testes no build), aplicação separada no mesmo
