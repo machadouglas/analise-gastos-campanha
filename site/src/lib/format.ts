@@ -63,3 +63,16 @@ export function celula(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
+
+/** Nome de exibição de um candidato. O de URNA é o principal: é como a campanha
+ *  divulga e como o eleitor procura ("ACM NETO", "DOUTORA NATASHA"); o civil
+ *  vira secundário quando difere. Urna vazia ou '#NULO' cai no civil. */
+export function nomeCandidato(
+  urna: unknown,
+  civil: unknown,
+): { principal: string; civil: string | null } {
+  const c = String(civil ?? '').trim();
+  const u = String(urna ?? '').trim();
+  const principal = u && u !== '#NULO' ? u : c;
+  return { principal, civil: c && c.toUpperCase() !== principal.toUpperCase() ? c : null };
+}

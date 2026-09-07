@@ -4,7 +4,7 @@ import {
   CONDICAO_DOCUMENTO_NAO_FISCAL, CONDICAO_DOCUMENTO_NUMERADO, CONDICAO_NOTA_SEM_NUMERO,
   FILTROS_VAZIOS, MINIMO_NOTAS_VALOR_REPETIDO, ORIGEM_FINANCIAMENTO_COLETIVO, SINAIS_FILTRO, condicaoSemNota,
   condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlDocumentoDaNota, sqlNotasDoCandidato,
-  sqlPainel, sqlRegistrosSemMovimento, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
+  sqlPainel, sqlBuscaCandidatos, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
 } from './consultas';
 
 const f = (parcial: Partial<typeof FILTROS_VAZIOS>) => ({ ...FILTROS_VAZIOS, ...parcial });
@@ -41,6 +41,22 @@ describe('montarWhere', () => {
   it('candidato numérico busca por número, texto busca por nome', () => {
     expect(montarWhere(f({ candidato: '12345' }))).toContain("NR_CANDIDATO = '12345'");
     expect(montarWhere(f({ candidato: 'FULANO' }))).toContain("NM_CANDIDATO ILIKE '%FULANO%'");
+  });
+
+  // o painel, a tabela e o fora-da-curva rodam sobre a prestação, que só tem o
+  // nome civil: "ACM NETO" tem de chegar lá pelo registro, senão o cartão lista
+  // o candidato e os números logo abaixo dizem zero
+  it('nome de candidato também casa o nome de urna, via registro', () => {
+    const w = montarWhere(f({ candidato: 'ACM NETO' }));
+    expect(w).toContain("NM_CANDIDATO ILIKE '%ACM%'");
+    expect(w).toContain("SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos WHERE (NM_URNA_CANDIDATO ILIKE '%ACM%'");
+    expect(whereIndicadores(f({ candidato: 'ACM NETO' }))).toContain(
+      'i.SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos',
+    );
+    // número não passa pelo registro; sem o parquet de candidatos, só o civil
+    expect(montarWhere(f({ candidato: '12345' }))).not.toContain('candidatos');
+    expect(montarWhere(f({ candidato: 'ACM NETO' }), false, false)).not.toContain('candidatos');
+    expect(whereIndicadores(f({ candidato: 'ACM NETO' }), false)).not.toContain('candidatos');
   });
 
   it('nome com várias palavras exige todas, em qualquer ordem (acha "JOSE DA SILVA")', () => {
@@ -208,13 +224,37 @@ describe('sqlForaDaCurvaCards', () => {
   });
 });
 
-describe('sqlRegistrosSemMovimento', () => {
-  it('busca por nome/urna, exclui quem já movimentou e escapa a entrada', () => {
-    const sql = sqlRegistrosSemMovimento(f({ candidato: "D'AVILA" }), 100);
+describe('sqlBuscaCandidatos', () => {
+  it('busca por nome de urna e escapa a entrada', () => {
+    const sql = sqlBuscaCandidatos(f({ candidato: "D'AVILA" }), 100);
     expect(sql).toContain('NM_URNA_CANDIDATO ILIKE');
-    expect(sql).toContain('NOT IN (SELECT SQ_CANDIDATO FROM indicadores)');
     expect(sql).toContain("D''AVILA");
-    expect(sqlRegistrosSemMovimento(f({ candidato: '12345' }), 100)).toContain("NR_CANDIDATO = '12345'");
+    expect(sqlBuscaCandidatos(f({ candidato: '12345' }), 100)).toContain("NR_CANDIDATO = '12345'");
+  });
+
+  // a regressão: quem tem movimento saía de indicadores/despesas, que não têm
+  // nome de urna — "JANE MARREE" (civil "JANE APARECIDA DA SILVA") sumia
+  it('parte do registro e traz também quem JÁ movimentou', () => {
+    const sql = sqlBuscaCandidatos(f({ candidato: 'MARREE' }), 100);
+    expect(sql).toContain('FROM candidatos');
+    expect(sql).not.toContain('NOT IN (SELECT SQ_CANDIDATO FROM indicadores)');
+    expect(sql).toContain('LEFT JOIN indicadores');
+    expect(sql).toContain('tem_movimento');
+  });
+
+  // e quem só arrecadou: os totais vêm de indicadores (despesa OU receita),
+  // não de despesas_atual
+  it('não filtra por despesa quando só há busca por candidato', () => {
+    expect(sqlBuscaCandidatos(f({ candidato: 'JANE' }), 100)).not.toContain('FROM despesas_atual');
+    expect(sqlBuscaCandidatos(f({ candidato: 'JANE', fornecedor: 'GRAFICA' }), 100))
+      .toContain('FROM despesas_atual');
+  });
+
+  it('sem o parquet de candidatos, degrada para os indicadores', () => {
+    const sql = sqlBuscaCandidatos(f({ candidato: 'JANE' }), 100, false);
+    expect(sql).not.toContain('FROM candidatos');
+    expect(sql).not.toContain('NM_URNA_CANDIDATO');
+    expect(sql).toContain('FROM indicadores');
   });
 });
 

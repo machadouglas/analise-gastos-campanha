@@ -63,7 +63,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 - `extracoes` — registro de cada dia de extração já visto (alimenta a série).
 - `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
 - `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
-- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
+- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): `NM_URNA_CANDIDATO` (do registro; NULL sem o parquet/coluna — é o nome principal do site), totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
 - `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
 - `norma_documento` — por DS_ORIGEM_DESPESA: quanto do valor é declarado com documento fiscal (só entre fornecedores PJ) e `exige_documento` (a categoria tem nota como norma). É a régua do indicador `valor_sem_nota`: sem ela, marcar "sem nota" pegava metade do dinheiro do país, porque em impulsionamento/honorários/militância quase ninguém emite nota. Categoria com menos de 30 notas (itens agrupados por SQ_DESPESA; `-1` conta linha a linha) cai na lista fixa de `analises.py` (que é sempre o piso).
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
@@ -152,6 +152,16 @@ Não há rota `/despesa/:id`: 88% dos pares candidato×fornecedor têm uma únic
 nota, então a página seria uma repetição da linha — e `SQ_DESPESA` não serve de
 chave (o SPCE regenera).
 
+**Nome do candidato no site: o de urna é o principal** (é como a campanha divulga e
+como o eleitor procura — metade das candidaturas com movimento usa na urna um nome que
+não está no civil), e o civil aparece como secundário quando difere. A prestação só traz
+`NM_CANDIDATO`, então: `duckdb.ts` registra sempre a view `nomes_urna` (do parquet de
+candidatos; vazia sem ele, para os JOINs degradarem em vez de quebrar), toda consulta
+que mostra candidato junta `JOIN_NOMES_URNA` e projeta `nomeExibicao()` (`consultas.ts`),
+e o que vem do `resumo.json` (Home, conversa MCP) passa por `nomeCandidato()` em
+`format.ts` — o backend grava `NM_URNA_CANDIDATO` em `indicadores` e em todo registro
+de candidato do `resumo.json` (`resumo._join_urna`).
+
 Regras espelhadas do backend vivem centralizadas em `site/src/lib/consultas.ts`
 (categorias sem NF ↔ `src/analises.py`; SINAIS_CTE/SINAIS_FILTRO ↔ `METRICAS_SINAL` em
 `src/resumo.py`; CONDICAO_NOTA_SEM_NUMERO/CONDICAO_DOCUMENTO_NUMERADO ↔ as análises 12 e
@@ -161,7 +171,12 @@ a lápide de CNPJ que a Receita respondeu 404, que vira aviso na ficha do fornec
 marca a linha na tabela de fornecedores do candidato; ORIGEM_FINANCIAMENTO_COLETIVO/CONDICAO_DOACAO_DIRETA
 e CATEGORIA_IMPULSIONAMENTO ↔ as exclusões das flags 4 e 13 em `src/analises.py` — o anel
 "dinheiro que volta" das fichas só fecha com doação direta; COR_RACA_NEGRA em `partido.tsx` ↔
-`src/agregados.py`) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
+`src/agregados.py`; `sqlBuscaCandidatos` ↔ `sql_buscar_candidato` em `src/mcp/consultas.py` —
+a busca parte do **registro** (`candidatos`, único que tem NM_URNA_CANDIDATO) e pega os
+totais de `indicadores` por LEFT JOIN: metade das candidaturas com movimento usa na urna um
+nome que não está no nome civil, e é por ele que o eleitor procura; partir de
+`indicadores`/`despesas_atual` escondia essas e também quem só declarou receita) e
+`site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
 `despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);
 `tests/test_sincronia_site.py` cobre essa sincronia — remoções NUNCA se calculam "na unha"
 nas páginas, sempre pelas views. Componentes de visualização: `components/app/graficos.tsx`
