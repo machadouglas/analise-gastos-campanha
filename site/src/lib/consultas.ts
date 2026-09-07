@@ -306,19 +306,29 @@ export function condTexto(termo: string, colunas: string[], plural = false): str
   return porColuna.length === 1 ? porColuna[0] : `(${porColuna.join(' OR ')})`;
 }
 
+/** Filtro por candidato numa tabela da PRESTAÇÃO (indicadores, despesas_*,
+ *  receitas_*), que só traz NM_CANDIDATO. Número bate direto; nome casa o
+ *  civil ali mesmo OU, via registro, o de urna — a mesma régua de
+ *  sqlBuscaCandidatos, e pela mesma razão: sem ela, "ACM NETO" listava o
+ *  candidato no cartão e o painel logo abaixo dizia zero candidatos. Sem o
+ *  parquet de candidatos publicado (`temRegistro`), fica só o nome civil. */
+export function condCandidato(cand: string, prefixo = '', temRegistro = true): string {
+  if (/^\d+$/.test(cand)) return `${prefixo}NR_CANDIDATO = '${cand}'`;
+  const civil = condTexto(cand, [`${prefixo}NM_CANDIDATO`])!;
+  if (!temRegistro) return civil;
+  const urna = condTexto(cand, ['NM_URNA_CANDIDATO'])!;
+  return `(${civil} OR ${prefixo}SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos WHERE ${urna}))`;
+}
+
 /** Filtros aplicáveis sobre `indicadores` (fornecedor/descrição não existem lá). */
-export function whereIndicadores(f: Filtros): string {
+export function whereIndicadores(f: Filtros, temRegistro = true): string {
   const partes = ['1=1'];
   const uf = condUF(f.uf, 'i.');
   if (uf) partes.push(uf);
   if (f.cargo) partes.push(`i.DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
   if (f.partido) partes.push(`i.SG_PARTIDO = '${escSQL(f.partido)}'`);
   const cand = f.candidato.trim();
-  if (cand) {
-    partes.push(
-      /^\d+$/.test(cand) ? `i.NR_CANDIDATO = '${cand}'` : condTexto(cand, ['i.NM_CANDIDATO'])!,
-    );
-  }
+  if (cand) partes.push(condCandidato(cand, 'i.', temRegistro));
   return partes.join(' AND ');
 }
 
@@ -341,20 +351,14 @@ export function cteCategoria(categoria: string): string {
     WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND g.total > COALESCE(buf.p95, bbr.p95))`;
 }
 
-export function montarWhere(f: Filtros, receitas = false): string {
+export function montarWhere(f: Filtros, receitas = false, temRegistro = true): string {
   const partes = ['1=1'];
   const uf = condUF(f.uf);
   if (uf) partes.push(uf);
   if (f.cargo) partes.push(`DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
   if (f.partido) partes.push(`SG_PARTIDO = '${escSQL(f.partido)}'`);
   const cand = f.candidato.trim();
-  if (cand) {
-    partes.push(
-      /^\d+$/.test(cand)
-        ? `NR_CANDIDATO = '${cand}'`
-        : condTexto(cand, ['NM_CANDIDATO'])!,
-    );
-  }
+  if (cand) partes.push(condCandidato(cand, '', temRegistro));
   const forn = f.fornecedor.trim();
   if (forn) {
     const [colId, colNome, colNomeRfb] = receitas
@@ -385,9 +389,12 @@ export function whereDaVisao(
   sinal: SinalFiltro,
   categoria: string,
   temNorma = false,
+  temRegistro = true,
 ): { base: string; where: string } {
-  if (visao === 'removidas-receitas') return { base: 'receitas_removidas', where: montarWhere(f, true) };
-  const w = montarWhere(f);
+  if (visao === 'removidas-receitas') {
+    return { base: 'receitas_removidas', where: montarWhere(f, true, temRegistro) };
+  }
+  const w = montarWhere(f, false, temRegistro);
   if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
   if (visao === 'fora-da-curva') {
     // gráficos e KPIs mostram os gastos DOS candidatos fora da curva do recorte
@@ -397,7 +404,7 @@ export function whereDaVisao(
         where:
           `${w} AND SQ_CANDIDATO IN (WITH ${cteCategoria(categoria)} ` +
           `SELECT e.SQ_CANDIDATO FROM estouro e ` +
-          `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)})`,
+          `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f, temRegistro)})`,
       };
     }
     const porSinal = sinal ? ` AND s.metrica = '${sinal}'` : '';
@@ -406,7 +413,7 @@ export function whereDaVisao(
       where:
         `${w} AND SQ_CANDIDATO IN (WITH ${SINAIS_CTE} ` +
         `SELECT DISTINCT s.SQ_CANDIDATO FROM sinais s ` +
-        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)}${porSinal})`,
+        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f, temRegistro)}${porSinal})`,
     };
   }
   if (visao === 'sem-nota') {
@@ -439,7 +446,8 @@ export function whereDaVisao(
 
 /** SQL dos cards fora-da-curva: um candidato por linha, sinais agregados de
  *  forma legível por máquina (metrica~valor~p95;...) e, quando o parquet de
- *  candidatos traz CD_ELEICAO/SG_UE, os metadados da foto oficial. */
+ *  candidatos traz CD_ELEICAO/SG_UE, os metadados da foto oficial. `comFoto`
+ *  é também o que libera a busca por nome de urna — vêm do mesmo parquet. */
 export function sqlForaDaCurvaCards(
   f: Filtros,
   s: SinalFiltro,
@@ -459,7 +467,7 @@ export function sqlForaDaCurvaCards(
            STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais
     FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
     ${comFoto ? 'LEFT JOIN foto c USING (SQ_CANDIDATO)' : ''}
-    WHERE ${whereIndicadores(f)}
+    WHERE ${whereIndicadores(f, comFoto)}
     GROUP BY ALL
     ${s ? 'HAVING sinal_sel IS NOT NULL ORDER BY sinal_sel DESC' : 'ORDER BY n_sinais DESC, contratado DESC'}
     LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
@@ -474,6 +482,7 @@ export function sqlTabelaDaVisao(
   cat: string,
   pag: number,
   porPagina: number,
+  temRegistro = true,
 ): string {
   const paginacao = `LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
   if (v === 'removidas-receitas')
@@ -498,7 +507,7 @@ export function sqlTabelaDaVisao(
                     ROUND(i.total_contratado, 2) AS "Contratado",
                     ROUND(i.total_receitas, 2) AS "Arrecadado"
              FROM estouro e JOIN indicadores i USING (SQ_CANDIDATO)
-             WHERE ${whereIndicadores(f)}
+             WHERE ${whereIndicadores(f, temRegistro)}
              ORDER BY "Neste tipo de gasto" DESC
              ${paginacao}`;
   if (v === 'fora-da-curva') return ''; // sem categoria, a visão vira cards

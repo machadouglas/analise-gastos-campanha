@@ -488,3 +488,13 @@ def test_busca_de_candidato_cobre_o_nome_de_urna_nos_dois_lados():
     # as duas situações e separá-las por tem_movimento
     assert "NOT IN (SELECT SQ_CANDIDATO FROM indicadores)" not in corpo_site.group()
     assert "tem_movimento" in corpo_site.group()
+
+    # e o resto do Explorar (painel, tabela, fora-da-curva) filtra pela mesma
+    # régua: todo filtro de nome sobre a prestação passa por condCandidato, que
+    # chega ao nome de urna pelo registro
+    cond = re.search(r"export function condCandidato\(.*?\n}", CONSULTAS_TS, re.DOTALL)
+    assert cond and "NM_URNA_CANDIDATO" in cond.group()
+    for fn in ("montarWhere", "whereIndicadores"):
+        corpo = re.search(rf"export function {fn}\(.*?\n}}", CONSULTAS_TS, re.DOTALL)
+        assert corpo, f"{fn} não encontrada em consultas.ts"
+        assert "condCandidato(" in corpo.group(), f"{fn} filtra nome sem passar por condCandidato"

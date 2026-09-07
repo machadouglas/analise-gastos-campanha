@@ -205,7 +205,11 @@ export function Explorar() {
       // Set ainda está vazio e a régua do "sem documento fiscal" cairia no
       // fallback (lista fixa) mesmo com norma_documento publicada
       await obterConexao();
-      const { base, where: w } = whereDaVisao(v, f, s, cat, tabelasDisponiveis.has('norma_documento'));
+      // registro publicado = filtro por nome também casa o nome de urna
+      const temRegistro = tabelasDisponiveis.has('candidatos');
+      const { base, where: w } = whereDaVisao(
+        v, f, s, cat, tabelasDisponiveis.has('norma_documento'), temRegistro,
+      );
       const buscando = v === 'atual' && Boolean(f.candidato.trim());
       // uma consulta só, sobre o REGISTRO (que tem o nome de urna) somado aos
       // indicadores (que têm os totais) — buscar em despesas_atual escondia
@@ -214,7 +218,7 @@ export function Explorar() {
       // (sem checar tabelasDisponiveis: no primeiro load o Set ainda está
       // vazio — o executarSQL espera a conexão e o catch cobre parquet ausente)
       const achados = buscando
-        ? await executarSQL(sqlBuscaCandidatos(f, 100)).catch(() =>
+        ? await executarSQL(sqlBuscaCandidatos(f, 100, temRegistro)).catch(() =>
             executarSQL(sqlBuscaCandidatos(f, 100, false)).catch(() => ({ linhas: [] as unknown[][] })),
           )
         : { linhas: [] as unknown[][] };
@@ -231,7 +235,7 @@ export function Explorar() {
       });
       const comMovimento = achados.linhas.filter((l) => l[9]).map(candidatura);
       const semMovimento = achados.linhas.filter((l) => !l[9]).map(candidatura);
-      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA);
+      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA, temRegistro);
       const painel = sqlPainel(base, w, v);
       // cards do fora-da-curva: tenta com os metadados da foto; parquet de
       // candidatos antigo (sem CD_ELEICAO/SG_UE) cai na variante sem foto
@@ -239,7 +243,7 @@ export function Explorar() {
         await obterConexao();
         let r;
         try {
-          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, tabelasDisponiveis.has('candidatos')));
+          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, temRegistro));
         } catch {
           r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, false));
         }

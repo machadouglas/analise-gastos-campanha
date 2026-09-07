@@ -43,6 +43,22 @@ describe('montarWhere', () => {
     expect(montarWhere(f({ candidato: 'FULANO' }))).toContain("NM_CANDIDATO ILIKE '%FULANO%'");
   });
 
+  // o painel, a tabela e o fora-da-curva rodam sobre a prestação, que só tem o
+  // nome civil: "ACM NETO" tem de chegar lá pelo registro, senão o cartão lista
+  // o candidato e os números logo abaixo dizem zero
+  it('nome de candidato também casa o nome de urna, via registro', () => {
+    const w = montarWhere(f({ candidato: 'ACM NETO' }));
+    expect(w).toContain("NM_CANDIDATO ILIKE '%ACM%'");
+    expect(w).toContain("SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos WHERE (NM_URNA_CANDIDATO ILIKE '%ACM%'");
+    expect(whereIndicadores(f({ candidato: 'ACM NETO' }))).toContain(
+      'i.SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos',
+    );
+    // número não passa pelo registro; sem o parquet de candidatos, só o civil
+    expect(montarWhere(f({ candidato: '12345' }))).not.toContain('candidatos');
+    expect(montarWhere(f({ candidato: 'ACM NETO' }), false, false)).not.toContain('candidatos');
+    expect(whereIndicadores(f({ candidato: 'ACM NETO' }), false)).not.toContain('candidatos');
+  });
+
   it('nome com várias palavras exige todas, em qualquer ordem (acha "JOSE DA SILVA")', () => {
     const w = montarWhere(f({ candidato: 'JOSE SILVA' }));
     expect(w).toContain("NM_CANDIDATO ILIKE '%JOSE%' AND NM_CANDIDATO ILIKE '%SILVA%'");
