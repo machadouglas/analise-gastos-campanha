@@ -68,12 +68,14 @@ describe('explorar · busca por candidato', () => {
       url: '/explorar?candidato=FULANA+URNA',
     });
 
-    const linha = (await screen.findByText(/FULANA FICTÍCIA DA SILVA/)).closest('tr')!;
-    // o nome de urna aparece: é por ele que o eleitor conhece a pessoa e é ele
-    // que explica por que a linha casou com a busca
-    expect(linha).toHaveTextContent('FULANA FICTÍCIA DA SILVA (FULANA URNA)');
+    const linha = (await screen.findByText('FULANA URNA')).closest('tr')!;
+    // o nome de urna é o principal (é como a campanha divulga e como a busca
+    // casou); o civil vem ao lado, menor, para dizer quem é
+    expect(within(linha).getByRole('link', { name: /FULANA URNA/ })).toHaveTextContent(
+      'FULANA URNA FULANA FICTÍCIA DA SILVA',
+    );
     // sem despesa nenhuma, a linha existe pelo que foi arrecadado
-    expect(within(linha).getByRole('link', { name: /FULANA FICTÍCIA DA SILVA/ })).toHaveAttribute(
+    expect(within(linha).getByRole('link', { name: /FULANA URNA/ })).toHaveAttribute(
       'href',
       '/candidato/160000000001',
     );
@@ -92,7 +94,7 @@ describe('explorar · busca por candidato', () => {
       url: '/explorar?candidato=FULANA+URNA',
     });
 
-    await screen.findByText(/FULANA FICTÍCIA DA SILVA/);
+    await screen.findByText('FULANA URNA');
     expect(screen.getByText(/Registrados sem movimento declarado \(1\)/)).toBeInTheDocument();
     // quem tem movimento fica na tabela, não entre os registrados
     expect(screen.getByRole('link', { name: /BELTRANO FICTÍCIO/ })).toBeInTheDocument();

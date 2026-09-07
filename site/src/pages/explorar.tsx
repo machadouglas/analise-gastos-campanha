@@ -13,7 +13,7 @@ import {
   type ItemBarra, type PontoDispersao, type PontoLinha,
 } from '@/components/app/graficos';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, nomeCandidato, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 import {
   FILTROS_VAZIOS, SINAIS_FILTRO, eVisaoReceitas, eVisaoRemocao,
@@ -88,20 +88,24 @@ interface CandidatoEncontrado {
   arrecadado: number;
 }
 
-/** Nome como a linha deve aparecer: o civil, e o de urna entre parênteses
- *  quando difere — é por ele que o eleitor conhece a pessoa, e é ele que
- *  explica por que a linha casou com a busca. */
-function nomeCompleto(c: CandidatoEncontrado): string {
-  const urna = (c.urna ?? '').trim();
-  return urna && urna.toUpperCase() !== c.nome.trim().toUpperCase()
-    ? `${c.nome} (${urna})`
-    : c.nome;
+/** Nome de urna em destaque e o civil ao lado, menor — é pelo de urna que a
+ *  campanha divulga e que a busca casou; o civil explica quem é. */
+function NomeCandidato({ urna, civil }: { urna: string | null; civil: string }) {
+  const n = nomeCandidato(urna, civil);
+  return (
+    <>
+      {n.principal}
+      {n.civil && <> <span className="text-xs font-normal text-muted-foreground">{n.civil}</span></>}
+    </>
+  );
 }
 
 /** Card da visão fora-da-curva: sinais estruturados (para os chips) + foto. */
 interface CandidatoFora {
   sq: string;
+  /** nome de exibição (urna, com fallback civil) */
   nome: string;
+  nomeCivil: string | null;
   partidoUf: string;
   cargo: string;
   contratado: number;
@@ -249,7 +253,8 @@ export function Explorar() {
         }
         return r.linhas.map((l) => ({
           sq: String(l[0]),
-          nome: String(l[1]),
+          nome: nomeCandidato(l[11], l[1]).principal,
+          nomeCivil: nomeCandidato(l[11], l[1]).civil,
           partidoUf: String(l[2]),
           cargo: String(l[3]),
           contratado: Number(l[4] ?? 0),
@@ -521,7 +526,7 @@ export function Explorar() {
                         <tr key={c.sq} className="hover:bg-muted/40">
                           <td>
                             <Link to={`/candidato/${c.sq}`} className="text-[#264E9B] underline-offset-4 hover:underline">
-                              {nomeCompleto(c)}
+                              <NomeCandidato urna={c.urna} civil={c.nome} />
                             </Link>
                           </td>
                           <td className="tabular-nums">{c.numero}</td>
@@ -554,7 +559,7 @@ export function Explorar() {
                           to={`/candidato/${c.sq}`}
                           className="rounded-full border px-3 py-1 text-xs text-[#264E9B] underline-offset-4 hover:underline"
                         >
-                          {nomeCompleto(c)} · {c.cargo} · {c.partido}/{c.uf}
+                          {nomeCandidato(c.urna, c.nome).principal} · {c.cargo} · {c.partido}/{c.uf}
                         </Link>
                       ))}
                     </div>
@@ -749,6 +754,7 @@ export function Explorar() {
                             {c.nome}
                           </Link>
                           <span className="text-sm text-muted-foreground">
+                            {c.nomeCivil && <>{c.nomeCivil} · </>}
                             {c.partidoUf} · {c.cargo} · contratou {brl.format(c.contratado)}
                             {c.arrecadado != null && <> · arrecadou {brl.format(c.arrecadado)}</>}
                           </span>

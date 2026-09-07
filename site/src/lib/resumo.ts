@@ -11,6 +11,8 @@ export interface DespesaResumo {
   SQ_CANDIDATO?: string;
   NR_CPF_CNPJ_FORNECEDOR?: string;
   NM_CANDIDATO: string;
+  /** nome de urna (resumos antigos podem não trazer) */
+  NM_URNA_CANDIDATO?: string | null;
   SG_PARTIDO: string;
   DS_CARGO?: string;
   SG_UF: string;
@@ -37,6 +39,7 @@ export interface FornecedorCompartilhado {
 export interface TopCandidato {
   SQ_CANDIDATO?: string;
   NM_CANDIDATO: string;
+  NM_URNA_CANDIDATO?: string | null;
   SG_PARTIDO: string;
   DS_CARGO: string;
   SG_UF: string;
@@ -56,6 +59,7 @@ export interface SinalForaDaCurva {
 export interface CandidatoForaDaCurva {
   SQ_CANDIDATO: string;
   NM_CANDIDATO: string;
+  NM_URNA_CANDIDATO?: string | null;
   SG_PARTIDO: string;
   DS_CARGO: string;
   SG_UF: string;

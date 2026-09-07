@@ -320,6 +320,16 @@ export function condCandidato(cand: string, prefixo = '', temRegistro = true): s
   return `(${civil} OR ${prefixo}SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos WHERE ${urna}))`;
 }
 
+/** Nome de exibição em SQL — o de urna é o principal (view `nomes_urna`, sempre
+ *  registrada por duckdb.ts; vazia sem o parquet de candidatos), o civil da
+ *  prestação é o fallback. Toda consulta que mostra candidato junta a view com
+ *  JOIN_NOMES_URNA e projeta nomeExibicao(); a mesma régua em texto é
+ *  nomeCandidato() em format.ts, para o que vem do resumo.json. */
+export const JOIN_NOMES_URNA = 'LEFT JOIN nomes_urna n USING (SQ_CANDIDATO)';
+export function nomeExibicao(prefixo = ''): string {
+  return `COALESCE(n.NM_URNA_CANDIDATO, ${prefixo}NM_CANDIDATO)`;
+}
+
 /** Filtros aplicáveis sobre `indicadores` (fornecedor/descrição não existem lá). */
 export function whereIndicadores(f: Filtros, temRegistro = true): string {
   const partes = ['1=1'];
@@ -464,8 +474,10 @@ export function sqlForaDaCurvaCards(
            ${comFoto ? 'ANY_VALUE(c.cd) AS cd, ANY_VALUE(c.ue) AS ue,' : 'NULL AS cd, NULL AS ue,'}
            ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 4) AS sinal_sel,` : 'NULL AS sinal_sel,'}
            COUNT(*) AS n_sinais,
-           STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais
+           STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais,
+           ANY_VALUE(n.NM_URNA_CANDIDATO) AS nome_urna
     FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
+    ${JOIN_NOMES_URNA}
     ${comFoto ? 'LEFT JOIN foto c USING (SQ_CANDIDATO)' : ''}
     WHERE ${whereIndicadores(f, comFoto)}
     GROUP BY ALL
@@ -487,19 +499,19 @@ export function sqlTabelaDaVisao(
   const paginacao = `LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
   if (v === 'removidas-receitas')
     return `SELECT SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
-                    DT_RECEITA AS "Data", NM_CANDIDATO AS "Candidato",
+                    DT_RECEITA AS "Data", ${nomeExibicao()} AS "Candidato",
                     SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
                     COALESCE(NULLIF(NM_DOADOR_RFB,'#NULO'), NULLIF(NM_DOADOR,'#NULO'),
                              'Não identificado (declarado sem contraparte)') AS "Doador",
                     DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
                     STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Visível até",
                     ROUND(valor, 2) AS "Valor"
-             FROM ${base} WHERE ${w}
+             FROM ${base} ${JOIN_NOMES_URNA} WHERE ${w}
              ORDER BY valor DESC ${paginacao}`;
   if (v === 'fora-da-curva' && cat)
     return `WITH ${cteCategoria(cat)}
              SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
-                    i.NM_CANDIDATO AS "Candidato",
+                    ${nomeExibicao('i.')} AS "Candidato",
                     i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
                     i.DS_CARGO AS "Cargo",
                     ROUND(e.total, 2) AS "Neste tipo de gasto",
@@ -507,6 +519,7 @@ export function sqlTabelaDaVisao(
                     ROUND(i.total_contratado, 2) AS "Contratado",
                     ROUND(i.total_receitas, 2) AS "Arrecadado"
              FROM estouro e JOIN indicadores i USING (SQ_CANDIDATO)
+             ${JOIN_NOMES_URNA}
              WHERE ${whereIndicadores(f, temRegistro)}
              ORDER BY "Neste tipo de gasto" DESC
              ${paginacao}`;
@@ -526,7 +539,7 @@ export function sqlTabelaDaVisao(
                SELECT SQ_CANDIDATO, ROUND(SUM(valor), 2) AS arrecadado
                FROM receitas_atual GROUP BY 1)
              SELECT r.sq AS "_sq", '' AS "_cnpj",
-                    r.nome AS "Candidato",
+                    COALESCE(n.NM_URNA_CANDIDATO, r.nome) AS "Candidato",
                     r.partido || '/' || r.uf AS "Partido/UF",
                     r.cargo AS "Cargo",
                     r.total AS "Total",
@@ -534,6 +547,7 @@ export function sqlTabelaDaVisao(
                     r.fornecedores AS "Fornecedores",
                     rec.arrecadado AS "Arrecadado"
              FROM r LEFT JOIN rec ON rec.SQ_CANDIDATO = r.sq
+             LEFT JOIN nomes_urna n ON n.SQ_CANDIDATO = r.sq
              ORDER BY "Total" DESC ${paginacao}`;
   if (v === 'compartilhados')
     return `SELECT NULL AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
@@ -552,14 +566,14 @@ export function sqlTabelaDaVisao(
         ? 'STRFTIME(dt_ultima_extracao, \'%d/%m/%Y\') AS "Visível até",'
         : '';
   return `SELECT SQ_CANDIDATO AS "_sq", NR_CPF_CNPJ_FORNECEDOR AS "_cnpj",
-                    DT_DESPESA AS "Data", NM_CANDIDATO AS "Candidato",
+                    DT_DESPESA AS "Data", ${nomeExibicao()} AS "Candidato",
                     SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
                     COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NULLIF(NM_FORNECEDOR,'#NULO'),
                              'Não identificado (declarado sem contraparte)') AS "Fornecedor",
                     DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
                     ${colunaExtra}
                     ROUND(valor, 2) AS "Valor"
-             FROM ${base} WHERE ${w}
+             FROM ${base} ${JOIN_NOMES_URNA} WHERE ${w}
              ORDER BY valor DESC ${paginacao}`;
 }
 
@@ -578,8 +592,8 @@ export function sqlPainel(base: string, w: string, v: Visao) {
                      FROM ${base} WHERE ${w}`,
     categorias: `SELECT ${colCategoria}, ROUND(SUM(valor),2) AS total
                      FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
-    candidatos: `SELECT NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
-                     FROM ${base} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
+    candidatos: `SELECT ${nomeExibicao()} || ' (' || SG_PARTIDO || '/' || SG_UF || ')', ROUND(SUM(valor),2) AS total
+                     FROM ${base} ${JOIN_NOMES_URNA} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`,
     // TRY_STRPTIME: o STRPTIME estrito estoura em '#NULO' e o otimizador pode
     // avaliá-lo antes do filtro que removeria a linha (mesma regra da carga)
     porDia: `SELECT STRFTIME(TRY_STRPTIME(${colData}, '%d/%m/%Y'), '%d/%m') AS dia,
@@ -602,9 +616,9 @@ export function sqlDispersao(f: Filtros, limite: number): string | null {
   if (f.cargo) partes.push(`DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
   if (f.partido) partes.push(`SG_PARTIDO = '${escSQL(f.partido)}'`);
   return `
-      SELECT SQ_CANDIDATO, NM_CANDIDATO || ' (' || SG_PARTIDO || '/' || SG_UF || ')',
+      SELECT SQ_CANDIDATO, ${nomeExibicao()} || ' (' || SG_PARTIDO || '/' || SG_UF || ')',
              COALESCE(total_receitas, 0), total_contratado
-      FROM indicadores WHERE ${partes.join(' AND ')}
+      FROM indicadores ${JOIN_NOMES_URNA} WHERE ${partes.join(' AND ')}
       ORDER BY total_contratado + COALESCE(total_receitas, 0) DESC
       LIMIT ${limite}`;
 }

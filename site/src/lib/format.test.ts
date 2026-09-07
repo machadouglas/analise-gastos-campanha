@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { celula, cnpjCpf, ePessoaFisica, temFichaFornecedor, urlFornecedor } from './format';
+import { celula, cnpjCpf, ePessoaFisica, nomeCandidato, temFichaFornecedor, urlFornecedor } from './format';
 
 describe('cnpjCpf', () => {
   it('CNPJ sai completo e formatado (dado público pleno)', () => {
@@ -60,5 +60,18 @@ describe('celula', () => {
     expect(celula(10n)).toBe('10');
     expect(celula(new Date('2026-08-20T00:00:00Z'))).toBe('2026-08-20');
     expect(celula('texto')).toBe('texto');
+  });
+});
+
+describe('nomeCandidato', () => {
+  it('o nome de urna é o principal e o civil fica como secundário', () => {
+    expect(nomeCandidato('JANE MARREE', 'JANE APARECIDA DA SILVA')).toEqual({
+      principal: 'JANE MARREE', civil: 'JANE APARECIDA DA SILVA',
+    });
+  });
+  it('sem urna (ou #NULO), o civil é o principal e não se repete', () => {
+    expect(nomeCandidato(null, 'FULANO DE TAL')).toEqual({ principal: 'FULANO DE TAL', civil: null });
+    expect(nomeCandidato('#NULO', 'FULANO DE TAL')).toEqual({ principal: 'FULANO DE TAL', civil: null });
+    expect(nomeCandidato('fulano de tal', 'FULANO DE TAL')).toEqual({ principal: 'fulano de tal', civil: null });
   });
 });

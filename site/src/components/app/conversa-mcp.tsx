@@ -1,7 +1,7 @@
 import { Bot, Check, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Resumo, SinalForaDaCurva } from '@/lib/resumo';
-import { brl, dataBR, num } from '@/lib/format';
+import { brl, dataBR, num, nomeCandidato } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 
 /** Conversa simulada com uma IA conectada ao servidor MCP: a pergunta em
@@ -83,7 +83,7 @@ export function montarCena(resumo: Resumo | null): Cena {
       : null,
     candidatos: fora.map((c) => ({
       sq: c.SQ_CANDIDATO,
-      nome: c.NM_CANDIDATO,
+      nome: nomeCandidato(c.NM_URNA_CANDIDATO, c.NM_CANDIDATO).principal,
       partido: c.SG_PARTIDO,
       uf: c.SG_UF,
       cargo: c.DS_CARGO,
