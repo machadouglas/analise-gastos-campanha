@@ -600,10 +600,11 @@ export function sqlDispersao(f: Filtros, limite: number): string | null {
       LIMIT ${limite}`;
 }
 
-/** Registros de candidatura que batem com a busca por nome/número mas ainda não
- *  declararam NENHUMA despesa ou receita — 72% das candidaturas no início da
- *  campanha; sem isso a busca do site simplesmente não os encontra. */
-export function sqlRegistrosSemMovimento(f: Filtros, limite: number): string {
+/** Recorte de candidatura (uf/cargo/partido/nome ou número) sem prefixo de
+ *  alias — serve tanto para `candidatos` quanto para `indicadores`. Só o
+ *  registro tem nome de urna; `indicadores` vem da prestação, que traz apenas
+ *  NM_CANDIDATO. */
+function recorteCandidatura(f: Filtros, comUrna: boolean): string {
   const partes = ['1=1'];
   const uf = condUF(f.uf);
   if (uf) partes.push(uf);
@@ -614,14 +615,60 @@ export function sqlRegistrosSemMovimento(f: Filtros, limite: number): string {
     partes.push(
       /^\d+$/.test(cand)
         ? `NR_CANDIDATO = '${cand}'`
-        : condTexto(cand, ['NM_CANDIDATO', 'NM_URNA_CANDIDATO'])!,
+        : condTexto(cand, comUrna ? ['NM_CANDIDATO', 'NM_URNA_CANDIDATO'] : ['NM_CANDIDATO'])!,
     );
   }
+  return partes.join(' AND ');
+}
+
+/** Busca de candidatura do site — mesma régua de `sql_buscar_candidato` no
+ *  servidor MCP, e pelas mesmas duas razões:
+ *
+ *  1. **Nome de urna.** Metade das candidaturas com movimento (6.126 de 12.542
+ *     na extração de 07/09/2026) usa na urna um nome que não está no nome civil
+ *     ("JANE MARREE" para "JANE APARECIDA DA SILVA") — e nome de urna é como o
+ *     eleitor conhece a pessoa. `indicadores` só tem NM_CANDIDATO, então a
+ *     busca tem de partir do registro (`candidatos`), que tem os dois.
+ *  2. **Quem só arrecadou.** Partir de `despesas_atual` some com quem declarou
+ *     receita e nenhuma despesa; os totais vêm de `indicadores`, cuja base é
+ *     quem tem despesa OU receita.
+ *
+ *  A lista sai completa: quem já movimentou e quem só se registrou (72% das
+ *  candidaturas no início da campanha) — `tem_movimento` separa as duas na tela.
+ *  Filtro de fornecedor/descrição recorta despesa, não candidatura: quando há
+ *  um, a lista se restringe a quem tem despesa no recorte. */
+export function sqlBuscaCandidatos(f: Filtros, limite: number, temRegistro = true): string {
+  const recorteReg = recorteCandidatura(f, temRegistro);
+  // o nome já foi casado em `reg` (com urna); repeti-lo aqui, onde só existe
+  // NM_CANDIDATO, desfaria a busca por nome de urna assim que houvesse filtro
+  // de fornecedor — é exatamente o bug que esta função corrige
+  const porDespesa =
+    f.fornecedor.trim() || f.descricao.trim()
+      ? `\n    WHERE r.SQ_CANDIDATO IN (\n      SELECT SQ_CANDIDATO FROM despesas_atual WHERE ${montarWhere({ ...f, candidato: '' })})`
+      : '';
+  // sem o parquet de candidatos publicado, degrada para o que a prestação sabe
+  const reg = temRegistro
+    ? `SELECT SQ_CANDIDATO,
+             ANY_VALUE(NM_CANDIDATO) AS nome, ANY_VALUE(NM_URNA_CANDIDATO) AS urna,
+             ANY_VALUE(NR_CANDIDATO) AS numero, ANY_VALUE(SG_PARTIDO) AS partido,
+             ANY_VALUE(DS_CARGO) AS cargo, ANY_VALUE(SG_UF) AS uf
+      FROM candidatos WHERE ${recorteReg} GROUP BY 1
+      UNION ALL
+      SELECT SQ_CANDIDATO, NM_CANDIDATO, NULL, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF
+      FROM indicadores WHERE ${recorteCandidatura(f, false)}
+        AND SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM candidatos)`
+    : `SELECT SQ_CANDIDATO, NM_CANDIDATO AS nome, NULL AS urna, NR_CANDIDATO AS numero,
+             SG_PARTIDO AS partido, DS_CARGO AS cargo, SG_UF AS uf
+      FROM indicadores WHERE ${recorteReg}`;
   return `
-      SELECT SQ_CANDIDATO, ANY_VALUE(NM_URNA_CANDIDATO), ANY_VALUE(NM_CANDIDATO),
-             ANY_VALUE(NR_CANDIDATO), ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF)
-      FROM candidatos
-      WHERE ${partes.join(' AND ')}
-        AND SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM indicadores)
-      GROUP BY 1 ORDER BY 2 LIMIT ${limite}`;
+    WITH reg AS (
+      ${reg})
+    SELECT r.SQ_CANDIDATO, r.nome, r.urna, r.numero, r.partido,
+           COALESCE(i.DS_CARGO, r.cargo) AS cargo, r.uf,
+           ROUND(COALESCE(i.total_contratado, 0), 2) AS contratado,
+           ROUND(COALESCE(i.total_receitas, 0), 2) AS arrecadado,
+           i.SQ_CANDIDATO IS NOT NULL AS tem_movimento
+    FROM reg r LEFT JOIN indicadores i USING (SQ_CANDIDATO)${porDespesa}
+    ORDER BY tem_movimento DESC, contratado + arrecadado DESC, r.nome
+    LIMIT ${limite}`;
 }

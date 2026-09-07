@@ -453,3 +453,38 @@ def test_mcp_ferramentas_listadas_no_site_sao_as_do_servidor():
     assert no_servidor, "nenhuma ferramenta encontrada em servidor.py (mudou o decorator?)"
     assert no_site == no_servidor, (
         f"faltam no site: {no_servidor - no_site}; sobram no site: {no_site - no_servidor}")
+
+
+def test_busca_de_candidato_cobre_o_nome_de_urna_nos_dois_lados():
+    """sqlBuscaCandidatos (site) e sql_buscar_candidato (MCP) partem do REGISTRO
+    e casam pelos dois nomes.
+
+    A divergência entre os dois é o bug que este teste tranca: o site buscava em
+    `indicadores`/`despesas_atual` — que vêm da prestação e só têm NM_CANDIDATO —
+    e o MCP em `candidatos`, que tem também NM_URNA_CANDIDATO. Metade das
+    candidaturas com movimento usa na urna um nome que não está no nome civil
+    ('JANE MARREE' para 'JANE APARECIDA DA SILVA'), e é por ele que o eleitor
+    procura: quem tivesse nome de urna próprio simplesmente não existia no site.
+    Partir de `indicadores` também escondia quem só declarou receita.
+    """
+    consultas_mcp = (RAIZ / "src" / "mcp" / "consultas.py").read_text(encoding="utf-8")
+
+    corpo_site = re.search(
+        r"export function sqlBuscaCandidatos\(.*?\n}", CONSULTAS_TS, re.DOTALL
+    )
+    assert corpo_site, "sqlBuscaCandidatos não encontrada em consultas.ts"
+    corpo_mcp = re.search(
+        r"def sql_buscar_candidato\(.*?\n(?=\n\n|# ---)", consultas_mcp, re.DOTALL
+    )
+    assert corpo_mcp, "sql_buscar_candidato não encontrada em src/mcp/consultas.py"
+
+    for lado, corpo in (("site", corpo_site.group()), ("mcp", corpo_mcp.group())):
+        assert "NM_URNA_CANDIDATO" in corpo, f"busca do {lado} deixou de casar o nome de urna"
+        assert "candidatos" in corpo, f"busca do {lado} não parte do registro"
+        # os totais vêm de indicadores (despesa OU receita), nunca de despesas
+        assert "indicadores" in corpo, f"busca do {lado} não lê os totais de indicadores"
+
+    # o site não pode voltar a excluir quem já movimentou: a lista tem de trazer
+    # as duas situações e separá-las por tem_movimento
+    assert "NOT IN (SELECT SQ_CANDIDATO FROM indicadores)" not in corpo_site.group()
+    assert "tem_movimento" in corpo_site.group()

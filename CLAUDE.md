@@ -161,7 +161,12 @@ a lápide de CNPJ que a Receita respondeu 404, que vira aviso na ficha do fornec
 marca a linha na tabela de fornecedores do candidato; ORIGEM_FINANCIAMENTO_COLETIVO/CONDICAO_DOACAO_DIRETA
 e CATEGORIA_IMPULSIONAMENTO ↔ as exclusões das flags 4 e 13 em `src/analises.py` — o anel
 "dinheiro que volta" das fichas só fecha com doação direta; COR_RACA_NEGRA em `partido.tsx` ↔
-`src/agregados.py`) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
+`src/agregados.py`; `sqlBuscaCandidatos` ↔ `sql_buscar_candidato` em `src/mcp/consultas.py` —
+a busca parte do **registro** (`candidatos`, único que tem NM_URNA_CANDIDATO) e pega os
+totais de `indicadores` por LEFT JOIN: metade das candidaturas com movimento usa na urna um
+nome que não está no nome civil, e é por ele que o eleitor procura; partir de
+`indicadores`/`despesas_atual` escondia essas e também quem só declarou receita) e
+`site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
 `despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);
 `tests/test_sincronia_site.py` cobre essa sincronia — remoções NUNCA se calculam "na unha"
 nas páginas, sempre pelas views. Componentes de visualização: `components/app/graficos.tsx`
