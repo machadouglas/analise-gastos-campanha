@@ -1,15 +1,19 @@
 # Site no Cloudflare Pages
 
-O diretório `site/` é uma SPA (Vite + React + Tailwind v4) com duas páginas:
+O diretório `site/` é uma SPA (Vite + React + Tailwind v4):
 
 - **Radar** — visão diária dos dados (lê o `resumo.json` do release);
+- **Fichas e Explorar** — consultam a API do servidor (`src/mcp/api.py`, hostname
+  `api.<domínio>` — `docs/deploy-mcp.md` §6) quando `VITE_RADAR_API` está definida, e
+  caem para o DuckDB-WASM sobre os Parquet se ela não responder;
 - **Consultar** — console SQL com DuckDB-WASM rodando no navegador do visitante sobre os
   Parquet publicados, mais o prompt copiável para a pessoa usar a própria IA
   (ChatGPT, Claude, Gemini, Perplexity…) para gerar consultas.
 
-Nenhum servidor próprio envolvido: uma *Pages Function* (`site/functions/dados/`) faz proxy
-dos arquivos do GitHub Releases na mesma origem — necessário porque o GitHub não envia CORS
-nos assets de release.
+Uma *Pages Function* (`site/functions/dados/`) faz proxy dos arquivos do GitHub Releases na
+mesma origem — necessário porque o GitHub não envia CORS nos assets de release. É por ela
+que a Home, o console e o fallback das fichas leem o dado; sem `VITE_RADAR_API` o site
+inteiro funciona só com ela, sem servidor próprio.
 
 ## Publicando
 
@@ -18,7 +22,9 @@ nos assets de release.
    - **Root directory**: `site`
    - **Build command**: `npm run build`
    - **Build output directory**: `dist`
-   - Variável de build: `NODE_VERSION = 22`
+   - Variáveis de build: `NODE_VERSION = 22` e, com o servidor no ar,
+     `VITE_RADAR_API = https://api.<domínio>` (sem barra no fim). É variável de **build**:
+     mudar exige novo deploy. Apagá-la e redeployar é o rollback para o site 100% WASM.
 3. Deploy. A function em `site/functions/` é detectada automaticamente (rota `/dados/*`).
 
 O site atualiza os DADOS sozinho todo dia (quem muda é o release); um novo deploy só é

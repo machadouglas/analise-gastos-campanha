@@ -12,7 +12,7 @@ import {
   BarrasHorizontais, Dispersao, LinhaTemporal,
   type ItemBarra, type PontoDispersao, type PontoLinha,
 } from '@/components/app/graficos';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 import {

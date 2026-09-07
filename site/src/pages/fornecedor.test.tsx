@@ -7,7 +7,7 @@ import { screen } from '@testing-library/react';
 import { limparDuckDBFalso, responder, tabelasDisponiveis, type RotaFalsa } from '@/test/duckdb-falso';
 import { renderizarRota } from '@/test/render';
 
-vi.mock('@/lib/duckdb', () => import('@/test/duckdb-falso'));
+vi.mock('@/lib/dados', () => import('@/test/duckdb-falso'));
 // o grafo de conexões desenha em <canvas> (force-graph), que o jsdom não tem —
 // fora do escopo destes testes de estado condicional
 vi.mock('@/components/app/grafo', () => ({
