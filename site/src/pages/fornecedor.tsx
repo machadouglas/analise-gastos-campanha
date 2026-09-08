@@ -19,7 +19,7 @@ import {
   condicaoSemNota,
   escSQL,
   sqlCorrigidas,
-  sqlDocumentoDaNota, JOIN_NOMES_URNA, nomeExibicao,
+  sqlDocumentoDaNota, JOIN_NOMES_URNA, nomeExibicao, sqlContrapartesInfraestrutura,
 } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
@@ -310,7 +310,8 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
   }
 
   // 2º nível do grafo: os outros maiores fornecedores de cada candidato — mostra
-  // o ecossistema em que este fornecedor está inserido (parceiros de rateio?)
+  // o ecossistema em que este fornecedor está inserido (parceiros de rateio?).
+  // Sem plataforma: "também paga o Facebook" não descreve ecossistema nenhum.
   const sqsGrafo = [...conexoes.keys()].slice(0, 10);
   let conexoesSecundarias: NoSecundario[] = [];
   if (sqsGrafo.length) {
@@ -322,6 +323,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
         FROM despesas_atual
         WHERE SQ_CANDIDATO IN (${lista})
           AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO', '${esc(id)}')
+          AND NR_CPF_CNPJ_FORNECEDOR NOT IN (${sqlContrapartesInfraestrutura()})
         GROUP BY 1, 2
         QUALIFY ROW_NUMBER() OVER (PARTITION BY SQ_CANDIDATO ORDER BY total DESC) <= 2`);
     const porFornecedor = new Map<string, NoSecundario>();
@@ -550,7 +552,7 @@ export function Fornecedor() {
           aberta
           titulo="Rede de conexões"
           resumo={`${num.format(p.nCandidatos)} candidatos`}
-          descricao="Candidatos que pagam este fornecedor (navy) e que recebem doações dele (âmbar); em cinza, os outros maiores fornecedores desses candidatos. Anel vermelho: os dois papéis ao mesmo tempo — o clássico 'dinheiro que volta'. Clique num nó para abrir a ficha."
+          descricao="Candidatos que pagam este fornecedor (navy, à direita) e que recebem doações dele (âmbar, à esquerda); em cinza, os outros maiores fornecedores desses candidatos — sem plataformas de anúncio, pagamento e vaquinha, que quase toda campanha usa. Anel vermelho: os dois papéis ao mesmo tempo — o clássico 'dinheiro que volta' —, e por isso no meio. Clique num nó para abrir a ficha."
         >
           <GrafoConexoes
             centro={p.nome}

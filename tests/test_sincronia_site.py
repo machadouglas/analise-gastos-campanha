@@ -373,6 +373,100 @@ def test_mcp_sinais_e_cte_iguais_ao_site():
     assert "LIKE 'pct_%'" not in cte
 
 
+def test_mcp_compara_a_nota_com_a_regua_que_gerou_o_p95():
+    """A unidade da nota tem UM dono: src/agregados.py. O benchmark de preço e
+    a ferramenta que compara contra ele agrupam pela MESMA chave — senão o
+    número comparado teria uma forma e a régua outra, sem ninguém perceber."""
+    from src import agregados
+    from src.mcp import consultas
+
+    assert consultas.CHAVE_NOTA == ", ".join(agregados.CHAVE_NOTA)
+    assert consultas.SEM_ID_DESPESA == agregados.SEM_ID_DESPESA
+    sql = consultas.sql_notas_fora_do_preco("XX", None, None, None, None, 10)
+    assert f"GROUP BY DS_ORIGEM_DESPESA, SG_UF, {', '.join(agregados.CHAVE_NOTA)}" in sql
+    # a linha sem id não pode ser reagrupada: conta uma nota por linha
+    assert f"WHERE SQ_DESPESA = '{agregados.SEM_ID_DESPESA}'" in sql
+
+    fonte = (RAIZ / "src" / "agregados.py").read_text(encoding="utf-8")
+    corpo = fonte[fonte.index("def _benchmark_precos"):fonte.index("def _indicadores")]
+    sql_do_benchmark = corpo[corpo.index("CREATE OR REPLACE TABLE benchmark_precos"):]
+    assert "{CHAVE_NOTA}" in sql_do_benchmark and "'-1'" not in sql_do_benchmark, (
+        "benchmark_precos voltou a escrever a chave da nota à mão — a régua tem um dono só"
+    )
+
+
+def test_corte_de_infraestrutura_igual_no_front():
+    """Contraparte que atende muita gente é infraestrutura, não vínculo: o corte
+    do 2º nível do grafo (site) e o de candidatos_conectados (MCP) usam o MESMO
+    teto. Medido em 07/09/2026: sem ele, uma única plataforma de anúncio põe os
+    três maiores anunciantes do país no anel externo de qualquer ficha."""
+    from src.mcp import consultas
+
+    achado = re.search(r"MAX_CANDIDATOS_CONTRAPARTE_COMUM = (\d+);", CONSULTAS_TS)
+    assert achado, "MAX_CANDIDATOS_CONTRAPARTE_COMUM não encontrada em consultas.ts"
+    assert int(achado.group(1)) == consultas.MAX_CANDIDATOS_CONTRAPARTE_COMUM
+
+    # as duas páginas do grafo aplicam o corte no 2º nível
+    for pagina in ("candidato.tsx", "fornecedor.tsx"):
+        fonte = (RAIZ / "site" / "src" / "pages" / pagina).read_text(encoding="utf-8")
+        assert "sqlContrapartesInfraestrutura()" in fonte, (
+            f"{pagina} não corta as contrapartes-infraestrutura no 2º nível")
+
+
+def test_top_n_do_grafo_e_cap_de_desenho_que_o_mcp_nao_aplica():
+    """A divergência que SOBRA entre site e MCP, registrada em vez de fingida:
+
+    - site: além do corte de hub, mantém só os N maiores por contraparte
+      (QUALIFY ROW_NUMBER()). É cap de DESENHO — o canvas não comporta mais.
+    - MCP: não aplica o top-N. Para investigar ele seria nocivo, porque esconde
+      quem divide fornecedor gastando POUCO, que é o padrão de rateio; quem
+      consome a ferramenta lê uma lista, não um canvas.
+
+    Mudou um dos dois lados, isto falha e força a decisão consciente.
+    """
+    from src.mcp import consultas
+
+    for pagina in ("candidato.tsx", "fornecedor.tsx"):
+        fonte = (RAIZ / "site" / "src" / "pages" / pagina).read_text(encoding="utf-8")
+        assert re.search(
+            r"QUALIFY ROW_NUMBER\(\) OVER \(PARTITION BY \w+ ORDER BY total DESC\) <= \d",
+            fonte), f"{pagina} não usa mais o top-N por contraparte no 2º nível"
+
+    sql = consultas.sql_candidatos_conectados("1", 2, consultas.TIPOS_REDE,
+                                              consultas.MAX_CANDIDATOS_CONTRAPARTE_COMUM, 10)
+    assert "QUALIFY" not in sql, "o MCP passou a aplicar o cap de desenho do site"
+    assert f"HAVING COUNT(DISTINCT SQ_CANDIDATO) > {consultas.MAX_CANDIDATOS_CONTRAPARTE_COMUM}" in sql
+
+
+def test_ferramentas_de_recorte_nao_entregam_veredito():
+    """As tools que devolvem "fora da curva" descrevem a medida e a régua; o
+    julgamento fica com quem lê. Duas garantias mecânicas: nenhuma docstring
+    promete irregularidade, e as instructions dizem ao modelo o que elas NÃO
+    afirmam (o modelo pode concluir por conta própria — via sql, mostrando o
+    cálculo — mas não emprestando rótulo da ferramenta)."""
+    from src.mcp import esquema, servidor
+
+    veredito = re.compile(r"\b(fraude|fraudulent\w*|superfatur\w*|desvi(o|os|ado\w*)|"
+                          r"irregularidade|suspeit\w+)\b", re.IGNORECASE)
+    # a palavra vale como promessa quando é AFIRMADA; negar que a ferramenta a
+    # detecta ("não classifica irregularidade") é exatamente o que se quer
+    nega = re.compile(r"\b(não|nem|nenhum\w*|sem)\b", re.IGNORECASE)
+    for nome in ("fora_da_curva", "notas_fora_do_preco", "sem_nota",
+                 "fornecedores_compartilhados", "declaracoes_removidas",
+                 "candidatos_conectados", "ficha_candidato", "ficha_fornecedor"):
+        doc = " ".join((getattr(servidor, nome).__doc__ or "").split())
+        for frase in re.split(r"(?<=[.;:])\s+", doc):
+            achado = veredito.search(frase)
+            assert not achado or nega.search(frase), (
+                f"{nome} promete veredito na docstring: {frase!r}")
+
+    instrucoes = esquema.instrucoes()
+    assert "O QUE ESTAS FERRAMENTAS MEDEM" in instrucoes
+    for exigido in ("5% do grupo", "Nenhuma delas classifica irregularidade",
+                    "hipóteses próprias", "deixe o caminho à vista"):
+        assert exigido in instrucoes, f"as instructions perderam: {exigido}"
+
+
 def test_mcp_ferramentas_listadas_no_site_sao_as_do_servidor():
     """A página Consultar lista as ferramentas do MCP (FERRAMENTAS_MCP em
     site/src/lib/mcp.ts); ferramenta nova ou renomeada em src/mcp/servidor.py

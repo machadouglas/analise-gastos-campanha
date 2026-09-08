@@ -23,7 +23,7 @@ import { Ampliavel } from '@/components/app/ampliavel';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import {
   CONDICAO_DOACAO_DIRETA, MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas,
-  sqlNotasDoCandidato, JOIN_NOMES_URNA, nomeExibicao,
+  sqlNotasDoCandidato, JOIN_NOMES_URNA, nomeExibicao, sqlContrapartesInfraestrutura,
 } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor, nomeCandidato } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
@@ -189,6 +189,7 @@ interface DadosCandidato {
   origensReceita: NoFluxo[];
   conexoes: NoConexao[];
   conexoesSecundarias: NoSecundario[];
+  soPlataformas: boolean;
   fornecedores: unknown[][];
   colunasFornecedores: string[];
   /** notas de cada fornecedor, indexadas pelo CNPJ/CPF da linha da tabela */
@@ -543,7 +544,9 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   }
 
   // 2º nível do grafo: outros candidatos que pagam os MESMOS fornecedores
-  // (fornecedor compartilhado — red flag nº 3 — visível na própria rede)
+  // (fornecedor compartilhado — red flag nº 3 — visível na própria rede).
+  // Fora as contrapartes-infraestrutura: pela plataforma de anúncio o anel
+  // externo virava "os três maiores anunciantes do país", em toda ficha.
   const cnpjsGrafo = [...conexoes.keys()].filter((id) => id.length >= 11);
   let conexoesSecundarias: NoSecundario[] = [];
   if (cnpjsGrafo.length) {
@@ -554,6 +557,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
                ROUND(SUM(valor), 2) AS total
         FROM despesas_atual ${JOIN_NOMES_URNA}
         WHERE NR_CPF_CNPJ_FORNECEDOR IN (${lista}) AND NOT ${w}
+          AND NR_CPF_CNPJ_FORNECEDOR NOT IN (${sqlContrapartesInfraestrutura()})
         GROUP BY 1, 2
         QUALIFY ROW_NUMBER() OVER (PARTITION BY NR_CPF_CNPJ_FORNECEDOR ORDER BY total DESC) <= 3`);
     const porCandidato = new Map<string, NoSecundario>();
@@ -575,6 +579,10 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     }
     conexoesSecundarias = [...porCandidato.values()];
   }
+  // anel externo vazio com fornecedor compartilhado no 1º nível = todos os
+  // compartilhados são plataforma; a legenda diz isso em vez de deixar o
+  // branco parecer ausência de dado
+  const soPlataformas = cnpjsGrafo.length > 0 && conexoesSecundarias.length === 0;
 
   // a unidade é a nota (soma dos itens de mesma SQ_DESPESA), como no benchmark;
   // SQ_DESPESA = '-1' não permite reagrupar e cada linha conta como uma nota
@@ -630,6 +638,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     origensReceita,
     conexoes: [...conexoes.values()],
     conexoesSecundarias,
+    soPlataformas,
     colunasFornecedores: fornecedores.colunas,
     fornecedores: fornecedores.linhas,
     notasPorFornecedor: agruparNotas(notasRes.linhas),
@@ -914,7 +923,7 @@ export function Candidato() {
           aberta
           titulo="Rede de conexões"
           resumo={`${dados.conexoes.length} contrapartes`}
-          descricao="Maiores fornecedores e doadores deste candidato; em cinza, outros candidatos que pagam os mesmos fornecedores (fornecedor compartilhado). Anel vermelho marca quem aparece nos dois papéis — o clássico 'dinheiro que volta'. Clique num nó para abrir a ficha."
+          descricao={`Maiores fornecedores e doadores deste candidato; em cinza, outros candidatos que pagam os mesmos fornecedores (fornecedor compartilhado). Plataformas de anúncio, pagamento e vaquinha ficam de fora desse segundo anel: como quase toda campanha as usa, elas ligariam este candidato a estranhos. O dinheiro que ENTRA fica à esquerda e o que SAI à direita; quem aparece nos dois papéis — o clássico 'dinheiro que volta', com anel vermelho — fica no meio. Clique num nó para abrir a ficha.${dados.soPlataformas ? ' Aqui nenhum fornecedor compartilhado sobrou fora das plataformas — por isso não há segundo anel.' : ''}`}
         >
           <GrafoConexoes
             centro={p.nome}

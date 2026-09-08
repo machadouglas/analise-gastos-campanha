@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ForceGraph2D, { type ForceGraphMethods, type NodeObject, type LinkObject } from 'react-force-graph-2d';
-import { forceCollide, type ForceManyBody } from 'd3-force';
+import { forceCollide, forceX, type ForceManyBody } from 'd3-force';
 import { brl } from '@/lib/format';
 
 /* Grafo de conexões com a biblioteca de referência (force-graph, canvas):
@@ -19,6 +19,10 @@ export interface NoConexao {
 }
 
 /** Nó de segundo nível: liga-se a um ou mais nós de nível 1. */
+/** Caracteres do rótulo no desktop: corta o nome no pincel E dimensiona a
+ *  folga da colisão, para o layout reservar o espaço que o texto vai ocupar. */
+const LIMITE_ROTULO = 28;
+
 export interface NoSecundario {
   id: string;
   rotulo: string;
@@ -41,6 +45,13 @@ const TIPO_ROTULO: Record<NoConexao['tipo'], string> = {
   ambos: 'fornecedor E doador',
 };
 
+/** Doação puxa para a esquerda, despesa para a direita; quem é os dois papéis
+ *  fica no meio — é onde ele está de fato. */
+const ladoDoTipo = (tipo?: NoConexao['tipo']) =>
+  tipo === 'doacao' ? -1 : tipo === 'despesa' ? 1 : 0;
+
+const media = (ns: number[]) => (ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : 0);
+
 /* tipos "crus" — a lib os embrulha em NodeObject/LinkObject (x, y, fx…) */
 interface DadosNo {
   id: string;
@@ -50,6 +61,10 @@ interface DadosNo {
   tipo?: NoConexao['tipo'];
   detalhe?: string;
   r: number;
+  /** -1, 0 ou 1: de que lado do centro o nó é puxado. No 1º nível vem do tipo
+   *  (doação à esquerda, despesa à direita); no 2º é herdado do nó que o
+   *  trouxe, para ele ficar ALÉM do pai em vez de orbitar por cima dele. */
+  lado?: number;
   fx?: number;
   fy?: number;
 }
@@ -113,16 +128,21 @@ export function GrafoConexoes({
       .filter((s) => !idsN1.has(s.id) && s.ligadoA.some((a) => idsN1.has(a)))
       .slice(0, estreito ? 8 : 30);
     const max = Math.max(...n1.map((n) => n.valor), 1);
+    const tipoN1 = new Map(n1.map((n) => [n.id, n.tipo]));
     const nodes: DadosNo[] = [
       { id: '__centro__', nome: centro, valor: 0, nivel: 0, r: estreito ? 8 : 11, fx: 0, fy: 0 },
       // raios menores em tela estreita: num canvas de ~300px os círculos de
       // desktop se sobrepõem antes de a física ter espaço para separá-los
       ...n1.map((n): DadosNo => ({
         id: n.id, nome: n.rotulo, valor: n.valor, nivel: 1, tipo: n.tipo, detalhe: n.detalhe,
+        lado: ladoDoTipo(n.tipo),
         r: estreito ? 3 + Math.sqrt(n.valor / max) * 5 : 4 + Math.sqrt(n.valor / max) * 8,
       })),
       ...n2.map((n): DadosNo => ({
-        id: n.id, nome: n.rotulo, valor: n.valor, nivel: 2, detalhe: n.detalhe, r: estreito ? 2.5 : 3.5,
+        id: n.id, nome: n.rotulo, valor: n.valor, nivel: 2, detalhe: n.detalhe, r: estreito ? 3 : 4.5,
+        // pais nos dois lados (ou só 'ambos'): média zero, o nó fica no meio —
+        // é honesto, ele pende para os dois
+        lado: media(n.ligadoA.filter((a) => idsN1.has(a)).map((a) => ladoDoTipo(tipoN1.get(a)))),
       })),
     ];
     const links = [
@@ -138,7 +158,10 @@ export function GrafoConexoes({
       dados: { nodes, links },
       // caixa mais baixa em tela estreita: com menos nós, a altura de desktop
       // sobrava como faixa vazia acima e abaixo da rede
-      altura: estreito ? Math.min(420, 300 + n2.length * 5) : Math.min(620, 420 + n2.length * 5),
+      // mais alta no desktop desde que a rede se divide em dois lados: a metade
+      // com mais nos (quase sempre a da despesa) empilha rotulo, e como o zoom
+      // esta no teto a altura vira folga de verdade
+      altura: estreito ? Math.min(420, 300 + n2.length * 5) : Math.min(660, 470 + n2.length * 6),
       temN2: n2.length > 0,
       totalN1: nos.length,
       maxN1,
@@ -162,14 +185,32 @@ export function GrafoConexoes({
       n.fy = undefined;
     }
     const carga = fg.d3Force('charge') as ForceManyBody<No> | undefined;
-    carga?.strength((n) => (n.nivel === 2 ? -18 : -65));
+    carga?.strength((n) => (n.nivel === 2 ? -22 : estreito ? -65 : -115));
     const link = fg.d3Force('link') as { distance: (fn: (l: Ligacao) => number) => unknown } | undefined;
     // distâncias menores em tela estreita: a rede cabe sem virar um novelo
-    link?.distance((l) => (l.nivel2 ? (estreito ? 34 : 48) : estreito ? 80 : 118));
+    link?.distance((l) => (l.nivel2 ? (estreito ? 34 : 56) : estreito ? 80 : 165));
+    // eixo do dinheiro: entra pela esquerda, sai pela direita. O 'ambos' (mesma
+    // contraparte doa e fornece) fica no meio de propósito — é o que ele é.
+    // alvo na PRÓPRIA distância do elo: puxar para mais perto que a órbita faria
+    // a força de lado brigar com a do elo em vez de escolher o lado dela
+    const LADO = estreito ? 80 : 165;
+    fg.d3Force(
+      'x',
+      forceX<No>((n) => (n.nivel === 0 ? 0 : (n.lado ?? 0) * LADO * (n.nivel === 2 ? 2.1 : 1)))
+        // no 2º nível a força é fraca de propósito: ela dá a direção, e quem
+        // manda na distância continua sendo o elo com o fornecedor (senão o
+        // nó se solta de quem o trouxe e a ponte deixa de ser legível)
+        .strength((n) => (n.lado ? (n.nivel === 2 ? 0.22 : 0.55) : 0)),
+    );
     fg.d3Force(
       'collide',
-      forceCollide<No>().radius((n) =>
-        estreito ? n.r + (n.nivel === 2 ? 4 : 5) : n.r + (n.nivel === 2 ? 8 : 10)),
+      forceCollide<No>().radius((n) => {
+        if (estreito) return n.r + (n.nivel === 2 ? 4 : 5);
+        // o rótulo do 1º nível ocupa até LIMITE_ROTULO caracteres à direita; sem
+        // contá-lo, dois nós "sem colisão" saem com os nomes empilhados
+        const rotulo = n.nivel === 1 ? Math.min(n.nome.length, LIMITE_ROTULO) * 1.15 : 0;
+        return n.r + (n.nivel === 2 ? 8 : 10) + rotulo;
+      }),
     );
     fg.d3ReheatSimulation();
     // enquadra com a física ainda em movimento (transição suave), uma vez por
@@ -287,14 +328,19 @@ export function GrafoConexoes({
               const fonte = (n.nivel === 0 ? 14 : n.nivel === 1 ? 12 : 10) / escala;
               ctx.font = `${n.nivel === 0 ? '600 ' : ''}${fonte}px Inter, system-ui, sans-serif`;
               // nomes mais curtos em tela estreita: senão vazam pela borda direita
-              const limite = estreito ? 16 : 28;
+              const limite = estreito ? 16 : LIMITE_ROTULO;
               const nome = n.nome.length > limite ? `${n.nome.slice(0, limite - 1)}…` : n.nome;
-              const x = (n.x ?? 0) + n.r + 4 / escala;
+              // para FORA da rede (o centro é fixo na origem): à direita quem
+              // está à direita, à esquerda quem está à esquerda. Saindo sempre
+              // à direita, o nó da metade esquerda escrevia sobre o miolo.
+              const paraEsquerda = (n.x ?? 0) < 0;
+              const folga = n.r + 4 / escala;
+              const x = (n.x ?? 0) + (paraEsquerda ? -folga : folga);
               const y = (n.y ?? 0) + fonte / 3;
               // halo: legível mesmo cruzando linhas e outros rótulos
               ctx.strokeStyle = PAPEL;
               ctx.lineWidth = 3.5 / escala;
-              ctx.textAlign = 'left';
+              ctx.textAlign = paraEsquerda ? 'right' : 'left';
               if (n.nivel === 0) {
                 ctx.textAlign = 'center';
                 const yCentro = (n.y ?? 0) + n.r + fonte + 4 / escala;

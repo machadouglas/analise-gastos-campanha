@@ -146,6 +146,20 @@ export const CONDICAO_DOCUMENTO_NUMERADO =
  *  contagem é de SQ_DESPESA distintos. Espelha `rep` em src/agregados.py. */
 export const MINIMO_NOTAS_VALOR_REPETIDO = 3;
 
+/** Contraparte que atende MAIS candidatos que isto é infraestrutura — plataforma
+ *  de anúncio, de pagamento, de vaquinha —, não vínculo entre campanhas. No 2º
+ *  nível do grafo ela ligava o candidato a estranhos: medido em 07/09/2026, uma
+ *  única plataforma de anúncio bastava para pendurar no anel externo os três
+ *  maiores anunciantes do país, em qualquer ficha. Espelha
+ *  MAX_CANDIDATOS_CONTRAPARTE_COMUM em src/mcp/consultas.py. */
+export const MAX_CANDIDATOS_CONTRAPARTE_COMUM = 20;
+
+/** As contrapartes-infraestrutura, para excluir do 2º nível do grafo. */
+export const sqlContrapartesInfraestrutura = () =>
+  `SELECT NR_CPF_CNPJ_FORNECEDOR FROM despesas_atual
+     WHERE NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
+     GROUP BY 1 HAVING COUNT(DISTINCT SQ_CANDIDATO) > ${MAX_CANDIDATOS_CONTRAPARTE_COMUM}`;
+
 /** As notas de um candidato, agrupadas por SQ_DESPESA e já marcadas com as red
  *  flags que são por nota — as três que hoje só existiam como consulta de
  *  exemplo no console. A ficha lista fornecedores; estas são as notas que cada

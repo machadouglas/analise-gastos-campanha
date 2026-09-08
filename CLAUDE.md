@@ -190,7 +190,12 @@ nome que não está no nome civil, e é por ele que o eleitor procura; partir de
 nas páginas, sempre pelo parquet `*_removidas` publicado. Componentes de visualização: `components/app/graficos.tsx`
 (barras, linhas, faixas/beeswarm, sparkline, composição), `sankey.tsx` (rótulos com
 anti-colisão + linhas-guia), `grafo.tsx` (layout de força via d3-force, estático e
-determinístico; aceita `secundarios` para o 2º nível de conexões), `mapa.tsx`;
+determinístico; aceita `secundarios` para o 2º nível de conexões — que exclui as
+contrapartes-infraestrutura, senão o anel externo de qualquer ficha vira "os três
+maiores anunciantes do país". O eixo X é o do dinheiro: doação à esquerda,
+despesa à direita, quem é os dois papéis no meio, e o 2º nível ALÉM do nó que o
+trouxe, do lado dele — daí a leitura de fluxo. O rótulo sai para fora do centro e
+entra no raio da colisão, senão o texto se empilha sem que a física perceba), `mapa.tsx`;
 blocos colapsáveis via `components/app/recolhivel.tsx` (SecaoRecolhivel — com muitos
 gráficos por página, declare `aberta` só no que é essencial) e zoom via
 `components/app/ampliavel.tsx` (Ampliavel — re-renderiza o gráfico num `<dialog>` de
@@ -229,11 +234,47 @@ Container Python (SDK oficial `mcp` 2.x, classe `MCPServer`; Streamable HTTP **s
 que lê **só os Parquet publicados** no release — nunca o banco da extração — e
 os carrega como tabelas num DuckDB local só-leitura (`dados.py`: boot, poll do
 md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
-`servidor.py`: fichas de candidato/fornecedor/partido, `fora_da_curva`,
-`declaracoes_removidas`, `fornecedores_compartilhados`, `sem_nota`,
-`gastos_por_categoria`, `visao_geral` e `sql` livre. Toda resposta traz
-`versao_dado` (data da extração) e `versao_codigo` (commit da imagem,
-`RADAR_GIT_SHA`, ou `stamp_codigo`).
+`servidor.py`: `buscar_candidato`/`buscar_fornecedor` (acham o código que as
+fichas consomem), fichas de candidato/fornecedor/partido, `fora_da_curva`,
+`notas_fora_do_preco`, `candidatos_conectados`, `declaracoes_removidas`,
+`novidades` (o que ENTROU, por `dt_primeira_extracao` — o contrário das
+removidas), `fornecedores_compartilhados`, `fornecedores_por_cadastro` (cruza
+com a tabela `fornecedores` e devolve a COBERTURA do enriquecimento junto: sem o
+denominador, "poucas empresas baixadas" se confunde com "poucas empresas
+verificadas"), `sem_nota`, `gastos_por_categoria`, `visao_geral` e `sql` livre. Toda resposta traz `versao_dado` (data da
+extração) e `versao_codigo` (commit da imagem, `RADAR_GIT_SHA`, ou
+`stamp_codigo`).
+
+- **As ferramentas medem, não julgam.** As de recorte devolvem posição numa
+  distribuição (métrica × p95 do grupo; nota × p95 da categoria) e
+  característica formal do declarado (documento não fiscal, número sem dígito,
+  declaração que saiu do ar) — nenhuma classifica irregularidade, e nada aqui
+  foi calibrado contra caso julgado. Por isso: docstring descreve a medida (e
+  não promete veredito), payload traz `o_que_esta_medido`/`criterios_das_notas`/
+  `ressalvas`, e as `instructions` dizem ao modelo que "acima do p95" marca 5%
+  de qualquer grupo por construção. O modelo **pode** concluir por conta
+  própria via `sql`, desde que mostre o cálculo; o que não pode é emprestar
+  rótulo da ferramenta. `test_sincronia_site.py::test_ferramentas_de_recorte_nao_entregam_veredito`
+  falha se uma docstring voltar a prometer fraude/irregularidade/superfaturamento.
+- **`notas_fora_do_preco`** compara a nota contra `benchmark_precos` montando-a
+  com `agregados.CHAVE_NOTA` — a MESMA chave que gerou os percentis (itens de
+  mesma `SQ_DESPESA` somados, `-1` linha a linha). Montada de outro jeito, o
+  número teria uma forma e a régua outra. Exige recorte (UF/cargo/partido/
+  candidato/categoria): sem ele varreria o país nota a nota.
+- **`candidatos_conectados`** anda pela `rede` (até 3 níveis) e devolve
+  `por_meio_de` — sem a contraparte que fez a ponte, uma lista de nível 3 não é
+  conferível. Contraparte que atende mais de `MAX_CANDIDATOS_CONTRAPARTE_COMUM`
+  (20) candidatos é infraestrutura, não gera ligação, e vai declarada em
+  `contrapartes_ignoradas`; o teto é afrouxável por parâmetro. **O site usa o
+  mesmo corte** no 2º nível do grafo (`sqlContrapartesInfraestrutura` em
+  `consultas.ts`, espelhando a constante — `test_corte_de_infraestrutura_igual_no_front`);
+  o que ainda diverge é o top-N por contraparte (`QUALIFY ROW_NUMBER()`), cap de
+  DESENHO que o MCP não aplica porque esconderia quem divide fornecedor gastando
+  pouco — o padrão de rateio. Registrado em
+  `test_top_n_do_grafo_e_cap_de_desenho_que_o_mcp_nao_aplica`, como a exceção do
+  PIVOT no gate. Medido em 07/09/2026: sem o corte, o nível 1 de um candidato
+  qualquer já alcança 42% do país por uma única plataforma de anúncio; com ele,
+  5 níveis completos custam ~50 ms.
 
 - **Mesmos números do site**: o SQL das ferramentas (`consultas.py`) espelha
   `site/src/lib/consultas.ts` e as fichas; as réguas vêm **importadas** de
