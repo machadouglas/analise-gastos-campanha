@@ -67,6 +67,29 @@ def test_devolve_o_formato_do_console_com_cors_e_versao(banco):
     assert r.headers[api.CABECALHO_VERSAO] == banco.publicado_em
 
 
+def test_resumo_da_api_traz_versao_e_mapa_de_arquivos(banco):
+    """Quando a Pages Function /dados/resumo.json falha (GitHub 429), o site lê
+    daqui a versão do dado e quais parquet existem — o suficiente para montar
+    tabelasDisponiveis e o `v` das consultas sem tocar no GitHub."""
+    app = servidor.criar_app()
+
+    async def corpo():
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                                          base_url="http://testserver", timeout=30) as c:
+                return await c.get("/api/v1/resumo")
+
+    r = _rodar(corpo())
+    assert r.status_code == 200, r.text
+    corpo_ = r.json()
+    assert corpo_["publicado_em"] == banco.publicado_em
+    assert corpo_["gerado_em"] == banco.versao_dado
+    assert corpo_["arquivos"] and all(n.endswith((".parquet", ".json")) for n in corpo_["arquivos"])
+    assert "indicadores.parquet" in corpo_["arquivos"]
+    assert r.headers["Cache-Control"] == "public, max-age=300"
+    assert r.headers["Access-Control-Allow-Origin"] == "*"
+
+
 def test_cache_imutavel_so_quando_a_versao_bate(banco):
     sem_v = _rodar(_get({"sql": "SELECT 1"}))
     assert sem_v.headers["Cache-Control"] == api.SEM_CACHE

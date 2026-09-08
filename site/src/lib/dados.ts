@@ -16,6 +16,12 @@
  *     cada consulta da página.
  *  3. Sem `VITE_RADAR_API` (fork, prévia local): só WASM, como antes.
  *
+ *  Antes da primeira consulta a página precisa da versão do dado e do mapa de
+ *  arquivos publicados: vêm do resumo.json pela Pages Function (/dados/*, que
+ *  busca no GitHub e toma 429 em hora de pico — medido em 08/09/2026) e, se ela
+ *  falhar, de GET /api/v1/resumo no próprio servidor. Só sem os dois é que a
+ *  página cai para o WASM.
+ *
  *  Erro da PRÓPRIA consulta (4xx: SQL recusado, coluna que não existe num
  *  parquet antigo) NÃO é contingência — o WASM devolveria o mesmo erro, e há
  *  página que tenta uma variante e recua no catch (Explorar).
@@ -23,7 +29,7 @@
  *  O console SQL livre não passa por aqui: continua no WASM, no CPU de quem
  *  digita a consulta (ver consultar.tsx).
  */
-import { carregarResumo } from '@/lib/resumo';
+import { carregarResumo, type Resumo } from '@/lib/resumo';
 import type { ResultadoConsulta } from '@/lib/duckdb';
 
 /** Base da API (sem barra final); vazia = só WASM. Definida no build (Pages). */
@@ -81,23 +87,56 @@ async function prepararWasm(): Promise<void> {
   for (const t of d.tabelasDisponiveis) tabelasDisponiveis.add(t);
 }
 
+type ResumoMinimo = Pick<Resumo, 'gerado_em' | 'publicado_em' | 'arquivos'>;
+
+/** O que o servidor sabe do release que carregou — a mesma versão e o mesmo
+ *  mapa de arquivos do resumo.json, sem passar pelo GitHub. */
+async function resumoDaApi(): Promise<ResumoMinimo | null> {
+  const controle = new AbortController();
+  const relogio = setTimeout(() => controle.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${API}/api/v1/resumo`, { signal: controle.signal });
+    if (!r.ok) return null;
+    const corpo = (await r.json()) as ResumoMinimo;
+    return corpo && typeof corpo === 'object' ? corpo : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(relogio);
+  }
+}
+
 /** Mesmo papel de obterConexao() em @/lib/duckdb: depois dela,
  *  `tabelasDisponiveis` está preenchido. No modo API não boota motor nenhum —
- *  só lê o resumo.json (uma busca por sessão, compartilhada com a Home). */
+ *  lê o resumo.json (uma busca por sessão, compartilhada com a Home) ou, se a
+ *  Function falhar, o /api/v1/resumo do servidor. */
 export function obterConexao(): Promise<void> {
   preparo ??= (async () => {
-    const resumo = await carregarResumo();
+    let resumo: ResumoMinimo | null = await carregarResumo();
+    let origem = 'resumo.json';
+    if (estado === 'api' && !resumo?.arquivos) {
+      const daApi = await resumoDaApi();
+      if (daApi?.arquivos) {
+        resumo = daApi;
+        origem = 'api';
+      }
+    }
     versaoDoDado = String(resumo?.publicado_em ?? resumo?.gerado_em ?? '');
     const arquivos = resumo?.arquivos;
     if (estado === 'api' && arquivos) {
       for (const nome of Object.keys(arquivos)) {
         if (nome.endsWith('.parquet')) tabelasDisponiveis.add(nome.slice(0, -'.parquet'.length));
       }
+      if (origem === 'api') console.info('[dados] resumo.json indisponível; versão do dado veio da API');
       return;
     }
-    // sem o mapa de arquivos (resumo antigo) não dá para saber o que existe
-    // sem abrir os parquet: cai no caminho de sempre
-    if (estado === 'api') entrarEmContingencia('resumo.json sem o mapa `arquivos`');
+    // sem o mapa de arquivos não dá para saber o que existe sem abrir os
+    // parquet: cai no caminho de sempre
+    if (estado === 'api') {
+      entrarEmContingencia(resumo
+        ? 'resumo.json sem o mapa `arquivos` e /api/v1/resumo sem resposta'
+        : 'resumo.json indisponível (/dados/*) e /api/v1/resumo sem resposta');
+    }
     await prepararWasm();
   })();
   return preparo;

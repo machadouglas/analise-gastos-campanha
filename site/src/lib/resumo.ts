@@ -125,15 +125,22 @@ export interface Resumo {
 
 let promessa: Promise<Resumo | null> | null = null;
 
-/** Busca única por sessão: Home e DuckDB compartilham a mesma promessa
- *  (sem invalidação — recarregar a página é o que atualiza). */
+/** Busca única por sessão: Home e camada de dados compartilham a mesma
+ *  promessa (sem invalidação — recarregar a página é o que atualiza). A
+ *  Function /dados/* busca no GitHub, que responde 429 em hora de pico: uma
+ *  segunda tentativa depois de um instante costuma passar (e a Function serve
+ *  a última cópia boa quando o GitHub falha). */
 export function carregarResumo(): Promise<Resumo | null> {
   promessa ??= (async () => {
-    try {
-      const r = await fetch('/dados/resumo.json', { cache: 'no-cache' });
-      if (r.ok) return (await r.json()) as Resumo;
-    } catch {
-      /* segue para o retorno nulo */
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
+      try {
+        const r = await fetch('/dados/resumo.json', { cache: 'no-cache' });
+        if (r.ok) return (await r.json()) as Resumo;
+        if (r.status < 429) break; // 4xx de verdade: não adianta insistir
+      } catch {
+        /* rede: tenta de novo */
+      }
+      await new Promise((ok) => setTimeout(ok, 800));
     }
     return null;
   })();

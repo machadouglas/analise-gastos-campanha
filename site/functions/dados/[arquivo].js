@@ -24,17 +24,38 @@ export async function onRequest({ params, request }) {
   // respostas completas (sem Range) ficam no cache da CDN — sem isso, cada
   // visitante desce até o GitHub. Respostas 206 não são cacheáveis pela Cache API.
   const cache = caches.default;
-  const chave = new Request(new URL(request.url).toString().split("?")[0], { method: "GET" });
-  if (request.method === "GET" && !cabecalhos["Range"]) {
+  const urlBase = new URL(request.url).toString().split("?")[0];
+  const chave = new Request(urlBase, { method: "GET" });
+  // Cópia de reserva com TTL longo, sob outra chave: o GitHub responde 429
+  // (limite por IP — os IPs de saída dos Workers são compartilhados) e 5xx
+  // em hora de pico, e um 429 no resumo.json derruba a página inteira. Quando
+  // o upstream falha, sai a última cópia boa, marcada, em vez do erro.
+  const chaveReserva = new Request(`${urlBase}?copia=reserva`, { method: "GET" });
+  const completa = request.method === "GET" && !cabecalhos["Range"];
+  if (completa) {
     const emCache = await cache.match(chave);
     if (emCache) return emCache;
   }
 
-  const upstream = await fetch(BASE + nome, {
-    method: request.method,
-    headers: cabecalhos,
-    redirect: "follow",
-  });
+  let upstream;
+  try {
+    upstream = await fetch(BASE + nome, {
+      method: request.method,
+      headers: cabecalhos,
+      redirect: "follow",
+    });
+  } catch (e) {
+    upstream = new Response(`upstream inacessível: ${e && e.message ? e.message : e}`, { status: 502 });
+  }
+  if (completa && !upstream.ok && upstream.status !== 304) {
+    const reserva = await cache.match(chaveReserva);
+    if (reserva) {
+      const h = new Headers(reserva.headers);
+      h.set("Cache-Control", "no-store"); // volta a tentar o upstream na próxima
+      h.set("X-Radar-Copia", `reserva; upstream ${upstream.status}`);
+      return new Response(reserva.body, { status: 200, headers: h });
+    }
+  }
   const h = new Headers();
   for (const c of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"]) {
     const v = upstream.headers.get(c);
@@ -52,7 +73,13 @@ export async function onRequest({ params, request }) {
     status: upstream.status,
     headers: h,
   });
-  if (request.method === "GET" && !cabecalhos["Range"] && upstream.status === 200)
+  if (completa && upstream.status === 200) {
     await cache.put(chave, resposta.clone());
+    // a reserva vive 7 dias: só é lida quando o upstream falha, e sai
+    // marcada como cópia — o dado tem no máximo a idade do último sucesso
+    const hr = new Headers(resposta.headers);
+    hr.set("Cache-Control", "public, max-age=604800");
+    await cache.put(chaveReserva, new Response(resposta.clone().body, { status: 200, headers: hr }));
+  }
   return resposta;
 }
