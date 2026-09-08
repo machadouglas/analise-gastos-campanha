@@ -35,3 +35,31 @@ arquitetura em [arquitetura-mcp.md](arquitetura-mcp.md), deploy em
 [deploy-mcp.md](deploy-mcp.md)), com rate limit na borda e host sem IP exposto.
 Pendente: validação com clientes reais (Claude, ChatGPT) e registro no MCP Registry.
 Medir após duas semanas: proporção de `sql`, latência, 429/timeout.
+
+## 4. Onde a consulta roda (feito em 08/09/2026) e o modo arquivo
+
+As fichas e o Explorar deixaram de montar um banco no navegador: o SQL das
+páginas vai para `GET /api/v1/consulta` no container do MCP, a borda cacheia a
+resposta por versão do dado, e o DuckDB-WASM fica como contingência (e como
+motor do console). Desenho e medições em `arquitetura-mcp.md` §12; operação em
+`deploy-mcp.md` §6.
+
+Depois das prestações finais (novembro), o dado congela e a arquitetura ideal
+muda: o mesmo SQL das páginas roda **uma vez** como gerador de JSON estático
+(uma pasta por ficha e por visão do Explorar), publicado no Pages ou em R2, e o
+servidor pode ser desligado — site 100% estático, sem fallback, `consultas.ts`
+aposentado. A API construída na campanha é exatamente esse gerador com outro
+gatilho. Não fazer antes: com o dado mudando todo dia seriam 20 mil fichas a
+regerar e sincronizar diariamente, para resolver o que o cache de borda já
+resolve.
+
+## 5. Cópia de segurança do banco da extração (pendente)
+
+`data/db/gastos.duckdb` guarda o histórico de extrações com o CPF cru — e o
+TSE sobrescreve os arquivos todo dia, então esse histórico **não se reconstrói
+da fonte**. Os Parquet publicados são uma cópia pseudonimizada: servem para
+consulta, não para retomar o pipeline (o hash de identidade de uma linha com
+CPF cru não bate com o da linha `pf-…`, e a próxima extração viraria uma
+remoção em massa). Falta uma cópia periódica do banco (e do `data/raw/` do dia)
+fora do host, **cifrada**, porque carrega CPF — por exemplo `rclone` para um
+bucket com chave só no container da rotina, logo depois de cada `carregar`.

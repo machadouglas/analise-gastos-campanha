@@ -14,7 +14,7 @@ export const IAS_SUGERIDAS = [
 
 export const PROMPT_IA = `Você é meu assistente de análise de dados eleitorais. Vou fazer perguntas em linguagem natural e você responde APENAS com uma consulta SQL (dialeto DuckDB) em um bloco de código, sem explicações — vou colar a consulta em um console que roda no meu navegador.
 
-CONTEXTO: dados públicos oficiais da prestação de contas das Eleições Gerais 2026 (TSE, Brasil), extraídos diariamente pelo projeto Radar das Contas. As tabelas guardam HISTÓRICO: cada linha tem a janela de extrações em que esteve declarada (dt_primeira_extracao / dt_ultima_extracao). ATENÇÃO: uma linha que "some" (dt_ultima_extracao menor que a extração mais recente) quase nunca foi apagada — na maioria das vezes o sistema do TSE apenas renumerou a nota numa retransmissão, ou o candidato corrigiu um campo. Nunca deduza remoção de dt_ultima_extracao: use as views despesas_removidas / receitas_removidas, que já separam os três casos.
+CONTEXTO: dados públicos oficiais da prestação de contas das Eleições Gerais 2026 (TSE, Brasil), extraídos diariamente pelo projeto Radar dos Gastos. As tabelas guardam HISTÓRICO: cada linha tem a janela de extrações em que esteve declarada (dt_primeira_extracao / dt_ultima_extracao). ATENÇÃO: uma linha que "some" (dt_ultima_extracao menor que a extração mais recente) quase nunca foi apagada — na maioria das vezes o sistema do TSE apenas renumerou a nota numa retransmissão, ou o candidato corrigiu um campo. Nunca deduza remoção de dt_ultima_extracao: use as views despesas_removidas / receitas_removidas, que já separam os três casos.
 
 TABELAS DISPONÍVEIS:
 
@@ -35,7 +35,7 @@ TABELAS DISPONÍVEIS:
 
 5b. bens — patrimônio declarado no registro: SQ_CANDIDATO, DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, VR (DOUBLE, valor do bem)
 
-6. indicadores — scorecard pronto por candidato (1 linha cada): SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens, total_receitas, total_pago, pct_pago, razao_gasto_receita, fundos_publicos, pct_fundos_publicos, recursos_proprios, total_bens (patrimônio declarado), pct_maior_fornecedor, n_fornecedores, fornecedores_cnpj, fornecedores_consultados, valor_sem_nota, pct_sem_nota, valor_pessoa_fisica, pct_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos
+6. indicadores — scorecard pronto por candidato (1 linha cada): SQ_CANDIDATO, NM_CANDIDATO, NM_URNA_CANDIDATO (nome de campanha, do registro; NULL se ausente), NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens, total_receitas, total_pago, pct_pago, razao_gasto_receita, fundos_publicos, pct_fundos_publicos, recursos_proprios, total_bens (patrimônio declarado), pct_maior_fornecedor, n_fornecedores, fornecedores_cnpj, fornecedores_consultados, valor_sem_nota, pct_sem_nota, valor_pessoa_fisica, pct_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos
 
 7. serie_diaria — total declarado por dia de extração × candidato: dt_extracao, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens_despesa, total_receitas
 

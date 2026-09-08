@@ -5,8 +5,10 @@
  * trecho do SQL, então o teste exercita a página inteira (efeito, estados,
  * render condicional) sem motor nenhum no navegador de mentira.
  *
- * Uso: `vi.mock('@/lib/duckdb', () => import('@/test/duckdb-falso'))` no topo
- * do arquivo de teste; o corpo do teste importa `responder`/`tabelasDisponiveis`
+ * Uso: `vi.mock('@/lib/dados', () => import('@/test/duckdb-falso'))` no topo
+ * do arquivo de teste (as fichas e o Explorar consomem @/lib/dados, que tem a
+ * mesma assinatura de @/lib/duckdb; o console ainda importa @/lib/duckdb e
+ * mocka esse caminho); o corpo do teste importa `responder`/`tabelasDisponiveis`
  * daqui e vê a MESMA instância que a página recebeu. */
 import type { ResultadoConsulta } from '@/lib/duckdb';
 

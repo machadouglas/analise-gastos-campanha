@@ -2,9 +2,12 @@
 só para leitura, e um laço em segundo plano troca o banco inteiro (de forma
 atômica) quando o release muda.
 
-Não há recomputação de agregados nem view própria: cada parquet vira a tabela
-de mesmo nome, exatamente como o site os consome. A régua de remoção,
-retificação, sinais e pseudonimização é a do pipeline (src/), publicada pronta.
+Não há recomputação de agregados: cada parquet vira a tabela de mesmo nome,
+exatamente como o site os consome. A régua de remoção, retificação, sinais e
+pseudonimização é a do pipeline (src/), publicada pronta. A única view é
+`nomes_urna`, espelho da que o site cria no DuckDB-WASM (site/src/lib/
+duckdb.ts): as páginas mandam para a rota do site (api.py) o mesmo SQL que
+rodariam no navegador, e esse SQL faz `LEFT JOIN nomes_urna`.
 """
 
 from __future__ import annotations
@@ -31,6 +34,18 @@ log = logging.getLogger("radar.mcp")
 
 NOME_TABELA = re.compile(r"^[a-z][a-z0-9_]*$")
 NOME_PARQUET = re.compile(r"^[a-z][a-z0-9_]*\.parquet$")
+
+# Nome de urna por candidato (NOME_EXIBICAO/JOIN_NOMES_URNA em consultas.ts):
+# a prestação só traz o nome civil. Sem o parquet de candidatos a view existe
+# vazia — os JOINs degradam para o civil em vez de quebrar a consulta. Mesma
+# definição de site/src/lib/duckdb.ts (tests/test_sincronia_site.py confere).
+VIEW_NOMES_URNA = (
+    "SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO"
+    " FROM candidatos GROUP BY 1"
+)
+VIEW_NOMES_URNA_VAZIA = (
+    "SELECT NULL::VARCHAR AS SQ_CANDIDATO, NULL::VARCHAR AS NM_URNA_CANDIDATO WHERE false"
+)
 
 # Configuração da conexão de leitura: sem acesso externo (read_csv/httpfs/glob/
 # getenv fora), memória e threads limitadas, e tudo travado — uma consulta não
@@ -97,6 +112,11 @@ def construir(parquets: dict[str, Path], resumo: dict, destino: Path,
                 f'CREATE TABLE "{nome}" AS SELECT * FROM read_parquet(?)', [caminho.as_posix()]
             )
             tabelas.append(nome)
+        try:
+            con.execute(f"CREATE OR REPLACE VIEW nomes_urna AS {VIEW_NOMES_URNA}")
+            con.execute("SELECT * FROM nomes_urna LIMIT 0")  # parquet antigo sem a coluna
+        except duckdb.Error:
+            con.execute(f"CREATE OR REPLACE VIEW nomes_urna AS {VIEW_NOMES_URNA_VAZIA}")
         con.execute("CHECKPOINT")
     finally:
         con.close()
@@ -198,6 +218,8 @@ class Servico:
         self.banco: Banco | None = None
         self._parar = threading.Event()
         self._thread: threading.Thread | None = None
+        self.ultima_verificacao: float | None = None
+        self._pedido = threading.Lock()
 
     def iniciar(self) -> None:
         self.banco = baixar_e_construir(self.dir_cache, self.base)
@@ -215,6 +237,7 @@ class Servico:
 
     def verificar(self) -> bool:
         """Uma rodada: True se trocou de banco."""
+        self.ultima_verificacao = time.time()   # o poll também conta para o debounce da API
         resumo = publicado.baixar_resumo(self.base)
         novos = resumo.get("arquivos") or {}
         if self.banco and novos and novos == self.banco.arquivos:
@@ -246,6 +269,34 @@ class Servico:
                 self.verificar()
             except Exception as e:  # noqa: BLE001 — o laço nunca morre por falha de rede
                 log.warning("verificação do release falhou: %s", e)
+
+    # O site descobre o release novo antes deste processo (o resumo.json dele
+    # tem cache de 5 min na borda; o poll aqui também é de 5 min — no pior caso
+    # são 10 min de respostas com a versão anterior). Quando uma requisição
+    # chega com `v` mais novo que o banco, ela pede uma verificação imediata;
+    # o debounce garante uma rodada por minuto, não uma por visitante.
+    DEBOUNCE_PEDIDO = 60.0
+
+    def pedir_verificacao(self) -> bool:
+        """Verificação fora do ciclo, em thread própria. True se foi disparada."""
+        if not self._pedido.acquire(blocking=False):
+            return False
+        agora = time.time()
+        if self.ultima_verificacao and agora - self.ultima_verificacao < self.DEBOUNCE_PEDIDO:
+            self._pedido.release()
+            return False
+        self.ultima_verificacao = agora  # reserva a janela antes de a thread rodar
+
+        def rodar():
+            try:
+                self.verificar()
+            except Exception as e:  # noqa: BLE001
+                log.warning("verificação pedida pela API falhou: %s", e)
+            finally:
+                self._pedido.release()
+
+        threading.Thread(target=rodar, name="radar-verificacao-pedida", daemon=True).start()
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -308,7 +359,7 @@ def expressao_limitada(coluna: str, tipo: str) -> str:
 @dataclass
 class Resultado:
     colunas: list[str]
-    linhas: list[dict[str, Any]]
+    linhas: list[Any]          # dicts por padrão; listas com `listas=True`
     truncado: bool            # havia mais linhas do que o teto
     truncado_bytes: bool      # a resposta foi cortada pelo teto de bytes
     duracao_ms: int
@@ -345,21 +396,34 @@ def json_seguro(v: Any) -> Any:
 
 
 class Executor:
-    """Duas filas: as ferramentas curadas (consultas conhecidas, baratas) e a
-    `sql` livre (custo imprevisível). Medido em 05/09/2026 com uma fila só:
-    40 chamadas simultâneas, as 8 vagas tomadas por cross joins pesados, e
-    TODAS as chamadas leves recusadas com "ocupado" — a sql não pode
-    esgotar o que as fichas usam."""
+    """Três filas: as ferramentas curadas (consultas conhecidas, baratas), a
+    `sql` livre (custo imprevisível) e o site (o SQL das páginas, via
+    src/mcp/api.py). Medido em 05/09/2026 com uma fila só: 40 chamadas
+    simultâneas, as 8 vagas tomadas por cross joins pesados, e TODAS as
+    chamadas leves recusadas com "ocupado" — a sql não pode esgotar o que as
+    fichas usam. A fila do site tem timeout próprio, menor: a página inteira
+    mais cara mede ~65 ms, e uma consulta que passa de alguns segundos ali não
+    é do site — é alguém usando a rota como sql livre.
+
+    Fila cheia ou tempo esgotado viram `Ocupado`/`TempoEsgotado`; a API os
+    devolve com status HTTP e o site cai para o DuckDB-WASM."""
 
     def __init__(self, servico: Servico, timeout: float = 10, max_simultaneas: int = 8,
                  espera_fila: float = 5, max_linhas: int = 500, max_bytes: int = 200_000,
-                 max_simultaneas_sql: int = 4):
+                 max_simultaneas_sql: int = 4, max_simultaneas_site: int = 8,
+                 timeout_site: float = 5, max_linhas_site: int = 2_000,
+                 max_bytes_site: int = 1_000_000):
         self.servico = servico
         self.timeout = timeout
         self.espera_fila = espera_fila
         self.max_linhas = max_linhas
         self.max_bytes = max_bytes
-        self.max_simultaneas = {"ferramentas": max_simultaneas, "sql": max_simultaneas_sql}
+        self.max_simultaneas = {"ferramentas": max_simultaneas, "sql": max_simultaneas_sql,
+                                "site": max_simultaneas_site}
+        # o site tem tetos próprios: as páginas pedem até 1.500 linhas
+        # (dispersão do Explorar) e nunca chegam perto de 1 MB
+        self.timeouts = {"site": timeout_site}
+        self.tetos = {"site": (max_linhas_site, max_bytes_site)}
         # os semáforos nascem no primeiro uso, presos ao loop que os usa (um
         # Semaphore criado fora de loop se prende ao primeiro e quebra num novo)
         self._semaforo_loop: asyncio.AbstractEventLoop | None = None
@@ -384,8 +448,13 @@ class Executor:
         return nome in self.banco.tabelas
 
     async def consultar(self, sql: str, parametros: list | None = None,
-                        max_linhas: int | None = None, fila: str = "ferramentas") -> Resultado:
-        teto = min(max_linhas or self.max_linhas, self.max_linhas)
+                        max_linhas: int | None = None, fila: str = "ferramentas",
+                        listas: bool = False) -> Resultado:
+        """`listas=True` devolve cada linha como lista na ordem das colunas (o
+        formato do console do site): preserva colunas de nome repetido, que o
+        dicionário fundiria."""
+        teto_linhas, max_bytes = self.tetos.get(fila, (self.max_linhas, self.max_bytes))
+        teto = min(max_linhas or teto_linhas, teto_linhas)
         semaforo = self._semaforo(fila)
         try:
             await asyncio.wait_for(semaforo.acquire(), timeout=self.espera_fila)
@@ -395,16 +464,20 @@ class Executor:
                 + " — tente de novo em alguns segundos"
             ) from None
         try:
-            return await self._executar(sql, parametros or [], teto)
+            return await self._executar(sql, parametros or [], teto, max_bytes,
+                                        self.timeouts.get(fila, self.timeout), listas)
         finally:
             semaforo.release()
 
-    async def _executar(self, sql: str, parametros: list, teto: int) -> Resultado:
+    async def _executar(self, sql: str, parametros: list, teto: int,
+                        max_bytes: int | None = None, timeout: float | None = None,
+                        listas: bool = False) -> Resultado:
         cur = self.banco.cursor()
         inicio = time.perf_counter()
         # a quebra de linha antes do ')' protege um comentário `--` no fim
         interno = f"(\n{sql.strip().rstrip(';')}\n)"
-        max_bytes = self.max_bytes
+        max_bytes = max_bytes or self.max_bytes
+        timeout = timeout or self.timeout
 
         def rodar():
             # 1) só o esquema do resultado (LIMIT 0 não executa o plano): é o
@@ -426,10 +499,11 @@ class Executor:
             truncado = len(brutas) > teto
             # 3) serialização aqui, na thread, com orçamento de bytes numa
             #    passada só — o event loop nunca vê o resultado cru
-            linhas: list[dict[str, Any]] = []
+            linhas: list[Any] = []
             tamanho, truncado_bytes = 2, False
             for linha in brutas[:teto]:
-                d = dict(zip(colunas, (json_seguro(v) for v in linha), strict=True))
+                valores = [json_seguro(v) for v in linha]
+                d = valores if listas else dict(zip(colunas, valores, strict=True))
                 tamanho += len(json.dumps(d, ensure_ascii=False)) + 2
                 if linhas and tamanho > max_bytes:
                     truncado_bytes = True
@@ -440,7 +514,7 @@ class Executor:
         tarefa = asyncio.get_running_loop().run_in_executor(None, rodar)
         # asyncio.wait não cancela a tarefa (cancelar não interrompe o DuckDB);
         # no estouro, interrupt() derruba a consulta e a tarefa termina sozinha
-        pronto, _ = await asyncio.wait({tarefa}, timeout=self.timeout)
+        pronto, _ = await asyncio.wait({tarefa}, timeout=timeout)
         if not pronto:
             cur.interrupt()
             try:
@@ -449,7 +523,7 @@ class Executor:
                 log.debug("consulta interrompida: %s", e)
             cur.close()
             raise TempoEsgotado(
-                f"a consulta passou de {self.timeout:.0f}s e foi interrompida. "
+                f"a consulta passou de {timeout:.0f}s e foi interrompida. "
                 "Restrinja por UF/cargo/candidato ou use as tabelas prontas "
                 "(indicadores, rede, benchmark_*)."
             )

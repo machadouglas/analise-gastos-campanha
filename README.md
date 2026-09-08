@@ -10,7 +10,7 @@ Todos os dados usados são **públicos e oficiais** (Portal de Dados Abertos do 
 
 ## As três formas de usar
 
-1. **Site público** (`site/`) — SPA com o radar diário: declarações removidas, fora da curva por grupo de comparação, fichas de candidato/partido/fornecedor com benchmarks, e um console SQL (DuckDB-WASM) que roda no navegador do visitante, com prompt copiável para a IA pessoal dele gerar consultas.
+1. **Site público** (`site/`) — SPA com o radar diário: declarações removidas, fora da curva por grupo de comparação, fichas de candidato/partido/fornecedor com benchmarks (consultadas na API do servidor, com fallback para DuckDB-WASM no navegador se ela não responder), e um console SQL (DuckDB-WASM) que roda no navegador do visitante, com prompt copiável para a IA pessoal dele gerar consultas.
 2. **CLI local** (abaixo) — para estudo próprio, com ou sem IA.
 3. **Dados prontos em Parquet** — publicados diariamente no GitHub Releases, consultáveis de qualquer lugar sem instalar nada.
 

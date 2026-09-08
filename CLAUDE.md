@@ -65,7 +65,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar` e export
 - `extracoes` (`src/historico.py`, alimentada pelo `versionar`; **não é exportada** — `scripts/previa-local.py` a reconstrói das janelas do histórico) — registro de cada dia de extração já visto (alimenta a série).
 - `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens_despesa (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
 - `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
-- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
+- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): `NM_URNA_CANDIDATO` (do registro; NULL sem o parquet/coluna — é o nome principal do site), totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
 - `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
 - `norma_documento` — por DS_ORIGEM_DESPESA: quanto do valor é declarado com documento fiscal (só entre fornecedores PJ) e `exige_documento` (a categoria tem nota como norma). É a régua do indicador `valor_sem_nota`: sem ela, marcar "sem nota" pegava metade do dinheiro do país, porque em impulsionamento/honorários/militância quase ninguém emite nota. Categoria com menos de 30 notas (itens agrupados por SQ_DESPESA; `-1` conta linha a linha) cai na lista fixa de `analises.py` (que é sempre o piso).
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
@@ -76,7 +76,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar` e export
 ## Testes e verificação
 
 - `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real + **E2E do pipeline** (`test_e2e_pipeline.py`: zip com CSV no formato do TSE → `carregar` → `versionar` → agregados → `verificar` → `exportar` → as consultas do console rodam sobre os parquets **pseudonimizados** — as duas emendas que nenhuma outra suíte cobre: o parse real do CSV e o consumo do dado mascarado) + **sincronia backend↔site** (`test_sincronia_site.py` lê `site/src/lib/consultas.ts`/`duckdb.ts` e falha se as regras espelhadas divergirem do Python) + **consultas prontas do console** (`test_consultas_do_site.py` executa cada SQL de `site/src/lib/exemplos.ts` contra o banco real, com as views que o release publica; exige que devolvam linhas, salvo os monitores declarados). Rode após mudar `src/` OU as regras/consultas do site.
-- `npm test` (em `site/`) — vitest em duas frentes, num comando só (ambiente jsdom global, setup em `site/src/test/setup.ts`): **funções puras** — construtores de SQL (`lib/consultas.ts`), detecção de gráfico (`lib/grafico-auto.ts`), formatação/mascaramento (`lib/format.ts`) — e **renderização das páginas** com @testing-library/react (`src/pages/*.test.tsx`), cobrindo os estados condicionais: lápide de CNPJ não encontrado (ficha do fornecedor e tabela do candidato, com a coluna oculta `_situacao` que nunca pode ser renderizada), seção de declarações removidas que some sem remoção e cartões da Home, colunas da visão "Quem mais gastou" do Explorar. As páginas são isoladas do DuckDB-WASM pelo dublê `src/test/duckdb-falso.ts` (`vi.mock('@/lib/duckdb', …)`, respostas por trecho do SQL) e da Home pelo mock de `lib/resumo`; o grafo de conexões (canvas) é substituído por um stub. Rode após mudar `site/src/lib/` ou `site/src/pages/`.
+- `npm test` (em `site/`) — vitest em duas frentes, num comando só (ambiente jsdom global, setup em `site/src/test/setup.ts`): **funções puras** — construtores de SQL (`lib/consultas.ts`), detecção de gráfico (`lib/grafico-auto.ts`), formatação/mascaramento (`lib/format.ts`) — e **renderização das páginas** com @testing-library/react (`src/pages/*.test.tsx`), cobrindo os estados condicionais: lápide de CNPJ não encontrado (ficha do fornecedor e tabela do candidato, com a coluna oculta `_situacao` que nunca pode ser renderizada), seção de declarações removidas que some sem remoção e cartões da Home, colunas da visão "Quem mais gastou" do Explorar. As páginas são isoladas da camada de dados pelo dublê `src/test/duckdb-falso.ts` (`vi.mock('@/lib/dados', …)` nas fichas/Explorar, `vi.mock('@/lib/duckdb', …)` no console; respostas por trecho do SQL) e da Home pelo mock de `lib/resumo`; o grafo de conexões (canvas) é substituído por um stub. `lib/dados.test.ts` cobre a escada API → WASM (5xx/rede/timeout caem e grudam; 400 propaga; sem `VITE_RADAR_API` é só WASM). Rode após mudar `site/src/lib/` ou `site/src/pages/`.
 - `python gastos.py verificar` — checagens de integridade (conversão de valores, datas dentro do ciclo eleitoral em despesas E receitas, reconciliação agregados×fonte, janelas coerentes, decomposição das linhas mortas). A `rotina` roda isso automaticamente e **não publica** se falhar. Há também **avisos** (`[verificacao] aviso`), que nunca barram: data posterior à própria extração (150 despesas e 32 receitas em 03/09/2026, uma em 24/11) é erro de quem declarou, e o dado é publicado como veio — barrar a série inteira por um typo alheio seria pior.
 - `python scripts/previa-local.py` — monta um banco a partir dos **Parquet já publicados**, roda o pipeline do código atual por cima (views + agregados + `verificar` + export) e entrega em `site/public/dados/`. É o único jeito de ver o efeito de uma mudança na base inteira antes de subir — bug de volume e de dado sujo não aparece em fixture. Também é o caminho curto para quem só quer mexer no site: dispensa `baixar` (200+ MB) e `carregar`. Sobrescreve `site/public/dados/` (gitignorado); `RADAR_SAL_CPF` pode ser qualquer valor, porque os CPFs publicados já vêm `pf-…` e a pseudonimização é idempotente sobre eles.
 
@@ -154,6 +154,16 @@ Não há rota `/despesa/:id`: 88% dos pares candidato×fornecedor têm uma únic
 nota, então a página seria uma repetição da linha — e `SQ_DESPESA` não serve de
 chave (o SPCE regenera).
 
+**Nome do candidato no site: o de urna é o principal** (é como a campanha divulga e
+como o eleitor procura — metade das candidaturas com movimento usa na urna um nome que
+não está no civil), e o civil aparece como secundário quando difere. A prestação só traz
+`NM_CANDIDATO`, então: `duckdb.ts` registra sempre a view `nomes_urna` (do parquet de
+candidatos; vazia sem ele, para os JOINs degradarem em vez de quebrar), toda consulta
+que mostra candidato junta `JOIN_NOMES_URNA` e projeta `nomeExibicao()` (`consultas.ts`),
+e o que vem do `resumo.json` (Home, conversa MCP) passa por `nomeCandidato()` em
+`format.ts` — o backend grava `NM_URNA_CANDIDATO` em `indicadores` e em todo registro
+de candidato do `resumo.json` (`resumo._join_urna`).
+
 Regras espelhadas do backend vivem centralizadas em `site/src/lib/consultas.ts`
 (categorias sem NF ↔ `src/analises.py`; SINAIS_CTE/SINAIS_FILTRO ↔ `METRICAS_SINAL` em
 `src/resumo.py`; CONDICAO_NOTA_SEM_NUMERO/CONDICAO_DOCUMENTO_NUMERADO ↔ as análises 12 e
@@ -163,7 +173,12 @@ a lápide de CNPJ que a Receita respondeu 404, que vira aviso na ficha do fornec
 marca a linha na tabela de fornecedores do candidato; ORIGEM_FINANCIAMENTO_COLETIVO/CONDICAO_DOACAO_DIRETA
 e CATEGORIA_IMPULSIONAMENTO ↔ as exclusões das flags 4 e 13 em `src/analises.py` — o anel
 "dinheiro que volta" das fichas só fecha com doação direta; COR_RACA_NEGRA em `partido.tsx` ↔
-`src/agregados.py`) e `site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
+`src/agregados.py`; `sqlBuscaCandidatos` ↔ `sql_buscar_candidato` em `src/mcp/consultas.py` —
+a busca parte do **registro** (`candidatos`, único que tem NM_URNA_CANDIDATO) e pega os
+totais de `indicadores` por LEFT JOIN: metade das candidaturas com movimento usa na urna um
+nome que não está no nome civil, e é por ele que o eleitor procura; partir de
+`indicadores`/`despesas_atual` escondia essas e também quem só declarou receita) e
+`site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
 `despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);
 `tests/test_sincronia_site.py` cobre essa sincronia — remoções NUNCA se calculam "na unha"
 nas páginas, sempre pelas views. Componentes de visualização: `components/app/graficos.tsx`
@@ -176,6 +191,31 @@ gráficos por página, declare `aberta` só no que é essencial) e zoom via
 ~96vw; envolva qualquer SVG responsivo denso). Deploy: Cloudflare Pages
 (`docs/deploy-cloudflare.md`). Os dados chegam ao site via Pages Function `/dados/*` que faz
 proxy do GitHub Releases (sem CORS lá).
+
+**Onde a consulta roda** (`site/src/lib/dados.ts`): as fichas e o Explorar importam
+`executarSQL`/`obterConexao`/`tabelasDisponiveis` de `@/lib/dados` — mesma assinatura de
+`@/lib/duckdb`, mas o SQL vai primeiro para a API do servidor (`GET /api/v1/consulta`,
+`src/mcp/api.py`; base em `VITE_RADAR_API`, variável de build do Pages) num GET com a
+consulta comprimida (`q` = deflate-raw + base64url) e a versão do dado (`v` =
+`publicado_em` do `resumo.json`) na URL — a borda cacheia a resposta imutável e o visitante
+recebe ~10 KB em vez do motor (~10 MB) + pedaços dos Parquet. `tabelasDisponiveis` vem do
+mapa `arquivos` do resumo, sem bootar motor nenhum — do `resumo.json` pela Function
+(`carregarResumo` tenta duas vezes: o GitHub por trás dela responde 429 em hora de pico)
+ou, se ela falhar, de `GET /api/v1/resumo` no servidor. A Function busca cada arquivo
+inteiro no GitHub uma vez por data center e serve do cache o GET, o HEAD e os `Range` do
+WASM (a Cache API fatia em 206) — cada `Range` ia ao GitHub e virava 429 em cascata;
+uma cópia de reserva de 7 dias sai marcada (`X-Radar-Copia`) quando o GitHub falha.
+429 da borda (rate limit por IP) não é contingência: `viaApi` espera o `Retry-After` e
+repete até 3 vezes. O hostname da
+API tem de estar no `connect-src` da CSP (`site/public/_headers`). Se a API não responde (rede, 5xx,
+timeout de 4 s, 404 de imagem antiga), a página importa o `duckdb.ts` sob demanda e roda o
+**mesmo texto de SQL** sobre os Parquet — o caminho de sempre, que não depende do host — e
+a contingência gruda por 5 min (faixa amarela no layout). 400 é erro da própria consulta e
+propaga (o Explorar tenta uma variante e recua no catch). Sem `VITE_RADAR_API` (fork,
+prévia local) tudo roda no WASM como antes. O console SQL livre NÃO passa por aí:
+`consultar.tsx` importa `@/lib/duckdb` direto — SQL livre roda no CPU de quem digita.
+Paridade por construção: um texto de consulta, dois executores; `tests/test_mcp_api.py`
+roda cada consulta de `exemplos.ts` pela rota e exige o resultado do cursor cru.
 
 ## Servidor MCP público (`src/mcp/`)
 
@@ -209,6 +249,16 @@ md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
 - **Deploy**: `Dockerfile.mcp` (testes no build), aplicação separada no mesmo
   host da rotina, sem volume nem segredo, atrás de túnel — `docs/deploy-mcp.md`
   (genérico). Local: `python -m src.mcp.servidor` → `http://localhost:8000/mcp`.
+- **Rota do site** (`api.py`, `GET /api/v1/consulta?q|sql=…&v=…`): executa o SQL que as
+  páginas montam, na fila `site` (8 vagas, `MCP_MAX_SIMULTANEAS_SITE`; timeout de 5 s,
+  `MCP_TIMEOUT_SITE`; teto de 2.000 linhas/1 MB — a dispersão do Explorar pede 1.500),
+  com os mesmos guarda-corpos da `sql` e o resultado no formato do console (`colunas` +
+  `linhas` como listas). `Cache-Control` imutável de 1 dia **só** quando `v` bate com o
+  `publicado_em` do banco; senão `no-store` — e `v` mais novo que o banco dispara
+  `Servico.pedir_verificacao()` (debounce de 60 s), porque o site vê o release novo
+  antes do poll de 5 min. CORS `*` fixo (a borda ignora `Vary`). 400 = consulta errada
+  (gate, DuckDB), 503 = fila cheia (`Retry-After`), 504 = timeout — o site cai para o
+  WASM nos 5xx, nunca no 400. `tests/test_mcp_api.py`.
 - `tests/test_mcp_protocolo.py` fala com o app pelo cliente oficial do SDK
   (o `Client` 2.x negocia `LATEST_PROTOCOL_VERSION` via discover; o
   `ClientSession` clássico ainda inicializa; tools/list com `output_schema` e

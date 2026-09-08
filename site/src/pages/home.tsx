@@ -10,7 +10,7 @@ import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
 import { Sparkline } from '@/components/app/graficos';
 import { FotoCandidato } from '@/components/app/foto';
 import { carregarResumo, type Resumo, type DespesaResumo, type CandidatoForaDaCurva } from '@/lib/resumo';
-import { brl, num, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, num, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor, nomeCandidato } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 
 function BuscaHero() {
@@ -175,10 +175,10 @@ function CelulaCandidato({ x }: { x: DespesaResumo }) {
     <td className="min-w-[13rem]">
       {x.SQ_CANDIDATO ? (
         <Link to={`/candidato/${x.SQ_CANDIDATO}`} className="text-[#264E9B] underline-offset-4 hover:underline">
-          {x.NM_CANDIDATO}
+          {nomeCandidato(x.NM_URNA_CANDIDATO, x.NM_CANDIDATO).principal}
         </Link>
       ) : (
-        x.NM_CANDIDATO
+        nomeCandidato(x.NM_URNA_CANDIDATO, x.NM_CANDIDATO).principal
       )}
       <span className="text-muted-foreground">
         {' '}·{' '}
@@ -333,7 +333,7 @@ export function Home() {
                     cdEleicao={c.cd_eleicao}
                     sq={c.SQ_CANDIDATO}
                     sgUe={c.sg_ue}
-                    nome={c.NM_CANDIDATO}
+                    nome={nomeCandidato(c.NM_URNA_CANDIDATO, c.NM_CANDIDATO).principal}
                     className="h-12 w-12 text-sm"
                   />
                 </Link>
@@ -343,9 +343,12 @@ export function Home() {
                     to={`/candidato/${c.SQ_CANDIDATO}`}
                     className="font-semibold text-[#264E9B] underline-offset-4 hover:underline"
                   >
-                    {c.NM_CANDIDATO}
+                    {nomeCandidato(c.NM_URNA_CANDIDATO, c.NM_CANDIDATO).principal}
                   </Link>
                   <span className="text-sm text-muted-foreground">
+                    {nomeCandidato(c.NM_URNA_CANDIDATO, c.NM_CANDIDATO).civil && (
+                      <>{nomeCandidato(c.NM_URNA_CANDIDATO, c.NM_CANDIDATO).civil} · </>
+                    )}
                     {c.SG_PARTIDO}/{c.SG_UF} · {c.DS_CARGO} · contratou {brl.format(c.total_contratado)}
                   </span>
                   <Link
@@ -548,10 +551,10 @@ export function Home() {
               <td>
                 {x.SQ_CANDIDATO ? (
                   <Link to={`/candidato/${x.SQ_CANDIDATO}`} className="text-[#264E9B] underline-offset-4 hover:underline">
-                    {x.NM_CANDIDATO}
+                    {nomeCandidato(x.NM_URNA_CANDIDATO, x.NM_CANDIDATO).principal}
                   </Link>
                 ) : (
-                  x.NM_CANDIDATO
+                  nomeCandidato(x.NM_URNA_CANDIDATO, x.NM_CANDIDATO).principal
                 )}
                 <span className="text-muted-foreground">
                   {' '}·{' '}

@@ -12,12 +12,12 @@ import {
   BarrasHorizontais, Dispersao, LinhaTemporal,
   type ItemBarra, type PontoDispersao, type PontoLinha,
 } from '@/components/app/graficos';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
-import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
+import { brl, num, celula, cnpjCpf, nomeCandidato, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 import {
   FILTROS_VAZIOS, SINAIS_FILTRO, eVisaoReceitas, eVisaoRemocao,
-  sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlRegistrosSemMovimento, sqlTabelaDaVisao,
+  sqlBuscaCandidatos, sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlTabelaDaVisao,
   whereDaVisao,
   type Filtros, type SinalFiltro, type Visao,
 } from '@/lib/consultas';
@@ -77,18 +77,35 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
 
 interface CandidatoEncontrado {
   sq: string;
+  /** nome civil; `urna` é o nome do registro, quando diferente */
   nome: string;
+  urna: string | null;
   numero: string;
   partido: string;
   cargo: string;
   uf: string;
   contratado: number;
+  arrecadado: number;
+}
+
+/** Nome de urna em destaque e o civil ao lado, menor — é pelo de urna que a
+ *  campanha divulga e que a busca casou; o civil explica quem é. */
+function NomeCandidato({ urna, civil }: { urna: string | null; civil: string }) {
+  const n = nomeCandidato(urna, civil);
+  return (
+    <>
+      {n.principal}
+      {n.civil && <> <span className="text-xs font-normal text-muted-foreground">{n.civil}</span></>}
+    </>
+  );
 }
 
 /** Card da visão fora-da-curva: sinais estruturados (para os chips) + foto. */
 interface CandidatoFora {
   sq: string;
+  /** nome de exibição (urna, com fallback civil) */
   nome: string;
+  nomeCivil: string | null;
   partidoUf: string;
   cargo: string;
   contratado: number;
@@ -192,27 +209,37 @@ export function Explorar() {
       // Set ainda está vazio e a régua do "sem documento fiscal" cairia no
       // fallback (lista fixa) mesmo com norma_documento publicada
       await obterConexao();
-      const { base, where: w } = whereDaVisao(v, f, s, cat, tabelasDisponiveis.has('norma_documento'));
+      // registro publicado = filtro por nome também casa o nome de urna
+      const temRegistro = tabelasDisponiveis.has('candidatos');
+      const { base, where: w } = whereDaVisao(
+        v, f, s, cat, tabelasDisponiveis.has('norma_documento'), temRegistro,
+      );
       const buscando = v === 'atual' && Boolean(f.candidato.trim());
-      const [encontrados, registrados] = await Promise.all([
-        buscando
-          ? executarSQL(`
-            SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(NR_CANDIDATO),
-                   ANY_VALUE(SG_PARTIDO), ANY_VALUE(DS_CARGO), ANY_VALUE(SG_UF),
-                   ROUND(SUM(valor), 2) AS total
-            FROM despesas_atual
-            WHERE ${w}
-            GROUP BY 1 ORDER BY total DESC LIMIT 100`)
-          : Promise.resolve({ linhas: [] as unknown[][] }),
-        // quem se registrou mas nunca declarou nada não existe em despesas_atual;
-        // sem esta consulta a busca "não encontra" 72% das candidaturas.
-        // (sem checar tabelasDisponiveis: no primeiro load o Set ainda está
-        // vazio — o executarSQL espera a conexão e o catch cobre parquet ausente)
-        buscando
-          ? executarSQL(sqlRegistrosSemMovimento(f, 100)).catch(() => ({ linhas: [] as unknown[][] }))
-          : Promise.resolve({ linhas: [] as unknown[][] }),
-      ]);
-      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA);
+      // uma consulta só, sobre o REGISTRO (que tem o nome de urna) somado aos
+      // indicadores (que têm os totais) — buscar em despesas_atual escondia
+      // quem só arrecadou, e buscar em indicadores escondia quem é conhecido
+      // pelo nome de urna. `tem_movimento` separa as duas listas na tela.
+      // (sem checar tabelasDisponiveis: no primeiro load o Set ainda está
+      // vazio — o executarSQL espera a conexão e o catch cobre parquet ausente)
+      const achados = buscando
+        ? await executarSQL(sqlBuscaCandidatos(f, 100, temRegistro)).catch(() =>
+            executarSQL(sqlBuscaCandidatos(f, 100, false)).catch(() => ({ linhas: [] as unknown[][] })),
+          )
+        : { linhas: [] as unknown[][] };
+      const candidatura = (l: unknown[]): CandidatoEncontrado => ({
+        sq: String(l[0]),
+        nome: String(l[1] ?? ''),
+        urna: l[2] == null ? null : String(l[2]),
+        numero: String(l[3] ?? ''),
+        partido: String(l[4] ?? ''),
+        cargo: String(l[5] ?? ''),
+        uf: String(l[6] ?? ''),
+        contratado: Number(l[7] ?? 0),
+        arrecadado: Number(l[8] ?? 0),
+      });
+      const comMovimento = achados.linhas.filter((l) => l[9]).map(candidatura);
+      const semMovimento = achados.linhas.filter((l) => !l[9]).map(candidatura);
+      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA, temRegistro);
       const painel = sqlPainel(base, w, v);
       // cards do fora-da-curva: tenta com os metadados da foto; parquet de
       // candidatos antigo (sem CD_ELEICAO/SG_UE) cai na variante sem foto
@@ -220,13 +247,14 @@ export function Explorar() {
         await obterConexao();
         let r;
         try {
-          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, tabelasDisponiveis.has('candidatos')));
+          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, temRegistro));
         } catch {
           r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, false));
         }
         return r.linhas.map((l) => ({
           sq: String(l[0]),
-          nome: String(l[1]),
+          nome: nomeCandidato(l[11], l[1]).principal,
+          nomeCivil: nomeCandidato(l[11], l[1]).civil,
           partidoUf: String(l[2]),
           cargo: String(l[3]),
           contratado: Number(l[4] ?? 0),
@@ -255,24 +283,8 @@ export function Explorar() {
       ]);
       const [contratado, nCand, nForn, itens] = kpis.linhas[0] ?? [0, 0, 0, 0];
       setDados({
-        encontrados: encontrados.linhas.map((l) => ({
-          sq: String(l[0]),
-          nome: String(l[1]),
-          numero: String(l[2]),
-          partido: String(l[3]),
-          cargo: String(l[4]),
-          uf: String(l[5]),
-          contratado: Number(l[6] ?? 0),
-        })),
-        registrados: registrados.linhas.map((l) => ({
-          sq: String(l[0]),
-          nome: `${l[1]}${l[2] && l[2] !== l[1] ? ` (${l[2]})` : ''}`,
-          numero: String(l[3] ?? ''),
-          partido: String(l[4] ?? ''),
-          cargo: String(l[5] ?? ''),
-          uf: String(l[6] ?? ''),
-          contratado: 0,
-        })),
+        encontrados: comMovimento,
+        registrados: semMovimento,
         kpis: {
           contratado: Number(contratado ?? 0),
           candidatos: Number(nCand ?? 0),
@@ -499,20 +511,22 @@ export function Explorar() {
               <CardContent>
                 {dados.encontrados.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Nenhum candidato com esse {/^\d+$/.test(filtros.candidato.trim()) ? 'número' : 'nome'} tem
-                    gastos declarados nesse recorte.
+                    Nenhuma candidatura com esse{' '}
+                    {/^\d+$/.test(filtros.candidato.trim()) ? 'número' : 'nome (civil ou de urna)'} tem
+                    despesa ou receita declarada nesse recorte.
                   </p>
                 ) : (
                   <div className="max-h-72 overflow-y-auto">
                     <Tabela colunas={[
                       { titulo: 'Candidato' }, { titulo: 'Número' }, { titulo: 'Cargo' },
-                      { titulo: 'Partido/UF' }, { titulo: 'Contratado', numerica: true },
+                      { titulo: 'Partido/UF' }, { titulo: 'Arrecadado', numerica: true },
+                      { titulo: 'Contratado', numerica: true },
                     ]}>
                       {dados.encontrados.map((c) => (
                         <tr key={c.sq} className="hover:bg-muted/40">
                           <td>
                             <Link to={`/candidato/${c.sq}`} className="text-[#264E9B] underline-offset-4 hover:underline">
-                              {c.nome}
+                              <NomeCandidato urna={c.urna} civil={c.nome} />
                             </Link>
                           </td>
                           <td className="tabular-nums">{c.numero}</td>
@@ -522,6 +536,7 @@ export function Explorar() {
                               {c.partido}
                             </Link>/{c.uf}
                           </td>
+                          <CelulaNum>{brl.format(c.arrecadado)}</CelulaNum>
                           <CelulaNum>{brl.format(c.contratado)}</CelulaNum>
                         </tr>
                       ))}
@@ -544,7 +559,7 @@ export function Explorar() {
                           to={`/candidato/${c.sq}`}
                           className="rounded-full border px-3 py-1 text-xs text-[#264E9B] underline-offset-4 hover:underline"
                         >
-                          {c.nome} · {c.cargo} · {c.partido}/{c.uf}
+                          {nomeCandidato(c.urna, c.nome).principal} · {c.cargo} · {c.partido}/{c.uf}
                         </Link>
                       ))}
                     </div>
@@ -739,6 +754,7 @@ export function Explorar() {
                             {c.nome}
                           </Link>
                           <span className="text-sm text-muted-foreground">
+                            {c.nomeCivil && <>{c.nomeCivil} · </>}
                             {c.partidoUf} · {c.cargo} · contratou {brl.format(c.contratado)}
                             {c.arrecadado != null && <> · arrecadou {brl.format(c.arrecadado)}</>}
                           </span>

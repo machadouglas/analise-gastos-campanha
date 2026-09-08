@@ -9,7 +9,7 @@ import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
 import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import {
   CONDICAO_DOACAO_DIRETA,
   CONDICAO_DOCUMENTO_NUMERADO,
@@ -19,7 +19,7 @@ import {
   condicaoSemNota,
   escSQL,
   sqlCorrigidas,
-  sqlDocumentoDaNota,
+  sqlDocumentoDaNota, JOIN_NOMES_URNA, nomeExibicao,
 } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, dataBR, ePessoaFisica, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
@@ -141,10 +141,10 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
         FROM despesas_removidas WHERE ${w}`)
         : Promise.resolve({ linhas: [] as unknown[][] }),
       executarSQL(`
-      SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO), ANY_VALUE(DS_CARGO),
+      SELECT SQ_CANDIDATO, ANY_VALUE(${nomeExibicao()}), ANY_VALUE(DS_CARGO),
              ANY_VALUE(SG_PARTIDO), ANY_VALUE(SG_UF),
              COUNT(*) AS itens, ROUND(SUM(valor), 2) AS total
-      FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 50`),
+      FROM despesas_atual ${JOIN_NOMES_URNA} WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 50`),
       executarSQL(`
       SELECT DS_ORIGEM_DESPESA, ROUND(SUM(valor), 2) AS total
       FROM despesas_atual WHERE ${w} GROUP BY 1 ORDER BY total DESC LIMIT 10`),
@@ -154,7 +154,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
       FROM despesas_atual WHERE ${w} AND DT_DESPESA <> '#NULO'
       GROUP BY 1 ORDER BY ord`),
       executarSQL(`
-      SELECT DT_DESPESA AS "Data", SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
+      SELECT DT_DESPESA AS "Data", SQ_CANDIDATO AS "_sq", ${nomeExibicao()} AS "Candidato",
              DS_ORIGEM_DESPESA AS "Categoria", DS_DESPESA AS "Descrição",
              ${sqlDocumentoDaNota('DS_TIPO_DOCUMENTO', 'NR_DOCUMENTO')} AS "Documento",
              ROUND(valor, 2) AS "Valor",
@@ -173,24 +173,24 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
                       AND ${CONDICAO_DOCUMENTO_NUMERADO}
                       AND o.SQ_CANDIDATO <> despesas_atual.SQ_CANDIDATO)
                   THEN 1 ELSE 0 END AS "_docDeOutro"
-      FROM despesas_atual WHERE ${w} ORDER BY valor DESC LIMIT 50`),
+      FROM despesas_atual ${JOIN_NOMES_URNA} WHERE ${w} ORDER BY valor DESC LIMIT 50`),
       executarSQL(`
-        SELECT SQ_CANDIDATO AS "_sq", NM_CANDIDATO AS "Candidato",
+        SELECT SQ_CANDIDATO AS "_sq", ${nomeExibicao()} AS "Candidato",
                SG_PARTIDO || '/' || SG_UF AS "Partido/UF", DT_RECEITA AS "Data",
                DS_ORIGEM_RECEITA AS "Origem", DS_ESPECIE_RECEITA AS "Espécie",
                ROUND(valor, 2) AS "Valor",
                CASE WHEN ${CONDICAO_DOACAO_DIRETA} THEN 1 ELSE 0 END AS "_direta"
-        FROM receitas_atual WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'
+        FROM receitas_atual ${JOIN_NOMES_URNA} WHERE NR_CPF_CNPJ_DOADOR = '${esc(id)}'
         ORDER BY valor DESC LIMIT 30`).then((x) => x.linhas),
       tabelasDisponiveis.has('despesas_removidas')
         ? executarSQL(`
-        SELECT NM_CANDIDATO AS "Candidato", SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
+        SELECT ${nomeExibicao()} AS "Candidato", SG_PARTIDO || '/' || SG_UF AS "Partido/UF",
                DS_DESPESA AS "Descrição",
                ROUND(valor, 2) AS "Valor",
                STRFTIME(dt_primeira_extracao, '%d/%m/%Y') AS "Visível de",
                STRFTIME(dt_ultima_extracao, '%d/%m/%Y') AS "Até",
                SQ_CANDIDATO AS "_sq"
-        FROM despesas_removidas
+        FROM despesas_removidas ${JOIN_NOMES_URNA}
         WHERE ${w}
         ORDER BY 4 DESC LIMIT 30`).then((x) => x.linhas)
         : Promise.resolve([] as unknown[][]),

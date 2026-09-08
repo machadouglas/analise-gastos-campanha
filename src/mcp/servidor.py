@@ -5,8 +5,13 @@
 Variáveis de ambiente (todas opcionais): GH_REPO (repo do release),
 MCP_PORTA, MCP_DIR_CACHE, MCP_INTERVALO (s entre verificações do release),
 MCP_TIMEOUT (s por consulta), MCP_MAX_SIMULTANEAS (ferramentas curadas),
-MCP_MAX_SIMULTANEAS_SQL (fila própria da sql livre), MCP_MEMORIA, MCP_THREADS,
-RADAR_GIT_SHA (commit da imagem, para versao_codigo).
+MCP_MAX_SIMULTANEAS_SQL (fila própria da sql livre), MCP_MAX_SIMULTANEAS_SITE e
+MCP_TIMEOUT_SITE (fila da rota do site, src/mcp/api.py), MCP_MEMORIA,
+MCP_THREADS, RADAR_GIT_SHA (commit da imagem, para versao_codigo).
+
+Além do protocolo MCP em /mcp, o mesmo processo atende o site em
+GET /api/v1/consulta (o SQL das páginas, com fallback para DuckDB-WASM no
+navegador quando esta rota não responde) e /saude.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from src.mcp import consultas, dados, esquema, gate
+from src.mcp import api, consultas, dados, esquema, gate
 
 log = logging.getLogger("radar.mcp")
 
@@ -40,6 +45,8 @@ INTERVALO = float(os.environ.get("MCP_INTERVALO", "300"))
 TIMEOUT = float(os.environ.get("MCP_TIMEOUT", "10"))
 MAX_SIMULTANEAS = int(os.environ.get("MCP_MAX_SIMULTANEAS", "8"))
 MAX_SIMULTANEAS_SQL = int(os.environ.get("MCP_MAX_SIMULTANEAS_SQL", "4"))
+MAX_SIMULTANEAS_SITE = int(os.environ.get("MCP_MAX_SIMULTANEAS_SITE", "8"))
+TIMEOUT_SITE = float(os.environ.get("MCP_TIMEOUT_SITE", "5"))
 MAX_LINHAS = 500
 SITE = "https://radardosgastos.com.br"
 
@@ -85,6 +92,8 @@ def usar_banco(banco: dados.Banco, **kw_executor) -> dados.Executor:
     _executor = dados.Executor(servico, timeout=kw_executor.pop("timeout", TIMEOUT),
                                max_simultaneas=kw_executor.pop("max_simultaneas", MAX_SIMULTANEAS),
                                max_simultaneas_sql=kw_executor.pop("max_simultaneas_sql", MAX_SIMULTANEAS_SQL),
+                               max_simultaneas_site=kw_executor.pop("max_simultaneas_site", MAX_SIMULTANEAS_SITE),
+                               timeout_site=kw_executor.pop("timeout_site", TIMEOUT_SITE),
                                max_linhas=MAX_LINHAS, **kw_executor)
     return _executor
 
@@ -465,6 +474,7 @@ async def raiz(_: Request) -> JSONResponse:
     return JSONResponse({
         "nome": "Radar dos Gastos — servidor MCP",
         "mcp": "/mcp (Streamable HTTP)",
+        "api": "/api/v1/consulta?sql=...&v=<publicado_em> (GET; o SQL das páginas do site)",
         "site": SITE,
         "dados": "https://github.com/machadouglas/analise-gastos-campanha/releases/tag/dados",
     })
@@ -494,7 +504,9 @@ def criar_app(servico: dados.Servico | None = None):
             _servico = servico or dados.Servico(DIR_CACHE, intervalo=INTERVALO)
             await asyncio.to_thread(_servico.iniciar)
             _executor = dados.Executor(_servico, timeout=TIMEOUT, max_simultaneas=MAX_SIMULTANEAS,
-                                       max_simultaneas_sql=MAX_SIMULTANEAS_SQL, max_linhas=MAX_LINHAS)
+                                       max_simultaneas_sql=MAX_SIMULTANEAS_SQL,
+                                       max_simultaneas_site=MAX_SIMULTANEAS_SITE,
+                                       timeout_site=TIMEOUT_SITE, max_linhas=MAX_LINHAS)
             iniciado_aqui = _servico
         async with ciclo_mcp(app_):
             yield
@@ -505,6 +517,8 @@ def criar_app(servico: dados.Servico | None = None):
     app.router.lifespan_context = ciclo
     app.router.routes.append(Route("/saude", saude, methods=["GET"]))
     app.router.routes.append(Route("/", raiz, methods=["GET"]))
+    # a rota do site compartilha banco e executor (fila própria "site")
+    app.router.routes.extend(api.criar_rotas(executor, versao_codigo))
     return app
 
 

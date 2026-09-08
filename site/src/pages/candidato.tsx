@@ -20,18 +20,21 @@ import {
 import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import {
   CONDICAO_DOACAO_DIRETA, MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas,
-  sqlNotasDoCandidato,
+  sqlNotasDoCandidato, JOIN_NOMES_URNA, nomeExibicao,
 } from '@/lib/consultas';
-import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor, nomeCandidato } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
 import { FotoCandidato } from '@/components/app/foto';
 
 interface Perfil {
+  /** nome de exibição: o de urna, com fallback no civil */
   nome: string;
+  /** nome civil, quando difere do exibido */
+  nomeCivil: string | null;
   numero: string;
   partido: string;
   cargo: string;
@@ -321,7 +324,8 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     await Promise.all([
       executarSQL(`SELECT * FROM indicadores WHERE ${w}`),
       tabelasDisponiveis.has('candidatos')
-        ? executarSQL(`SELECT ANY_VALUE(CD_ELEICAO), ANY_VALUE(SG_UE) FROM candidatos WHERE ${w}`)
+        ? executarSQL(`SELECT ANY_VALUE(CD_ELEICAO), ANY_VALUE(SG_UE),
+                              ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) FROM candidatos WHERE ${w}`)
             .catch(() => ({ linhas: [] as unknown[][] }))
         : Promise.resolve({ linhas: [] as unknown[][] }),
       tabelasDisponiveis.has('serie_diaria')
@@ -446,8 +450,10 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   const cdEleicao = foto?.[0] == null ? null : String(foto[0]);
   const sgUe = foto?.[1] == null ? null : String(foto[1]);
 
+  const nomes = nomeCandidato(foto?.[2], linha.NM_CANDIDATO);
   const perfil: Perfil = {
-    nome: String(linha.NM_CANDIDATO),
+    nome: nomes.principal,
+    nomeCivil: nomes.civil,
     numero: String(linha.NR_CANDIDATO),
     partido: String(linha.SG_PARTIDO),
     cargo: String(linha.DS_CARGO),
@@ -544,9 +550,9 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     const lista = cnpjsGrafo.map((c) => `'${esc(c)}'`).join(', ');
     const outros = await executarSQL(`
         SELECT NR_CPF_CNPJ_FORNECEDOR, SQ_CANDIDATO,
-               ANY_VALUE(NM_CANDIDATO) || ' (' || ANY_VALUE(SG_PARTIDO) || '/' || ANY_VALUE(SG_UF) || ')' AS rotulo,
+               ANY_VALUE(${nomeExibicao()}) || ' (' || ANY_VALUE(SG_PARTIDO) || '/' || ANY_VALUE(SG_UF) || ')' AS rotulo,
                ROUND(SUM(valor), 2) AS total
-        FROM despesas_atual
+        FROM despesas_atual ${JOIN_NOMES_URNA}
         WHERE NR_CPF_CNPJ_FORNECEDOR IN (${lista}) AND NOT ${w}
         GROUP BY 1, 2
         QUALIFY ROW_NUMBER() OVER (PARTITION BY NR_CPF_CNPJ_FORNECEDOR ORDER BY total DESC) <= 3`);
@@ -812,6 +818,7 @@ export function Candidato() {
           <div className="min-w-[12rem] flex-1">
             <h1 className="text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{p.nome}</h1>
             <p className="mt-2 text-muted-foreground">
+              {p.nomeCivil && <>{p.nomeCivil} · </>}
               nº {p.numero} · {p.cargo} ·{' '}
               <Link to={`/partido/${encodeURIComponent(p.partido)}`} className="text-[#264E9B] underline underline-offset-4">
                 {p.partido}

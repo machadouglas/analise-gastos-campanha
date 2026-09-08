@@ -1,16 +1,34 @@
+import { useSyncExternalStore } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { BarChart3, BookOpen, Radar, Terminal } from 'lucide-react';
+import { BarChart3, BookOpen, Radar, Terminal, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { assinarEstado, estadoAtual } from '@/lib/dados';
 
 const REPO = 'https://github.com/machadouglas/analise-gastos-campanha';
 
 const navegacao = [
   { nome: 'Radar', href: '/', icone: Radar },
   { nome: 'Explorar', href: '/explorar', icone: BarChart3 },
-  { nome: 'Consultar (SQL + IA)', href: '/consultar', icone: Terminal },
+  { nome: 'Conecte sua IA no radar', href: '/consultar', icone: Terminal },
   // a tese do site é o método — a metodologia merece porta de entrada no topo
   { nome: 'Metodologia', href: '/metodologia', icone: BookOpen },
 ];
+
+/** Faixa discreta enquanto as páginas rodam no DuckDB-WASM porque o servidor
+ *  de consultas não respondeu (lib/dados.ts). Some sozinha quando a API volta. */
+function AvisoContingencia() {
+  const estado = useSyncExternalStore(assinarEstado, estadoAtual);
+  if (estado !== 'contingencia') return null;
+  return (
+    <div role="status" className="border-b border-amber-300/60 bg-amber-50 text-amber-900">
+      <p className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-1.5 text-xs sm:px-6">
+        <WifiOff className="h-3.5 w-3.5 shrink-0" />
+        Servidor de consultas indisponível: consultando os dados direto no navegador — as páginas
+        demoram um pouco mais para abrir.
+      </p>
+    </div>
+  );
+}
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
@@ -31,7 +49,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <span className="inline-flex items-center gap-1.5 sm:gap-2">
               <Radar className="h-5 w-5 shrink-0 text-[#264E9B] sm:h-6 sm:w-6" />
               <span className="whitespace-nowrap text-base font-bold tracking-tight sm:text-lg">
-                Radar<span className="text-brand"> das Contas</span>
+                Radar<span className="text-brand"> dos Gastos</span>
               </span>
             </span>
           </Link>
@@ -55,6 +73,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
 
+      <AvisoContingencia />
       <main id="conteudo" className="flex-1">{children}</main>
 
       <footer className="border-t bg-muted/30">

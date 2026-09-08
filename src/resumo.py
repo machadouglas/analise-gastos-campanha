@@ -63,6 +63,20 @@ def _tem_metadados_foto(con) -> bool:
     return {"CD_ELEICAO", "SG_UE"} <= cols
 
 
+def _join_urna(con, on: str = "USING (SQ_CANDIDATO)") -> str:
+    """Nome de urna do registro para todo candidato citado no resumo: o site o
+    exibe como principal (é como a campanha divulga). NULL sem o parquet/coluna
+    — o banco cru dos testes e extrações antigas não o têm."""
+    cols = {r[0] for r in con.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'candidatos'"
+    ).fetchall()}
+    if "NM_URNA_CANDIDATO" in cols:
+        return ("LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) "
+                f"AS NM_URNA_CANDIDATO FROM candidatos GROUP BY 1) u {on}")
+    return ("LEFT JOIN (SELECT CAST(NULL AS VARCHAR) AS SQ_CANDIDATO, "
+            f"CAST(NULL AS VARCHAR) AS NM_URNA_CANDIDATO) u {on}")
+
+
 def _fora_da_curva(con, limite: int = 10) -> list[dict]:
     """Candidatos com mais métricas acima do p95 do próprio grupo
     de comparação (cargo×UF; nacional quando o grupo local é pequeno).
@@ -95,11 +109,12 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
               ON buf.DS_CARGO = m.DS_CARGO AND buf.SG_UF = m.SG_UF AND buf.metrica = m.metrica
             LEFT JOIN benchmark_indicadores bbr
               ON bbr.DS_CARGO = m.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = m.metrica)
-        SELECT r.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO, i.DS_CARGO, i.SG_UF,
+        SELECT r.SQ_CANDIDATO, i.NM_CANDIDATO, u.NM_URNA_CANDIDATO, i.SG_PARTIDO, i.DS_CARGO, i.SG_UF,
                i.total_contratado, i.total_receitas, c.cd_eleicao, c.sg_ue,
                r.metrica, ROUND(r.valor, 2) AS valor, r.mediana, r.p95, r.grupo_n, r.grupo_ambito
         FROM ref r JOIN indicadores i USING (SQ_CANDIDATO)
         {foto}
+        {_join_urna(con)}
         WHERE r.p95 IS NOT NULL AND {CONDICAO_SINAL}
         ORDER BY r.SQ_CANDIDATO
     """).df()
@@ -111,6 +126,7 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
         saida.append({
             "SQ_CANDIDATO": str(sq),
             "NM_CANDIDATO": primeiro["NM_CANDIDATO"],
+            "NM_URNA_CANDIDATO": None if pd.isna(primeiro["NM_URNA_CANDIDATO"]) else primeiro["NM_URNA_CANDIDATO"],
             "SG_PARTIDO": primeiro["SG_PARTIDO"],
             "DS_CARGO": primeiro["DS_CARGO"],
             "SG_UF": primeiro["SG_UF"],
@@ -242,11 +258,14 @@ def gerar(con) -> dict:
         "h.NR_CPF_CNPJ_FORNECEDOR", privacidade.sal())
     nome_fornecedor_h = privacidade.sql_pseudonimo(
         "COALESCE(NULLIF(h.NM_FORNECEDOR_RFB,'#NULO'), h.NM_FORNECEDOR)", privacidade.sal())
+    # nome de urna (registro) para todo candidato citado — ver _join_urna
+    urna = _join_urna(con)
+    urna_h = _join_urna(con, "ON u.SQ_CANDIDATO = h.SQ_CANDIDATO")
     novas = _registros(con, f"""
         WITH estreia AS (
             SELECT {chave_essencia}, MIN(dt_primeira_extracao) AS dt
             FROM hist_despesas_contratadas GROUP BY ALL)
-        SELECT h.SQ_CANDIDATO, h.NM_CANDIDATO, h.SG_PARTIDO, h.DS_CARGO, h.SG_UF,
+        SELECT h.SQ_CANDIDATO, h.NM_CANDIDATO, u.NM_URNA_CANDIDATO, h.SG_PARTIDO, h.DS_CARGO, h.SG_UF,
                {nome_fornecedor_h} AS fornecedor,
                {pseudo_fornecedor_h} AS NR_CPF_CNPJ_FORNECEDOR,
                h.DS_ORIGEM_DESPESA, h.DS_DESPESA,
@@ -254,6 +273,7 @@ def gerar(con) -> dict:
                h.DT_DESPESA
         FROM hist_despesas_contratadas h
         JOIN estreia e ON {join_essencia}
+        {urna_h}
         WHERE h.dt_primeira_extracao = DATE '{dt_extracao}'
           AND e.dt = DATE '{dt_extracao}'
           AND {filtro_placeholder('h.NR_CPF_CNPJ_FORNECEDOR', 'h.VR_DESPESA_CONTRATADA')}
@@ -261,21 +281,21 @@ def gerar(con) -> dict:
     """)
 
     removidas = _registros(con, f"""
-        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF,
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, u.NM_URNA_CANDIDATO, SG_PARTIDO, SG_UF,
                {nome_fornecedor} AS fornecedor,
                {pseudo_fornecedor} AS NR_CPF_CNPJ_FORNECEDOR,
                DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                dt_primeira_extracao, dt_ultima_extracao
-        FROM v_removidas_despesas_contratadas
+        FROM v_removidas_despesas_contratadas {urna}
         ORDER BY valor DESC LIMIT 20
     """)
 
     removidas_receitas = _registros(con, f"""
-        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF, {nome_doador} AS NM_DOADOR, DS_ORIGEM_RECEITA,
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, u.NM_URNA_CANDIDATO, SG_PARTIDO, SG_UF, {nome_doador} AS NM_DOADOR, DS_ORIGEM_RECEITA,
                ROUND(TRY_CAST(REPLACE(VR_RECEITA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                dt_primeira_extracao, dt_ultima_extracao
-        FROM v_removidas_receitas
+        FROM v_removidas_receitas {urna}
         ORDER BY valor DESC LIMIT 20
     """)
 
@@ -292,13 +312,14 @@ def gerar(con) -> dict:
         ORDER BY total DESC LIMIT 12
     """)
 
-    top_candidatos = _registros(con, """
+    top_candidatos = _registros(con, f"""
         WITH r AS (SELECT SQ_CANDIDATO, SUM(VR) AS receita FROM v_receitas GROUP BY 1)
         SELECT d.SQ_CANDIDATO,
-               ANY_VALUE(d.NM_CANDIDATO) AS NM_CANDIDATO, ANY_VALUE(d.SG_PARTIDO) AS SG_PARTIDO,
+               ANY_VALUE(d.NM_CANDIDATO) AS NM_CANDIDATO, ANY_VALUE(u.NM_URNA_CANDIDATO) AS NM_URNA_CANDIDATO,
+               ANY_VALUE(d.SG_PARTIDO) AS SG_PARTIDO,
                ANY_VALUE(d.DS_CARGO) AS DS_CARGO, ANY_VALUE(d.SG_UF) AS SG_UF,
                ROUND(SUM(d.VR),2) AS contratado, ROUND(ANY_VALUE(r.receita),2) AS receita
-        FROM v_despesas d LEFT JOIN r USING (SQ_CANDIDATO)
+        FROM v_despesas d LEFT JOIN r USING (SQ_CANDIDATO) {urna}
         GROUP BY d.SQ_CANDIDATO ORDER BY contratado DESC LIMIT 12
     """)
 

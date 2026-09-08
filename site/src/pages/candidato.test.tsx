@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { limparDuckDBFalso, responder, tabelasDisponiveis, type RotaFalsa } from '@/test/duckdb-falso';
 import { renderizarRota } from '@/test/render';
 
-vi.mock('@/lib/duckdb', () => import('@/test/duckdb-falso'));
+vi.mock('@/lib/dados', () => import('@/test/duckdb-falso'));
 // grafo de conexões: <canvas> do force-graph, fora do escopo destes testes
 vi.mock('@/components/app/grafo', () => ({
   GrafoConexoes: () => <div data-testid="grafo" />,
