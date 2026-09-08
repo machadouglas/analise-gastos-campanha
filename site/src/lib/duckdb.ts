@@ -66,7 +66,7 @@ async function registrarParquet(
 
 /** Cria as views em UM statement múltiplo (menos round-trips JS↔worker). Só é
  *  seguro em lote quando o mapa `arquivos` diz quais parquet existem; sem o
- *  mapa (publicação antiga), cai no caminho um-a-um com try/catch. */
+ *  mapa (resumo.json indisponível), cai no caminho um-a-um com try/catch. */
 async function registrarLote(con: duckdb.AsyncDuckDBConnection, nomes: readonly string[]) {
   if (arquivosPublicados) {
     const presentes = nomes.filter(
@@ -103,13 +103,11 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
   const origem = window.location.origin;
   // Cache-buster por arquivo: o hash de conteúdo (resumo.arquivos) entra na URL
   // de cada parquet — arquivo novo = URL nova, sem servir versão velha do cache
-  // de 1h nem misturar arquivos de publicações diferentes. Resumos antigos sem
-  // o mapa caem no carimbo global de publicação (comportamento anterior).
+  // de 1h nem misturar arquivos de publicações diferentes. Sem o mapa
+  // (resumo.json indisponível), o carimbo de publicação.
   const resumo = await carregarResumo();
   arquivosPublicados = resumo?.arquivos ?? null;
-  // publicado_em (carimbo por publicação); gerado_em (data da extração)
-  // cobre resumos antigos que ainda não trazem o carimbo
-  const carimbo = String(resumo?.publicado_em ?? resumo?.gerado_em ?? '');
+  const carimbo = String(resumo?.publicado_em ?? '');
   urlParquet = (nome) => {
     const versao = arquivosPublicados?.[`${nome}.parquet`] ?? carimbo;
     return `${origem}/dados/${nome}.parquet${versao ? `?v=${encodeURIComponent(versao)}` : ''}`;
@@ -123,107 +121,14 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
     'receitas_removidas',
   ]);
 
-  // Atalhos com o estado atual das declarações e valor numérico pronto.
-  // Preferimos o parquet dedicado (despesas_atual.parquet/receitas_atual.parquet,
-  // gerado por src/exportar.py com os mesmos filtros — bem menor que o histórico);
-  // sem ele, derivamos do histórico completo. Linhas-placeholder do SPCE
-  // (contraparte '-1'/'#NULO' E valor zero = prestação sem movimento) ficam de
-  // fora nos dois caminhos — sincronia com filtro_placeholder em src/carga.py.
-  const atuais = [
-    {
-      nome: 'despesas_atual',
-      base: 'despesas',
-      derivada: `
-        SELECT *, TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * qt_linhas AS valor
-        FROM despesas
-        WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM despesas)
-          AND NOT (NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
-                   AND COALESCE(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)`,
-    },
-    {
-      nome: 'receitas_atual',
-      base: 'receitas',
-      derivada: `
-        SELECT *, TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE) * qt_linhas AS valor
-        FROM receitas
-        WHERE dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM receitas)
-          AND NOT (NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
-                   AND COALESCE(TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)`,
-    },
-    // Remoções com o MESMO critério do backend (sincronia com IDENTIDADE e
-    // VARIAVEIS em src/historico.py): retransmitir a prestação renumera as notas
-    // e às vezes corrige um campo. Só é remoção o conteúdo cuja contraparte não
-    // reaparece no estado atual com PELO MENOS dois dos três campos variáveis
-    // iguais — 3 de 3 é a mesma declaração retransmitida, 2 de 3 é uma edição
-    // (valor, descrição OU data corrigidos), e nenhuma das duas é apagar nada.
-    // Também aqui preferimos o parquet dedicado (despesas_removidas.parquet),
-    // já filtrado no backend com esta mesma régua; a derivação abaixo é o
-    // fallback para publicações que ainda não o trazem.
-    {
-      nome: 'despesas_removidas',
-      base: 'despesas',
-      derivada: `
-        SELECT d.*, TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE) * d.qt_linhas AS valor
-        FROM despesas d
-        WHERE d.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM despesas)
-          AND NOT (d.NR_CPF_CNPJ_FORNECEDOR IN ('-1', '#NULO')
-                   AND COALESCE(TRY_CAST(REPLACE(d.VR_DESPESA_CONTRATADA, ',', '.') AS DOUBLE), 0) = 0)
-          AND NOT EXISTS (
-            SELECT 1 FROM despesas_atual v
-            -- IS NOT DISTINCT FROM também na identidade (sincronia com
-            -- src/historico.py): campo NULL precisa casar, senão a
-            -- retransmissão vira falsa remoção
-            WHERE v.SQ_CANDIDATO IS NOT DISTINCT FROM d.SQ_CANDIDATO
-              AND v.NR_CPF_CNPJ_FORNECEDOR IS NOT DISTINCT FROM d.NR_CPF_CNPJ_FORNECEDOR
-              AND (CASE WHEN v.DS_DESPESA IS NOT DISTINCT FROM d.DS_DESPESA THEN 1 ELSE 0 END
-                 + CASE WHEN v.VR_DESPESA_CONTRATADA IS NOT DISTINCT FROM d.VR_DESPESA_CONTRATADA THEN 1 ELSE 0 END
-                 + CASE WHEN v.DT_DESPESA IS NOT DISTINCT FROM d.DT_DESPESA THEN 1 ELSE 0 END) >= 2)`,
-    },
-    // mesma régua para receitas: sincronia com IDENTIDADE/VARIAVEIS['receitas']
-    {
-      nome: 'receitas_removidas',
-      base: 'receitas',
-      derivada: `
-        SELECT r.*, TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE) * r.qt_linhas AS valor
-        FROM receitas r
-        WHERE r.dt_ultima_extracao < (SELECT MAX(dt_ultima_extracao) FROM receitas)
-          AND NOT (r.NR_CPF_CNPJ_DOADOR IN ('-1', '#NULO')
-                   AND COALESCE(TRY_CAST(REPLACE(r.VR_RECEITA, ',', '.') AS DOUBLE), 0) = 0)
-          AND NOT EXISTS (
-            SELECT 1 FROM receitas_atual v
-            WHERE v.SQ_CANDIDATO IS NOT DISTINCT FROM r.SQ_CANDIDATO
-              AND v.NR_CPF_CNPJ_DOADOR IS NOT DISTINCT FROM r.NR_CPF_CNPJ_DOADOR
-              AND (CASE WHEN v.DS_ORIGEM_RECEITA IS NOT DISTINCT FROM r.DS_ORIGEM_RECEITA THEN 1 ELSE 0 END
-                 + CASE WHEN v.VR_RECEITA IS NOT DISTINCT FROM r.VR_RECEITA THEN 1 ELSE 0 END
-                 + CASE WHEN v.DT_RECEITA IS NOT DISTINCT FROM r.DT_RECEITA THEN 1 ELSE 0 END) >= 2)`,
-    },
-  ];
-  // ordem importa: as removidas derivadas referenciam a view *_atual
-  for (const { nome, base, derivada } of atuais) {
-    if (await registrarParquet(con, nome)) continue;
-    await registrarParquet(con, base);
-    try {
-      await con.query(`CREATE OR REPLACE VIEW ${nome} AS ${derivada}`);
-      tabelasDisponiveis.add(nome);
-    } catch {
-      // nem o parquet dedicado nem o histórico publicados — a página degrada
-    }
-  }
+  // despesas_atual/receitas_atual e *_removidas chegam prontos de src/exportar.py
+  // (mesmos filtros das views do backend); o site não deriva nada.
   // Nome de urna por candidato, para o COALESCE de exibição das páginas
-  // (NOME_EXIBICAO em consultas.ts): a prestação só traz o nome civil. Sem o
-  // parquet de candidatos a view existe vazia — os JOINs degradam para o civil
-  // em vez de quebrar a consulta.
-  const vazia = `SELECT NULL::VARCHAR AS SQ_CANDIDATO, NULL::VARCHAR AS NM_URNA_CANDIDATO WHERE false`;
-  try {
-    await con.query(`CREATE OR REPLACE VIEW nomes_urna AS ${
-      tabelasDisponiveis.has('candidatos')
-        ? `SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO
-           FROM candidatos GROUP BY 1`
-        : vazia
-    }`);
-  } catch {
-    await con.query(`CREATE OR REPLACE VIEW nomes_urna AS ${vazia}`);
-  }
+  // (NOME_EXIBICAO em consultas.ts): a prestação só traz o nome civil. Mesma
+  // definição de src/mcp/dados.py (tests/test_sincronia_site.py confere).
+  await con.query(`CREATE OR REPLACE VIEW nomes_urna AS
+    SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO
+    FROM candidatos GROUP BY 1`);
   return con;
 }
 

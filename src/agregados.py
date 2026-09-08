@@ -37,15 +37,6 @@ def materializar(con) -> None:
 _tem = db.existe
 
 
-def _tem_colunas(con, tabela: str, colunas: tuple[str, ...]) -> bool:
-    existentes = {
-        r[0] for r in con.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", [tabela]
-        ).fetchall()
-    }
-    return set(colunas) <= existentes
-
-
 def _ano_eleicao(con):
     """Ano da eleição derivado das datas declaradas (nada de constante fixa).
 
@@ -259,12 +250,10 @@ def _indicadores(con) -> None:
     )
 
     # nome de urna, do registro: é como a campanha divulga e como o eleitor
-    # procura — a prestação só traz o civil. NULL sem o parquet/coluna.
+    # procura — a prestação só traz o civil.
     urna = (
         "LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO "
         "FROM candidatos GROUP BY 1) urna USING (SQ_CANDIDATO)"
-        if _tem(con, "candidatos") and _tem_colunas(con, "candidatos", ("NM_URNA_CANDIDATO",))
-        else "LEFT JOIN (SELECT NULL AS SQ_CANDIDATO, CAST(NULL AS VARCHAR) AS NM_URNA_CANDIDATO) urna USING (SQ_CANDIDATO)"
     )
 
     con.execute(f"""
@@ -454,16 +443,8 @@ def _cota_fefc(con) -> None:
     Gênero e cor vêm em caixas diferentes nos dois arquivos do TSE ('Feminino'
     na prestação de contas, 'FEMININO' no registro): normalizados em maiúsculas.
     `candidaturas` conta os registros do consulta_cand no mesmo recorte — o
-    denominador da regra racial — e fica NULL quando o registro não traz as
-    colunas (bancos antigos/sintéticos); `candidatos_fefc` é quem recebeu."""
-    if not _tem_colunas(con, "receitas", ("DS_GENERO", "DS_COR_RACA")):
-        con.execute("""
-            CREATE OR REPLACE TABLE cota_fefc (
-                SG_PARTIDO VARCHAR, DS_CARGO VARCHAR, genero VARCHAR, cor_raca VARCHAR,
-                candidatos_fefc BIGINT, fefc DOUBLE, candidaturas BIGINT)
-        """)
-        print("[agregado] cota_fefc: receitas sem DS_GENERO/DS_COR_RACA — tabela vazia")
-        return
+    denominador da regra racial — NULL quando o recorte não existe no
+    registro; `candidatos_fefc` é quem recebeu."""
     normaliza = {
         "genero": "UPPER(COALESCE(NULLIF(DS_GENERO, '#NULO'), 'NÃO INFORMADO'))",
         "cor_raca": "UPPER(COALESCE(NULLIF(DS_COR_RACA, '#NULO'), 'NÃO INFORMADA'))",
@@ -473,9 +454,6 @@ def _cota_fefc(con) -> None:
                    {normaliza['cor_raca']} AS cor_raca,
                    COUNT(DISTINCT SQ_CANDIDATO) AS candidaturas
             FROM candidatos GROUP BY 1, 2, 3, 4"""
-        if _tem(con, "candidatos") and _tem_colunas(con, "candidatos", ("DS_GENERO", "DS_COR_RACA"))
-        else """SELECT NULL AS SG_PARTIDO, NULL AS DS_CARGO, NULL AS genero, NULL AS cor_raca,
-                       CAST(NULL AS BIGINT) AS candidaturas WHERE FALSE"""
     )
     con.execute(f"""
         CREATE OR REPLACE TABLE cota_fefc AS

@@ -108,7 +108,7 @@ async function carregarFornecedor(id: string): Promise<DadosFornecedor | null> {
              ROUND(SUM(valor), 2), COUNT(*),
              -- mesma régua do backend (cond_sem_documento_fiscal em src/analises.py):
              -- documento não fiscal + PJ + categoria em que a nota é a norma
-             ROUND(SUM(valor) FILTER (WHERE ${condicaoSemNota(tabelasDisponiveis.has('norma_documento'))}), 2),
+             ROUND(SUM(valor) FILTER (WHERE ${condicaoSemNota()}), 2),
              -- red flag 12: notas fiscais afirmadas sem número localizável
              COUNT(*) FILTER (WHERE ${CONDICAO_NOTA_SEM_NUMERO})
       FROM despesas_atual WHERE ${w}`),

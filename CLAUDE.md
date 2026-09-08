@@ -69,7 +69,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar` e export
 - `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
 - `norma_documento` — por DS_ORIGEM_DESPESA: quanto do valor é declarado com documento fiscal (só entre fornecedores PJ) e `exige_documento` (a categoria tem nota como norma). É a régua do indicador `valor_sem_nota`: sem ela, marcar "sem nota" pegava metade do dinheiro do país, porque em impulsionamento/honorários/militância quase ninguém emite nota. Categoria com menos de 30 notas (itens agrupados por SQ_DESPESA; `-1` conta linha a linha) cai na lista fixa de `analises.py` (que é sempre o piso).
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
-- `cota_fefc` — Fundo Especial que **chegou a candidato**, por partido × cargo × gênero × cor/raça (`genero`/`cor_raca` normalizados em MAIÚSCULAS — a prestação vem 'Feminino', o registro 'FEMININO'): `candidatos_fefc`, `fefc`, e `candidaturas` (registros do consulta_cand no mesmo recorte, inclusive quem não recebeu nada; NULL quando o registro não traz as colunas). Réguas legais: mínimo de 30% do FEFC para mulheres (EC 117/2022) e proporcionalidade às candidaturas negras — `COR_RACA_NEGRA` = pretas + pardas (Res. TSE 23.607, art. 17). Alimenta a ficha `/partido/:sigla` e `resumo.cota_fefc`. **É termômetro, não a conta oficial**: a lei mede o total aplicado pelo partido (inclui gasto direto do diretório) e a prestação está aberta — a Metodologia diz isso, e todo texto que citar o número tem de dizer também.
+- `cota_fefc` — Fundo Especial que **chegou a candidato**, por partido × cargo × gênero × cor/raça (`genero`/`cor_raca` normalizados em MAIÚSCULAS — a prestação vem 'Feminino', o registro 'FEMININO'): `candidatos_fefc`, `fefc`, e `candidaturas` (registros do consulta_cand no mesmo recorte, inclusive quem não recebeu nada; NULL quando o recorte não existe no registro). Réguas legais: mínimo de 30% do FEFC para mulheres (EC 117/2022) e proporcionalidade às candidaturas negras — `COR_RACA_NEGRA` = pretas + pardas (Res. TSE 23.607, art. 17). Alimenta a ficha `/partido/:sigla` e `resumo.cota_fefc`. **É termômetro, não a conta oficial**: a lei mede o total aplicado pelo partido (inclui gasto direto do diretório) e a prestação está aberta — a Metodologia diz isso, e todo texto que citar o número tem de dizer também.
 - `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
 - `fornecedores` — cadastro RFB dos CNPJs (**persistente e incremental**, nunca recriada: via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário — o subcomando `enriquecer` só imprime uma tabela, não grava aqui). Pendentes novos primeiro (maiores valores); a folga do limite reconsulta os cadastros mais antigos (`dt_consulta`, vencidos há 30+ dias, ciclo de ~30 dias pela base). Mudança de situação cadastral preserva `situacao_anterior`/`dt_situacao_anterior` (base da futura red flag "baixado após receber"). CNPJ 404 vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (reconsultado só no ciclo, como os demais).
 
@@ -99,6 +99,13 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar` e export
 | 13 | Mesmo nº de nota em candidatos diferentes | mesmo fornecedor declarando o mesmo `NR_DOCUMENTO` (3+ dígitos) para 2+ candidatos — nota reaproveitada ou erro. **Exclui** impulsionamento (`CATEGORIA_IMPULSIONAMENTO`): a plataforma não emite nota sequencial e o número é digitado à mão ('001', '12345') — 16 dos 17 pares eram isso |
 | 14 | Fundo Eleitoral × gênero e cor/raça (`cota_fefc`) | partido cuja fatia do FEFC que chegou a candidatas está abaixo de 30%, ou cuja fatia para candidaturas negras está abaixo da proporção delas — ficha do partido e `resumo.cota_fefc`; sempre com a ressalva de termômetro |
 
+**Sem fallback para o que não acontece mais**: o release publicado sempre traz `arquivos`, todos os
+parquet listados acima, `candidatos` com urna/gênero/cor/`CD_ELEICAO`/`SG_UE`, `receitas` com gênero/cor e
+`NM_*_RFB`; o banco de produção tem `publicacoes.arquivos` e as colunas do refresh de `fornecedores`. Código
+que "degradava" nessas ausências foi removido em 08/09/2026 — as fixtures de teste trazem as colunas reais.
+O que fica é a degradação por tabela NOVA ainda não publicada (janela entre deploy e rotina) e a contingência
+de rede do site (API → WASM, resumo.json indisponível).
+
 Para análises novas, prefira `gastos.py sql` — e se a consulta for útil de forma recorrente, adicione-a em `src/analises.py`.
 
 ## Fontes e detalhes técnicos
@@ -119,7 +126,7 @@ SELECT * FROM 'https://github.com/machadouglas/analise-gastos-campanha/releases/
 WHERE NR_CANDIDATO = '12345'
 ```
 
-Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — o site prefere estes e cai para o histórico se faltarem), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`, mesma lógica de preferência), `despesas_alteradas.parquet`, `receitas_alteradas.parquet` (antes/depois pronto das `v_alteradas_pares_*`), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `bens.parquet`, `norma_documento.parquet`, `cota_fefc.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
+Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — é o que o site e o MCP leem; ninguém deriva do histórico), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`), `despesas_alteradas.parquet`, `receitas_alteradas.parquet` (antes/depois pronto das `v_alteradas_pares_*`), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `bens.parquet`, `norma_documento.parquet`, `cota_fefc.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
 
 ## Site público (`site/`)
 
@@ -157,8 +164,8 @@ chave (o SPCE regenera).
 **Nome do candidato no site: o de urna é o principal** (é como a campanha divulga e
 como o eleitor procura — metade das candidaturas com movimento usa na urna um nome que
 não está no civil), e o civil aparece como secundário quando difere. A prestação só traz
-`NM_CANDIDATO`, então: `duckdb.ts` registra sempre a view `nomes_urna` (do parquet de
-candidatos; vazia sem ele, para os JOINs degradarem em vez de quebrar), toda consulta
+`NM_CANDIDATO`, então: `duckdb.ts` registra a view `nomes_urna` (do parquet de
+candidatos, mesma definição de `src/mcp/dados.py`), toda consulta
 que mostra candidato junta `JOIN_NOMES_URNA` e projeta `nomeExibicao()` (`consultas.ts`),
 e o que vem do `resumo.json` (Home, conversa MCP) passa por `nomeCandidato()` em
 `format.ts` — o backend grava `NM_URNA_CANDIDATO` em `indicadores` e em todo registro
@@ -178,10 +185,9 @@ a busca parte do **registro** (`candidatos`, único que tem NM_URNA_CANDIDATO) e
 totais de `indicadores` por LEFT JOIN: metade das candidaturas com movimento usa na urna um
 nome que não está no nome civil, e é por ele que o eleitor procura; partir de
 `indicadores`/`despesas_atual` escondia essas e também quem só declarou receita) e
-`site/src/lib/duckdb.ts` (views `despesas_atual`/`receitas_atual`/
-`despesas_removidas`/`receitas_removidas` ↔ `src/carga.py`/`src/historico.py`);
+`site/src/lib/duckdb.ts` (view `nomes_urna` ↔ `src/mcp/dados.py`);
 `tests/test_sincronia_site.py` cobre essa sincronia — remoções NUNCA se calculam "na unha"
-nas páginas, sempre pelas views. Componentes de visualização: `components/app/graficos.tsx`
+nas páginas, sempre pelo parquet `*_removidas` publicado. Componentes de visualização: `components/app/graficos.tsx`
 (barras, linhas, faixas/beeswarm, sparkline, composição), `sankey.tsx` (rótulos com
 anti-colisão + linhas-guia), `grafo.tsx` (layout de força via d3-force, estático e
 determinístico; aceita `secundarios` para o 2º nível de conexões), `mapa.tsx`;

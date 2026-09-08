@@ -259,12 +259,7 @@ def criar_views_mudancas(con) -> None:
         # front seria a terceira cópia da régua.
         desc, vr, dt = VARIAVEIS[tabela]
         rfb, declarado = NOME_CONTRAPARTE[tabela]
-        # o nome da Receita só existe nos arquivos completos do TSE; bancos de
-        # teste (e extrações antigas) têm só o nome declarado pelo candidato
-        nome_sql = (
-            f"COALESCE(NULLIF(a.{rfb}, '#NULO'), a.{declarado})"
-            if rfb in _colunas(con, hist) else f"a.{declarado}"
-        )
+        nome_sql = f"COALESCE(NULLIF(a.{rfb}, '#NULO'), a.{declarado})"
         contraparte, _ = CONTRAPARTE[tabela]
         campo = " ".join(
             f"WHEN a.{col} IS DISTINCT FROM d.{col} THEN '{ROTULO_VARIAVEL[i]}'"

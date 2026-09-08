@@ -205,26 +205,14 @@ export function Explorar() {
     setCarregando(true);
     setErro(null);
     try {
-      // espera o boot antes de checar tabelasDisponiveis: na primeira consulta o
-      // Set ainda está vazio e a régua do "sem documento fiscal" cairia no
-      // fallback (lista fixa) mesmo com norma_documento publicada
-      await obterConexao();
-      // registro publicado = filtro por nome também casa o nome de urna
-      const temRegistro = tabelasDisponiveis.has('candidatos');
-      const { base, where: w } = whereDaVisao(
-        v, f, s, cat, tabelasDisponiveis.has('norma_documento'), temRegistro,
-      );
+      const { base, where: w } = whereDaVisao(v, f, s, cat);
       const buscando = v === 'atual' && Boolean(f.candidato.trim());
       // uma consulta só, sobre o REGISTRO (que tem o nome de urna) somado aos
       // indicadores (que têm os totais) — buscar em despesas_atual escondia
       // quem só arrecadou, e buscar em indicadores escondia quem é conhecido
       // pelo nome de urna. `tem_movimento` separa as duas listas na tela.
-      // (sem checar tabelasDisponiveis: no primeiro load o Set ainda está
-      // vazio — o executarSQL espera a conexão e o catch cobre parquet ausente)
       const achados = buscando
-        ? await executarSQL(sqlBuscaCandidatos(f, 100, temRegistro)).catch(() =>
-            executarSQL(sqlBuscaCandidatos(f, 100, false)).catch(() => ({ linhas: [] as unknown[][] })),
-          )
+        ? await executarSQL(sqlBuscaCandidatos(f, 100)).catch(() => ({ linhas: [] as unknown[][] }))
         : { linhas: [] as unknown[][] };
       const candidatura = (l: unknown[]): CandidatoEncontrado => ({
         sq: String(l[0]),
@@ -239,18 +227,10 @@ export function Explorar() {
       });
       const comMovimento = achados.linhas.filter((l) => l[9]).map(candidatura);
       const semMovimento = achados.linhas.filter((l) => !l[9]).map(candidatura);
-      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA, temRegistro);
+      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA);
       const painel = sqlPainel(base, w, v);
-      // cards do fora-da-curva: tenta com os metadados da foto; parquet de
-      // candidatos antigo (sem CD_ELEICAO/SG_UE) cai na variante sem foto
       const consultarForaDaCurva = async (): Promise<CandidatoFora[]> => {
-        await obterConexao();
-        let r;
-        try {
-          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, temRegistro));
-        } catch {
-          r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA, false));
-        }
+        const r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA));
         return r.linhas.map((l) => ({
           sq: String(l[0]),
           nome: nomeCandidato(l[11], l[1]).principal,

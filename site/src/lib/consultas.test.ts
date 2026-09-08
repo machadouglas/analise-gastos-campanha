@@ -53,10 +53,8 @@ describe('montarWhere', () => {
     expect(whereIndicadores(f({ candidato: 'ACM NETO' }))).toContain(
       'i.SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos',
     );
-    // número não passa pelo registro; sem o parquet de candidatos, só o civil
+    // número não passa pelo registro
     expect(montarWhere(f({ candidato: '12345' }))).not.toContain('candidatos');
-    expect(montarWhere(f({ candidato: 'ACM NETO' }), false, false)).not.toContain('candidatos');
-    expect(whereIndicadores(f({ candidato: 'ACM NETO' }), false)).not.toContain('candidatos');
   });
 
   it('nome com várias palavras exige todas, em qualquer ordem (acha "JOSE DA SILVA")', () => {
@@ -101,21 +99,15 @@ describe('montarWhere', () => {
 });
 
 describe('whereDaVisao', () => {
-  it('sem-nota sem a norma publicada cai na lista fixa de categorias', () => {
+  it('sem-nota corta pela norma medida da categoria', () => {
     const { base, where } = whereDaVisao('sem-nota', FILTROS_VAZIOS, '', '');
     expect(base).toBe('despesas_atual');
-    expect(where).toContain(condicaoSemNota(false));
-    expect(where).toContain('Despesas com pessoal');
-  });
-
-  it('sem-nota com a norma publicada corta pela categoria medida', () => {
-    const { where } = whereDaVisao('sem-nota', FILTROS_VAZIOS, '', '', true);
+    expect(where).toContain(condicaoSemNota());
     expect(where).toContain('FROM norma_documento WHERE exige_documento');
-    expect(where).not.toContain('Despesas com pessoal'); // a lista fixa sai de cena
   });
 
   it('a régua exige PJ e aceita cupom fiscal como documento fiscal', () => {
-    const c = condicaoSemNota(true);
+    const c = condicaoSemNota();
     expect(c).toContain('LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14');
     expect(c).toContain("NOT ILIKE '%cupom fiscal%'");
   });
@@ -214,13 +206,11 @@ describe('sqlDispersao', () => {
 });
 
 describe('sqlForaDaCurvaCards', () => {
-  it('escapa o sinal e só junta a foto quando o parquet permite', () => {
-    const com = sqlForaDaCurvaCards(FILTROS_VAZIOS, 'pct_sem_nota', 0, 50, true);
+  it('filtra pelo sinal, junta a foto e pagina', () => {
+    const com = sqlForaDaCurvaCards(FILTROS_VAZIOS, 'pct_sem_nota', 0, 50);
     expect(com).toContain('LEFT JOIN foto');
     expect(com).toContain("s.metrica = 'pct_sem_nota'");
-    const sem = sqlForaDaCurvaCards(FILTROS_VAZIOS, '', 1, 50, false);
-    expect(sem).not.toContain('LEFT JOIN foto');
-    expect(sem).toContain('OFFSET 50');
+    expect(sqlForaDaCurvaCards(FILTROS_VAZIOS, '', 1, 50)).toContain('OFFSET 50');
   });
 });
 
@@ -248,13 +238,6 @@ describe('sqlBuscaCandidatos', () => {
     expect(sqlBuscaCandidatos(f({ candidato: 'JANE' }), 100)).not.toContain('FROM despesas_atual');
     expect(sqlBuscaCandidatos(f({ candidato: 'JANE', fornecedor: 'GRAFICA' }), 100))
       .toContain('FROM despesas_atual');
-  });
-
-  it('sem o parquet de candidatos, degrada para os indicadores', () => {
-    const sql = sqlBuscaCandidatos(f({ candidato: 'JANE' }), 100, false);
-    expect(sql).not.toContain('FROM candidatos');
-    expect(sql).not.toContain('NM_URNA_CANDIDATO');
-    expect(sql).toContain('FROM indicadores');
   });
 });
 

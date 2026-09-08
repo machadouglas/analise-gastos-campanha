@@ -84,11 +84,6 @@ def _garantir_tabela(con) -> None:
             capital_social DOUBLE, socios VARCHAR,
             dt_consulta DATE, situacao_anterior VARCHAR, dt_situacao_anterior DATE)
     """)
-    # bases criadas antes do refresh contínuo: colunas novas entram com NULL
-    # (dt_consulta NULL = "consulta de data desconhecida" — vai primeiro na fila)
-    for coluna, tipo in [("dt_consulta", "DATE"), ("situacao_anterior", "VARCHAR"),
-                         ("dt_situacao_anterior", "DATE")]:
-        con.execute(f"ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
 
 
 def _inserir_fornecedor(con, numero: str, dados: dict | None, hoje: date) -> None:
