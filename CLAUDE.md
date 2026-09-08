@@ -199,8 +199,12 @@ consulta comprimida (`q` = deflate-raw + base64url) e a versão do dado (`v` =
 recebe ~10 KB em vez do motor (~10 MB) + pedaços dos Parquet. `tabelasDisponiveis` vem do
 mapa `arquivos` do resumo, sem bootar motor nenhum — do `resumo.json` pela Function
 (`carregarResumo` tenta duas vezes: o GitHub por trás dela responde 429 em hora de pico)
-ou, se ela falhar, de `GET /api/v1/resumo` no servidor; a Function guarda uma cópia de
-reserva de 7 dias de cada arquivo completo e a serve quando o GitHub falha. O hostname da
+ou, se ela falhar, de `GET /api/v1/resumo` no servidor. A Function busca cada arquivo
+inteiro no GitHub uma vez por data center e serve do cache o GET, o HEAD e os `Range` do
+WASM (a Cache API fatia em 206) — cada `Range` ia ao GitHub e virava 429 em cascata;
+uma cópia de reserva de 7 dias sai marcada (`X-Radar-Copia`) quando o GitHub falha.
+429 da borda (rate limit por IP) não é contingência: `viaApi` espera o `Retry-After` e
+repete até 3 vezes. O hostname da
 API tem de estar no `connect-src` da CSP (`site/public/_headers`). Se a API não responde (rede, 5xx,
 timeout de 4 s, 404 de imagem antiga), a página importa o `duckdb.ts` sob demanda e roda o
 **mesmo texto de SQL** sobre os Parquet — o caminho de sempre, que não depende do host — e

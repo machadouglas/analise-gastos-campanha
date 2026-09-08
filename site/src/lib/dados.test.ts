@@ -125,6 +125,34 @@ describe('com a API configurada', () => {
     expect(dados.estadoAtual()).toBe('contingencia');
   });
 
+  it('429 da borda espera o Retry-After e repete, sem cair para o WASM', async () => {
+    vi.useFakeTimers();
+    const fetchFalso = vi
+      .fn()
+      .mockResolvedValueOnce(respostaApi({ erro: 'rate' }, { status: 429, headers: { 'Retry-After': '3' } }))
+      .mockResolvedValueOnce(respostaApi({ colunas: ['a'], linhas: [[7]] }));
+    vi.stubGlobal('fetch', fetchFalso);
+    const dados = await carregar();
+    const pendente = dados.executarSQL('SELECT 1');
+    await vi.advanceTimersByTimeAsync(3_500);
+    const r = await pendente;
+    expect(r.linhas).toEqual([[7]]);
+    expect(fetchFalso).toHaveBeenCalledTimes(2);
+    expect(wasm.executarSQL).not.toHaveBeenCalled();
+    expect(dados.estadoAtual()).toBe('api');
+  });
+
+  it('429 que persiste depois das tentativas cai para o WASM', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async () => respostaApi({ erro: 'rate' }, { status: 429 })));
+    const dados = await carregar();
+    const pendente = dados.executarSQL('SELECT 1');
+    await vi.advanceTimersByTimeAsync(30_000);
+    const r = await pendente;
+    expect(r.linhas).toEqual([['wasm']]);
+    expect(dados.estadoAtual()).toBe('contingencia');
+  });
+
   it('volta a tentar o servidor depois da janela de contingência', async () => {
     vi.useFakeTimers();
     const fetchFalso = vi
