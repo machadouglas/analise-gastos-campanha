@@ -1,3 +1,5 @@
+# ruff: noqa: F811 — `banco` importado de test_mcp_ferramentas é fixture (registrada
+# neste módulo pelo import); o parâmetro `banco` de cada teste não é redefinição
 """A rota do site (GET /api/v1/consulta, src/mcp/api.py) contra o app ASGI.
 
 O site manda o MESMO SQL que o DuckDB-WASM rodaria no navegador; a rota tem
@@ -58,7 +60,7 @@ def test_devolve_o_formato_do_console_com_cors_e_versao(banco):
     assert r.status_code == 200, r.text
     corpo = r.json()
     assert corpo["colunas"] == ["SQ_CANDIDATO", "total_contratado"]
-    assert len(corpo["linhas"]) == 2 and all(isinstance(l, list) for l in corpo["linhas"])
+    assert len(corpo["linhas"]) == 2 and all(isinstance(linha, list) for linha in corpo["linhas"])
     assert corpo["versao_dado"] == banco.versao_dado and corpo["publicado_em"] == banco.publicado_em
     assert corpo["versao_codigo"] and corpo["truncado"] is False
     assert r.headers["Access-Control-Allow-Origin"] == "*"
