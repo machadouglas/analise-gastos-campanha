@@ -17,11 +17,12 @@ import re
 import sys
 from pathlib import Path
 
+import duckdb
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src import agregados, carga, exportar, historico, privacidade  # noqa: E402
-from src.mcp import dados, servidor  # noqa: E402
+from src.mcp import consultas, dados, servidor  # noqa: E402
 from tests.test_consultas_do_site import _consultas  # noqa: E402
 from tests.test_e2e_pipeline import _publicar_zip_do_dia  # noqa: E402
 
@@ -182,6 +183,161 @@ def test_ficha_do_partido_e_visoes(banco):
     assert g["categorias"] and g["categorias"][0]["total"] > 0
     s = _rodar(servidor.sem_nota())
     assert isinstance(s["candidatos"], list)
+
+
+def test_buscar_fornecedor_acha_pelos_dois_papeis(banco):
+    """O id que a busca devolve é o mesmo que a ficha consome — sem ele, achar
+    uma empresa pelo nome só era possível pela ferramenta sql."""
+    r = _rodar(servidor.buscar_fornecedor("fornecedor ltda"))
+    achado = next(c for c in r["contrapartes"] if c["id"] == CNPJ_FORNECEDOR)
+    assert achado["tipo_id"] == "cnpj" and achado["candidatos"] > 1
+    assert "fornecedor" in achado["papeis"]
+    assert _rodar(servidor.ficha_fornecedor(achado["id"]))["id"] == CNPJ_FORNECEDOR
+
+    # por CNPJ pontuado, o mesmo caminho de limpar_id da ficha
+    assert any(c["id"] == CNPJ_FORNECEDOR
+               for c in _rodar(servidor.buscar_fornecedor("11.222.333/0001-44"))["contrapartes"])
+    # doadora pessoa física, que não aparece em despesas_atual: a busca cobre
+    # os dois papéis, e o id devolvido é o código pf-… (nunca o CPF)
+    doadora = _rodar(servidor.buscar_fornecedor("doadora aparecida"))
+    assert doadora["n"] == 1 and doadora["contrapartes"][0]["papeis"] == "doador"
+    assert doadora["contrapartes"][0]["id"].startswith("pf-")
+    _sem_cpf_cru(r)
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError):
+        _rodar(servidor.buscar_fornecedor("  "))
+
+
+def test_candidatos_conectados_diz_por_onde_a_ligacao_passa(banco):
+    """Nível 1 são os que dividem contraparte; `por_meio_de` nomeia a ponte —
+    sem isso a lista não é conferível."""
+    # no cenário, TODA contraparte atende os 30 candidatos: com o teto padrão
+    # (20) nenhuma sobra, e o resultado honesto é vazio com o corte declarado
+    r = _rodar(servidor.candidatos_conectados("160001", niveis=1))
+    assert r["conectados"] == [] and r["criterio_do_corte"] and r["ressalvas"]
+    ignoradas = {i["contraparte_id"] for i in r["contrapartes_ignoradas"]}
+    assert CNPJ_FORNECEDOR in ignoradas
+
+    # afrouxando o teto, as mesmas contrapartes voltam a ligar
+    r = _rodar(servidor.candidatos_conectados("160001", niveis=1,
+                                              max_candidatos_por_contraparte=1000))
+    assert r["niveis"] == 1 and r["conectados"]
+    assert all(c["nivel"] == 1 for c in r["conectados"])
+    assert all(c["por_meio_de"] for c in r["conectados"]), "ligação sem ponte nomeada"
+    assert "160001" not in [c["sq_candidato"] for c in r["conectados"]], "o próprio candidato"
+    assert any(CNPJ_FORNECEDOR in c["por_meio_de"] or "FORNECEDOR" in c["por_meio_de"]
+               for c in r["conectados"])
+
+    # nível 2 alcança pelo menos o que o nível 1 alcança, e cada um aparece uma vez
+    r2 = _rodar(servidor.candidatos_conectados("160001", niveis=2,
+                                               max_candidatos_por_contraparte=1000))
+    sqs = [c["sq_candidato"] for c in r2["conectados"]]
+    assert len(sqs) == len(set(sqs)), "candidato repetido em níveis diferentes"
+    assert len(sqs) >= len(r["conectados"])
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError):
+        _rodar(servidor.candidatos_conectados("160001", tipos="amizade"))
+    with pytest.raises(ToolError):
+        _rodar(servidor.candidatos_conectados("nao-numerico"))
+
+
+def test_notas_fora_do_preco_exige_recorte(banco):
+    """Sem recorte a consulta varreria o país inteiro por nota — o teto de
+    linhas esconderia o custo, não o evitaria."""
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError):
+        _rodar(servidor.notas_fora_do_preco())
+
+    r = _rodar(servidor.notas_fora_do_preco(uf="XX"))
+    assert isinstance(r["notas"], list) and r["ressalvas"] and r["o_que_esta_medido"]
+    for nota in r["notas"]:
+        assert nota["valor"] > nota["p95_do_grupo"]
+        assert nota["mediana_do_grupo"] is not None and nota["notas_no_grupo"] >= 5
+
+
+def test_notas_fora_do_preco_compara_nota_contra_nota(tmp_path):
+    """A régua do benchmark é a NOTA (itens de mesma SQ_DESPESA somados). Se a
+    ferramenta comparasse item a item, uma nota fatiada nunca apareceria e o
+    número comparado teria forma diferente da régua que gerou o p95."""
+    con = duckdb.connect(str(tmp_path / "b.duckdb"))
+    con.execute("""
+        CREATE TABLE despesas_atual (
+            SQ_CANDIDATO VARCHAR, NM_CANDIDATO VARCHAR, SG_PARTIDO VARCHAR,
+            DS_CARGO VARCHAR, SG_UF VARCHAR, SQ_DESPESA VARCHAR,
+            NM_FORNECEDOR VARCHAR, NM_FORNECEDOR_RFB VARCHAR,
+            NR_CPF_CNPJ_FORNECEDOR VARCHAR, DS_ORIGEM_DESPESA VARCHAR,
+            DS_DESPESA VARCHAR, DS_TIPO_DOCUMENTO VARCHAR, NR_DOCUMENTO VARCHAR,
+            DT_DESPESA VARCHAR, valor DOUBLE)""")
+    linha = ("1", "FULANO", "XYZ", "Deputado Estadual", "XX", "{sq}", "GRAFICA",
+             "#NULO", "11222333000144", "Publicidade", "PANFLETO", "Nota Fiscal",
+             "10", "15/08/2026", None)
+    # uma nota fatiada em 5 itens de 300 (total 1500) e uma nota inteira de 400
+    for i in range(5):
+        con.execute("INSERT INTO despesas_atual VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    [*linha[:5], "nota-fatiada", *linha[6:14], 300.0])
+    con.execute("INSERT INTO despesas_atual VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [*linha[:5], "nota-inteira", *linha[6:14], 400.0])
+    con.execute("""
+        CREATE TABLE benchmark_precos AS
+        SELECT 'Publicidade' AS DS_ORIGEM_DESPESA, 'XX' AS SG_UF, 40 AS notas,
+               100.0 AS p25, 200.0 AS mediana, 300.0 AS p75, 500.0 AS p95, 900.0 AS maximo""")
+    sql_ = consultas.sql_notas_fora_do_preco("XX", None, None, None, None, 10)
+    achado = con.execute(sql_).fetchall()
+    colunas = [d[0] for d in con.description]
+    con.close()
+    linhas = [dict(zip(colunas, l, strict=True)) for l in achado]
+    # a nota fatiada (5 × 300 = 1500) passa do p95; nenhum item de 300 passaria
+    assert [(l["valor"], l["itens"]) for l in linhas] == [(1500.0, 5)]
+    assert linhas[0]["vezes_o_p95"] == 3.0
+
+
+def test_novidades_traz_o_que_entrou_com_o_total_do_recorte(banco):
+    """O contrário de declaracoes_removidas. `resumo` cobre o recorte inteiro —
+    somar só a lista (cortada por `limite`) daria um número menor sem avisar."""
+    r = _rodar(servidor.novidades(limite=5))
+    assert r["tipo"] == "despesa" and r["declaracoes"]
+    assert all(d["entrou_em"] == r["resumo"]["da_extracao"] for d in r["declaracoes"])
+    assert r["resumo"]["linhas"] >= len(r["declaracoes"])
+    assert r["resumo"]["valor_total"] >= sum(d["valor"] for d in r["declaracoes"])
+    assert r["o_que_esta_medido"] and r["ressalvas"]
+
+    # `desde` anterior à 1ª extração pega tudo o que existe
+    tudo = _rodar(servidor.novidades(desde="2020-01-01", limite=5))
+    assert tudo["resumo"]["linhas"] >= r["resumo"]["linhas"]
+
+    rec = _rodar(servidor.novidades(tipo="receita", desde="2020-01-01", limite=5))
+    assert rec["tipo"] == "receita" and rec["declaracoes"]
+    assert "fonte" in rec["declaracoes"][0]
+    _sem_cpf_cru(rec)
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError):
+        _rodar(servidor.novidades(tipo="bem"))
+
+
+def test_fornecedores_por_cadastro_declara_a_cobertura(banco):
+    """A tabela `fornecedores` é preenchida aos poucos: sem o denominador,
+    "poucas empresas baixadas" se confunde com "poucas empresas verificadas"."""
+    r = _rodar(servidor.fornecedores_por_cadastro())
+    achado = next(f for f in r["fornecedores"] if f["fornecedor_id"] == CNPJ_FORNECEDOR)
+    assert achado["fornecedor"] == "FORNECEDOR LTDA OFICIAL"
+    assert achado["situacao"] == "ATIVA" and achado["candidatos"] > 1
+    cob = r["cobertura"]
+    assert cob["cnpjs_consultados"] >= 1
+    assert cob["cnpjs_no_recorte"] >= cob["cnpjs_consultados"]
+    assert r["ressalvas"]
+
+    # filtro por situação e por data de abertura (a régua do "recém-aberto")
+    assert _rodar(servidor.fornecedores_por_cadastro(situacao="ativa"))["n"] >= 1
+    assert _rodar(servidor.fornecedores_por_cadastro(situacao="baixada"))["n"] == 0
+    assert _rodar(servidor.fornecedores_por_cadastro(aberto_apos="2025-10-01"))["n"] >= 1
+    assert _rodar(servidor.fornecedores_por_cadastro(aberto_apos="2030-01-01"))["n"] == 0
 
 
 @pytest.mark.parametrize("rotulo,consulta", _consultas(), ids=[r for r, _ in _consultas()])

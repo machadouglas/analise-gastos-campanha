@@ -4,15 +4,16 @@ Espelho em Python das consultas do site (site/src/lib/consultas.ts e as
 fichas em site/src/pages/*.tsx), sobre as MESMAS tabelas publicadas. As
 réguas de negócio não são copiadas: vêm importadas de src/analises.py
 (documento fiscal, plataforma, impulsionamento), src/resumo.py (sinais do
-fora da curva, cota do FEFC) e src/agregados.py (cor/raça). O que é texto
-de SQL espelhado do front é coberto por tests/test_sincronia_site.py.
+fora da curva, cota do FEFC) e src/agregados.py (cor/raça, unidade da nota
+no benchmark de preço). O que é texto de SQL espelhado do front é coberto por
+tests/test_sincronia_site.py.
 """
 
 from __future__ import annotations
 
 import re
 
-from src import analises, resumo
+from src import agregados, analises, resumo
 
 # --------------------------------------------------------------------------- #
 # Helpers de filtro (port de condUF/condTexto/montarWhere do site)
@@ -105,6 +106,22 @@ CONDICAO_DOACAO_DIRETA = analises.cond_doacao_direta()
 # red flag 7 — mesmo valor, mesmo fornecedor, em notas DISTINTAS (rep em agregados.py)
 MINIMO_NOTAS_VALOR_REPETIDO = 3
 MARGEM_GASTO_ACIMA = resumo.MARGEM_GASTO_ACIMA
+
+# A nota comparada contra benchmark_precos tem de ser montada com a MESMA chave
+# que gerou os percentis (src/agregados.py) — daí o import em vez de uma cópia.
+CHAVE_NOTA = ", ".join(agregados.CHAVE_NOTA)
+SEM_ID_DESPESA = agregados.SEM_ID_DESPESA
+MIN_NOTAS_BENCHMARK_PRECO = agregados.MIN_NOTAS_BENCHMARK_PRECO
+
+# Contrapartes que atendem tanta gente que ligá-las a alguém não diz nada sobre
+# relação: plataformas de anúncio, de pagamento e de vaquinha. Não é juízo sobre
+# elas — é o corte que separa infraestrutura de vínculo, e vai declarado na
+# resposta (`contrapartes_ignoradas`) para o corte ficar conferível.
+# Medido em 07/09/2026: com 20, 17 contrapartes das 36.754 saem e 95% das
+# arestas ficam; sem corte, o 1º nível de um candidato qualquer já alcança 42%
+# do país por causa de uma única plataforma de anúncio.
+MAX_CANDIDATOS_CONTRAPARTE_COMUM = 20
+MAX_NIVEIS_CONEXAO = 3
 
 
 def sql_documento_da_nota(tipo: str = "DS_TIPO_DOCUMENTO", numero: str = "NR_DOCUMENTO") -> str:
@@ -557,6 +574,275 @@ SELECT DS_ORIGEM_DESPESA AS categoria, ROUND(SUM(valor), 2) AS total,
         WHERE b.DS_ORIGEM_DESPESA = d.DS_ORIGEM_DESPESA AND b.SG_UF = 'BR-TODAS') AS mediana_nacional_por_nota
 FROM despesas_atual d WHERE {w}
 GROUP BY 1 ORDER BY total DESC LIMIT {int(limite)}"""
+
+
+# --------------------------------------------------------------------------- #
+# notas_fora_do_preco
+# --------------------------------------------------------------------------- #
+
+def sql_notas_fora_do_preco(uf: str | None, cargo: str | None, partido: str | None,
+                            sq: str | None, categoria: str | None, limite: int) -> str:
+    """Notas acima do p95 de preço da própria categoria (benchmark_precos).
+
+    A nota é montada com CHAVE_NOTA — a mesma chave que gerou os percentis em
+    src/agregados.py. Montada de outro jeito (por item, ou por fornecedor), o
+    número comparado teria uma forma e a régua outra, e a comparação seria
+    silenciosamente errada. O p95 é o da UF quando o grupo existe, senão o
+    nacional; `vezes_o_p95` deixa a conta à vista."""
+    w = where_recorte(uf, cargo, partido)
+    if sq:
+        w = f"{w} AND SQ_CANDIDATO = '{esc(sq)}'"
+    c = cond_texto(categoria, ["DS_ORIGEM_DESPESA"], plural=True) if categoria else None
+    if c:
+        w = f"{w} AND {c}"
+    doc = sql_documento_da_nota()
+    return f"""
+WITH itens AS (SELECT * FROM despesas_atual
+               WHERE {w} AND valor > 0 AND DS_ORIGEM_DESPESA <> '#NULO'),
+notas AS (
+  SELECT SQ_CANDIDATO AS sq_candidato, DS_ORIGEM_DESPESA AS categoria, SG_UF AS uf,
+         ANY_VALUE(NM_CANDIDATO) AS candidato, ANY_VALUE(SG_PARTIDO) AS partido,
+         ANY_VALUE(DS_CARGO) AS cargo,
+         ANY_VALUE({NOME_FORNECEDOR_OU_ANONIMO}) AS fornecedor,
+         ANY_VALUE(NR_CPF_CNPJ_FORNECEDOR) AS fornecedor_id,
+         ANY_VALUE(DT_DESPESA) AS data,
+         STRING_AGG(DISTINCT DS_DESPESA, ' - ') AS descricao,
+         ANY_VALUE({doc}) AS documento,
+         COUNT(*) AS itens, ROUND(SUM(valor), 2) AS valor
+  FROM itens WHERE SQ_DESPESA <> '{SEM_ID_DESPESA}'
+  GROUP BY DS_ORIGEM_DESPESA, SG_UF, {CHAVE_NOTA}
+  UNION ALL
+  SELECT SQ_CANDIDATO, DS_ORIGEM_DESPESA, SG_UF, NM_CANDIDATO, SG_PARTIDO, DS_CARGO,
+         {NOME_FORNECEDOR_OU_ANONIMO}, NR_CPF_CNPJ_FORNECEDOR, DT_DESPESA, DS_DESPESA,
+         {doc}, 1, ROUND(valor, 2)
+  FROM itens WHERE SQ_DESPESA = '{SEM_ID_DESPESA}'),
+com_regua AS (
+  SELECT n.*, COALESCE(buf.p95, bbr.p95) AS p95,
+         COALESCE(buf.mediana, bbr.mediana) AS mediana,
+         COALESCE(buf.notas, bbr.notas) AS notas_no_grupo,
+         CASE WHEN buf.p95 IS NOT NULL THEN n.uf ELSE 'BR-TODAS' END AS grupo_ambito
+  FROM notas n
+  LEFT JOIN benchmark_precos buf
+    ON buf.DS_ORIGEM_DESPESA = n.categoria AND buf.SG_UF = n.uf
+  LEFT JOIN benchmark_precos bbr
+    ON bbr.DS_ORIGEM_DESPESA = n.categoria AND bbr.SG_UF = 'BR-TODAS')
+SELECT sq_candidato, candidato, partido, cargo, uf, categoria, fornecedor, fornecedor_id,
+       data, descricao, documento, itens, valor,
+       mediana AS mediana_do_grupo, p95 AS p95_do_grupo, notas_no_grupo, grupo_ambito,
+       ROUND(valor / NULLIF(p95, 0), 1) AS vezes_o_p95
+FROM com_regua WHERE p95 IS NOT NULL AND valor > p95
+ORDER BY valor / NULLIF(p95, 0) DESC LIMIT {int(limite)}"""
+
+
+# --------------------------------------------------------------------------- #
+# candidatos_conectados
+# --------------------------------------------------------------------------- #
+
+TIPOS_REDE = ("despesa", "doacao", "doacao_originaria")
+
+
+def sql_contrapartes_ignoradas(tipos: tuple[str, ...], maximo: int) -> str:
+    """As contrapartes tratadas como infraestrutura — a resposta as lista para
+    o corte ficar conferível em vez de silencioso."""
+    lista = ", ".join(f"'{esc(t)}'" for t in tipos)
+    return f"""
+SELECT contraparte_id, ANY_VALUE(contraparte) AS contraparte,
+       COUNT(DISTINCT SQ_CANDIDATO) AS candidatos
+FROM rede WHERE tipo IN ({lista}) AND contraparte_id NOT IN ('-1', '#NULO')
+GROUP BY 1 HAVING COUNT(DISTINCT SQ_CANDIDATO) > {int(maximo)}
+ORDER BY candidatos DESC"""
+
+
+def sql_candidatos_conectados(sq: str, niveis: int, tipos: tuple[str, ...],
+                              maximo: int, limite: int) -> str:
+    """Quem alcanca quem pela rede de contrapartes compartilhadas.
+
+    Cada nivel e uma CTE explicita (e nao uma CTE recursiva) porque o que
+    interessa nao e so QUEM foi alcancado, mas POR ONDE: sem a contraparte que
+    fez a ponte, uma lista de nivel 3 nao e conferivel. Um candidato aparece
+    uma vez so, no nivel mais curto em que foi alcancado; contraparte ja usada
+    nao reabre o nivel seguinte."""
+    lista = ", ".join(f"'{esc(t)}'" for t in tipos)
+    niveis = max(1, min(int(niveis), MAX_NIVEIS_CONEXAO))
+    partes = [f"""
+WITH r AS (
+  SELECT SQ_CANDIDATO, contraparte_id, contraparte, tipo, valor
+  FROM rede WHERE tipo IN ({lista}) AND contraparte_id NOT IN ('-1', '#NULO')),
+hubs AS (
+  SELECT contraparte_id FROM r GROUP BY 1
+  HAVING COUNT(DISTINCT SQ_CANDIDATO) > {int(maximo)}),
+g AS (SELECT * FROM r WHERE contraparte_id NOT IN (SELECT contraparte_id FROM hubs)),
+n0 AS (SELECT '{esc(sq)}' AS SQ_CANDIDATO)"""]
+    for k in range(1, niveis + 1):
+        vistos = " UNION ALL ".join(f"SELECT SQ_CANDIDATO FROM n{i}" for i in range(k))
+        usadas = ""
+        if k > 1:
+            ja = " UNION ALL ".join(f"SELECT contraparte_id FROM f{i}" for i in range(1, k))
+            usadas = f" AND contraparte_id NOT IN ({ja})"
+        partes.append(f""",
+f{k} AS (
+  SELECT DISTINCT contraparte_id FROM g
+  WHERE SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM n{k - 1}){usadas}),
+a{k} AS (
+  SELECT g.SQ_CANDIDATO, {k} AS nivel, g.contraparte_id, g.contraparte, g.tipo, g.valor
+  FROM g JOIN f{k} USING (contraparte_id)
+  WHERE g.SQ_CANDIDATO NOT IN ({vistos})),
+n{k} AS (SELECT DISTINCT SQ_CANDIDATO FROM a{k})""")
+    alcance = " UNION ALL ".join(f"SELECT * FROM a{k}" for k in range(1, niveis + 1))
+    partes.append(f""",
+alcance AS ({alcance}),
+rotulos AS (
+  SELECT SQ_CANDIDATO, ANY_VALUE(NM_CANDIDATO) AS candidato,
+         ANY_VALUE(SG_PARTIDO) AS partido, ANY_VALUE(DS_CARGO) AS cargo,
+         ANY_VALUE(SG_UF) AS uf
+  FROM rede WHERE SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM alcance) GROUP BY 1)
+SELECT a.SQ_CANDIDATO AS sq_candidato, rot.candidato, rot.partido, rot.cargo, rot.uf,
+       MIN(a.nivel) AS nivel,
+       COUNT(DISTINCT a.contraparte_id) AS contrapartes_em_comum,
+       STRING_AGG(DISTINCT a.contraparte, ' | ') AS por_meio_de,
+       STRING_AGG(DISTINCT a.tipo, ', ') AS tipos,
+       ROUND(SUM(a.valor), 2) AS valor_nas_arestas
+FROM alcance a JOIN rotulos rot USING (SQ_CANDIDATO)
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY nivel, contrapartes_em_comum DESC, valor_nas_arestas DESC
+LIMIT {int(limite)}""")
+    return "".join(partes)
+
+
+# --------------------------------------------------------------------------- #
+# buscar_fornecedor
+# --------------------------------------------------------------------------- #
+
+def sql_buscar_fornecedor(termo: str, uf: str | None, limite: int) -> str:
+    """Localiza contraparte por nome (parcial) ou CNPJ e devolve o id que
+    ficha_fornecedor consome. Procura nos DOIS papeis — quem recebeu despesa e
+    quem doou — porque a ficha cobre os dois e um doador puro nao aparece em
+    despesas_atual."""
+    id_ = limpar_id(termo)
+    if id_:
+        onde_d = f"NR_CPF_CNPJ_FORNECEDOR = '{esc(id_)}'"
+        onde_r = f"NR_CPF_CNPJ_DOADOR = '{esc(id_)}'"
+    else:
+        onde_d = cond_texto(termo, ["NM_FORNECEDOR_RFB", "NM_FORNECEDOR"]) or "1=0"
+        onde_r = cond_texto(termo, ["NM_DOADOR_RFB", "NM_DOADOR"]) or "1=0"
+    filtro_uf = cond_uf(uf)
+    if filtro_uf:
+        onde_d = f"{onde_d} AND {filtro_uf}"
+        onde_r = f"{onde_r} AND {filtro_uf}"
+    return f"""
+WITH papeis AS (
+  SELECT NR_CPF_CNPJ_FORNECEDOR AS id, {NOME_FORNECEDOR_OU_ANONIMO} AS nome,
+         SQ_CANDIDATO, SG_UF, valor, 'fornecedor' AS papel
+  FROM despesas_atual
+  WHERE {onde_d} AND NR_CPF_CNPJ_FORNECEDOR NOT IN ('-1', '#NULO')
+  UNION ALL
+  SELECT NR_CPF_CNPJ_DOADOR, {NOME_DOADOR_OU_ANONIMO}, SQ_CANDIDATO, SG_UF, valor, 'doador'
+  FROM receitas_atual
+  WHERE {onde_r} AND NR_CPF_CNPJ_DOADOR NOT IN ('-1', '#NULO'))
+SELECT id, ANY_VALUE(nome) AS nome,
+       CASE WHEN id LIKE 'pf-%' THEN 'pessoa_fisica_pseudonimizada' ELSE 'cnpj' END AS tipo_id,
+       STRING_AGG(DISTINCT papel, ', ') AS papeis,
+       COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
+       STRING_AGG(DISTINCT SG_UF, ', ') AS ufs,
+       ROUND(SUM(valor), 2) AS total
+FROM papeis GROUP BY 1
+ORDER BY total DESC LIMIT {int(limite)}"""
+
+
+# --------------------------------------------------------------------------- #
+# fornecedores_por_cadastro
+# --------------------------------------------------------------------------- #
+
+def sql_fornecedores_por_cadastro(uf: str | None, cargo: str | None, partido: str | None,
+                                  situacao: str | None, aberto_apos: str | None,
+                                  limite: int) -> str:
+    """Fornecedores com CNPJ cruzados com o cadastro da Receita.
+
+    A tabela `fornecedores` é preenchida aos poucos (limite diário de consultas
+    na rotina), então a resposta precisa dizer a COBERTURA: sem isso, "só 5
+    empresas baixadas" se confunde com "só 5 empresas verificadas"."""
+    w = where_recorte(uf, cargo, partido, prefixo="d.")
+    filtros = [w, "f.cnpj IS NOT NULL"]
+    if situacao:
+        filtros.append(f"f.situacao ILIKE '%{esc(situacao)}%'")
+    if aberto_apos:
+        filtros.append(f"f.data_abertura >= '{esc(aberto_apos)}'")
+    return f"""
+SELECT f.cnpj AS fornecedor_id, f.razao_social AS fornecedor, f.situacao,
+       f.situacao_anterior, f.dt_situacao_anterior, f.data_abertura, f.porte,
+       f.opcao_mei, f.capital_social, f.cnae_principal,
+       f.municipio, f.uf AS uf_da_empresa, f.dt_consulta,
+       COUNT(DISTINCT d.SQ_CANDIDATO) AS candidatos,
+       STRING_AGG(DISTINCT d.SG_UF, ', ') AS ufs_dos_candidatos,
+       ROUND(SUM(d.valor), 2) AS total_recebido
+FROM despesas_atual d JOIN fornecedores f ON f.cnpj = d.NR_CPF_CNPJ_FORNECEDOR
+WHERE {' AND '.join(filtros)}
+GROUP BY ALL
+ORDER BY total_recebido DESC LIMIT {int(limite)}"""
+
+
+def sql_cobertura_do_cadastro(uf: str | None, cargo: str | None, partido: str | None) -> str:
+    """Quantos CNPJs do recorte já foram consultados na Receita — o denominador
+    sem o qual qualquer contagem de situação cadastral engana."""
+    w = where_recorte(uf, cargo, partido, prefixo="d.")
+    return f"""
+SELECT COUNT(DISTINCT d.NR_CPF_CNPJ_FORNECEDOR) AS cnpjs_no_recorte,
+       COUNT(DISTINCT f.cnpj) AS cnpjs_consultados
+FROM despesas_atual d
+LEFT JOIN fornecedores f ON f.cnpj = d.NR_CPF_CNPJ_FORNECEDOR
+WHERE {w} AND regexp_full_match(d.NR_CPF_CNPJ_FORNECEDOR, '[0-9]{{14}}')"""
+
+
+# --------------------------------------------------------------------------- #
+# novidades
+# --------------------------------------------------------------------------- #
+
+def sql_novidades(tipo: str, desde: str | None, uf: str | None, cargo: str | None,
+                  partido: str | None, sq: str | None, limite: int) -> str:
+    """O que ENTROU na prestação a partir de uma extração (dt_primeira_extracao).
+
+    O contrário de declaracoes_removidas, e o único jeito de ver despesa
+    declarada tarde. Entrar tarde não é indício por si: a prestação é
+    incremental e o candidato declara quando quer, dentro do prazo."""
+    tabela = "receitas_atual" if tipo == "receita" else "despesas_atual"
+    w = where_recorte(uf, cargo, partido)
+    if sq:
+        w = f"{w} AND SQ_CANDIDATO = '{esc(sq)}'"
+    if desde:
+        w = f"{w} AND dt_primeira_extracao >= '{esc(desde)}'"
+    else:
+        w = f"{w} AND dt_primeira_extracao = (SELECT MAX(dt_primeira_extracao) FROM {tabela})"
+    if tipo == "receita":
+        quem = f"{NOME_DOADOR_OU_ANONIMO} AS contraparte, NR_CPF_CNPJ_DOADOR AS contraparte_id"
+        oque = "DS_ORIGEM_RECEITA AS categoria, DS_FONTE_RECEITA AS fonte, DT_RECEITA AS data"
+    else:
+        quem = f"{NOME_FORNECEDOR_OU_ANONIMO} AS contraparte, NR_CPF_CNPJ_FORNECEDOR AS contraparte_id"
+        oque = "DS_ORIGEM_DESPESA AS categoria, DS_DESPESA AS descricao, DT_DESPESA AS data"
+    return f"""
+SELECT dt_primeira_extracao AS entrou_em, SQ_CANDIDATO AS sq_candidato,
+       NM_CANDIDATO AS candidato, SG_PARTIDO AS partido, DS_CARGO AS cargo, SG_UF AS uf,
+       {quem}, {oque}, ROUND(valor, 2) AS valor
+FROM {tabela} WHERE {w}
+ORDER BY valor DESC LIMIT {int(limite)}"""
+
+
+def sql_resumo_das_novidades(tipo: str, desde: str | None, uf: str | None, cargo: str | None,
+                             partido: str | None, sq: str | None) -> str:
+    """Os totais do recorte — a lista tem `limite`, e somar só o listado daria
+    um número menor que o real sem avisar."""
+    tabela = "receitas_atual" if tipo == "receita" else "despesas_atual"
+    w = where_recorte(uf, cargo, partido)
+    if sq:
+        w = f"{w} AND SQ_CANDIDATO = '{esc(sq)}'"
+    if desde:
+        w = f"{w} AND dt_primeira_extracao >= '{esc(desde)}'"
+    else:
+        w = f"{w} AND dt_primeira_extracao = (SELECT MAX(dt_primeira_extracao) FROM {tabela})"
+    return f"""
+SELECT MIN(dt_primeira_extracao) AS da_extracao, MAX(dt_primeira_extracao) AS ate_a_extracao,
+       COUNT(*) AS linhas, COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
+       ROUND(SUM(valor), 2) AS valor_total
+FROM {tabela} WHERE {w}"""
 
 
 def limpar_id(id_: str) -> str | None:

@@ -22,6 +22,17 @@ VALOR_RECEITA = "TRY_CAST(REPLACE(VR_RECEITA, ',', '.') AS DOUBLE)"
 # fatos estáveis o bastante para sustentar um "fora da curva"
 MIN_GRUPO_COMPARACAO = 20
 
+# A unidade do benchmark de preço é a NOTA, não o item: os arquivos do TSE
+# fatiam uma nota em itens, e uma nota fatiada em 50 linhas baratas puxaria os
+# percentis para baixo. Itens de mesma SQ_DESPESA do mesmo candidato na mesma
+# categoria somam; SEM_ID_DESPESA ('-1', sem id) não permite reagrupar e conta
+# linha a linha. Quem comparar um valor contra p25/mediana/p75/p95 de
+# benchmark_precos precisa montar a nota com ESTA chave, senão compara uma
+# forma de número contra a régua de outra — src/mcp/consultas.py importa daqui.
+SEM_ID_DESPESA = "-1"
+CHAVE_NOTA = ("SQ_CANDIDATO", "SQ_DESPESA")
+MIN_NOTAS_BENCHMARK_PRECO = 5
+
 
 def materializar(con) -> None:
     _norma_documento(con)   # antes de _indicadores: a régua do sem-nota lê daqui
@@ -178,13 +189,13 @@ def _benchmark_precos(con) -> None:
             SELECT DS_ORIGEM_DESPESA, SG_UF, SUM(VR) AS VR
             FROM v_despesas
             WHERE VR IS NOT NULL AND VR > 0 AND DS_ORIGEM_DESPESA <> '#NULO'
-              AND SQ_DESPESA <> '-1'
-            GROUP BY DS_ORIGEM_DESPESA, SG_UF, SQ_CANDIDATO, SQ_DESPESA
+              AND SQ_DESPESA <> '{SEM_ID_DESPESA}'
+            GROUP BY DS_ORIGEM_DESPESA, SG_UF, {CHAVE_NOTA}
             UNION ALL
             SELECT DS_ORIGEM_DESPESA, SG_UF, VR
             FROM v_despesas
             WHERE VR IS NOT NULL AND VR > 0 AND DS_ORIGEM_DESPESA <> '#NULO'
-              AND SQ_DESPESA = '-1'),
+              AND SQ_DESPESA = '{SEM_ID_DESPESA}'),
         ambito AS (
             SELECT DS_ORIGEM_DESPESA, SG_UF, VR FROM base
             UNION ALL
@@ -198,8 +209,9 @@ def _benchmark_precos(con) -> None:
                ROUND(MAX(VR), 2) AS maximo
         FROM ambito
         GROUP BY 1, 2
-        HAVING notas >= 5
-    """)
+        HAVING notas >= {MIN_NOTAS_BENCHMARK_PRECO}
+    """.format(SEM_ID_DESPESA=SEM_ID_DESPESA, CHAVE_NOTA=", ".join(CHAVE_NOTA),
+               MIN_NOTAS_BENCHMARK_PRECO=MIN_NOTAS_BENCHMARK_PRECO))
     n = con.execute("SELECT COUNT(*) FROM benchmark_precos").fetchone()[0]
     print(f"[agregado] benchmark_precos: {n} combinações categoria×UF")
 

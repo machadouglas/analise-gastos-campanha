@@ -104,6 +104,22 @@ def executor() -> dados.Executor:
     return _executor
 
 
+# O que cada marca de nota mede, em texto: o modelo lê o booleano junto da
+# definição e descreve o fato, em vez de repetir um rótulo. Espelha as
+# condições de consultas.py (que por sua vez vêm de src/analises.py).
+CRITERIOS_DAS_NOTAS = {
+    "nota_sem_numero": "documento declarado como fiscal cujo campo de número não tem "
+                       "nenhum dígito (ex.: 'SN') — a nota é afirmada mas não localizável",
+    "valor_repetido": f"o mesmo fornecedor aparece com o mesmo valor exato em "
+                      f"{consultas.MINIMO_NOTAS_VALOR_REPETIDO} ou mais notas distintas "
+                      "deste candidato",
+    "mesmo_numero_em_outro_candidato": "o mesmo fornecedor declarou este número de "
+                                       "documento para outro candidato (numeração de nota "
+                                       "é sequencial por emitente); exclui impulsionamento, "
+                                       "em que o número é digitado à mão",
+}
+
+
 def _resposta(dados_: dict[str, Any]) -> dict[str, Any]:
     banco = executor().banco
     return {
@@ -158,11 +174,14 @@ async def buscar_candidato(nome: str, uf: str | None = None, cargo: str | None =
 @mcp.tool(annotations=SOMENTE_LEITURA)
 async def ficha_candidato(sq_candidato: str) -> dict[str, Any]:
     """A ficha completa de um candidato, como no site: scorecard (indicadores),
-    sinais fora da curva com a régua do grupo (mesmo cargo e UF), composição do
-    gasto e da receita, maiores fornecedores e doadores, "dinheiro que volta"
-    (doador que também é fornecedor, sem plataforma de vaquinha), declarações
-    removidas e corrigidas, notas marcadas pelas red flags 7/12/13 e o
-    patrimônio declarado. Use buscar_candidato para obter o sq_candidato."""
+    métricas acima do p95 do grupo (mesmo cargo e UF) com mediana e p95 ao lado,
+    composição do gasto e da receita, maiores fornecedores e doadores, doadores
+    que também são fornecedores (sem o repasse de plataforma de vaquinha, que é
+    assim por construção), declarações removidas e corrigidas, notas com as
+    características descritas em `criterios_das_notas` e o patrimônio declarado.
+    Use buscar_candidato para obter o sq_candidato.
+
+    Os campos são medidas, não veredito: descreva o valor, a régua e o grupo."""
     sq = (sq_candidato or "").strip()
     if not sq.isdigit():
         raise ToolError("sq_candidato é o código numérico do TSE (obtenha com buscar_candidato)")
@@ -210,13 +229,16 @@ async def ficha_candidato(sq_candidato: str) -> dict[str, Any]:
         "declaracoes_corrigidas": r["corrigidas_despesas"],
         "receitas_corrigidas": r["corrigidas_receitas"],
         "notas_marcadas": r["notas_marcadas"] or [],
+        "criterios_das_notas": CRITERIOS_DAS_NOTAS,
         "patrimonio_declarado": {"total": round(sum(b["valor"] or 0 for b in bens), 2), "bens": bens}
         if bens else None,
         "serie_diaria": r["serie"] or [],
         "ressalvas": [
             "Dados declaratórios e prestação em aberto: indícios, não prova.",
-            f"Razão gasto÷arrecadado só é sinal acima de {consultas.MARGEM_GASTO_ACIMA}× "
+            f"Razão gasto÷arrecadado só entra na lista acima de {consultas.MARGEM_GASTO_ACIMA}× "
             "(descompasso de calendário não conta).",
+            "Estar acima do p95 é, por construção, a situação de 5% do grupo — é posição "
+            "na distribuição, não classificação de irregularidade.",
         ],
     })
 
@@ -226,8 +248,12 @@ async def ficha_fornecedor(id: str) -> dict[str, Any]:  # noqa: A002 — nome da
     """A ficha de um fornecedor/doador pelo CNPJ (14 dígitos) ou pelo código
     'pf-…' de pessoa física (o CPF não é publicado): quem ele atende, quanto
     recebeu, cadastro na Receita (abertura, situação, sócios), quanto doou
-    (com a doação direta separada do repasse de vaquinha), notas marcadas pelas
-    red flags 12/13, declarações removidas e corrigidas."""
+    (com a doação direta separada do repasse de vaquinha), notas com as
+    características descritas em `criterios_das_notas`, declarações removidas e
+    corrigidas. Use buscar_fornecedor quando tiver só o nome.
+
+    Atender muitos candidatos é o negócio de gráficas, produtoras e agências:
+    o número é fato sobre a empresa, não indício por si."""
     id_ = consultas.limpar_id(id)
     if not id_:
         raise ToolError("informe um CNPJ com 14 dígitos ou um código pf-… de pessoa física")
@@ -256,6 +282,7 @@ async def ficha_fornecedor(id: str) -> dict[str, Any]:  # noqa: A002 — nome da
             cadastro and cadastro.get("situacao") == "NAO ENCONTRADO NA BASE PUBLICA"),
         "como_doador": doador,
         "numeros_de_nota_repetidos_entre_candidatos": r["numeros_repetidos"] or [],
+        "criterios_das_notas": CRITERIOS_DAS_NOTAS,
         "candidatos_atendidos": r["candidatos"] or [],
         "gasto_por_categoria": r["categorias"] or [],
         "maiores_notas": r["notas"] or [],
@@ -311,8 +338,12 @@ async def fora_da_curva(sinal: str | None = None, uf: str | None = None,
     """Candidatos com métricas estritamente acima do p95 do próprio grupo de
     comparação (mesmo cargo e UF; nacional quando o grupo local não existe).
     `sinal` filtra por métrica: total_contratado, razao_gasto_receita,
-    pct_maior_fornecedor, pct_sem_nota, pct_pessoa_fisica. Cada sinal vem com
-    valor, mediana e p95 do grupo — fatos conferíveis."""
+    pct_maior_fornecedor, pct_sem_nota, pct_pessoa_fisica. Cada linha vem com
+    valor, mediana, p95 e tamanho do grupo.
+
+    É um corte estatístico, não uma triagem de irregularidade: o p95 seleciona
+    5% de qualquer grupo por definição, e nada aqui foi calibrado contra casos
+    julgados. Relate a medida contra a régua, não como conclusão."""
     if sinal and sinal not in consultas.SINAIS:
         raise ToolError(f"sinal desconhecido: {sinal}. Use um de {', '.join(consultas.SINAIS)}")
     sql = consultas.sql_fora_da_curva(sinal, uf, cargo, partido, min(max(int(limite), 1), 100))
@@ -324,10 +355,17 @@ async def fora_da_curva(sinal: str | None = None, uf: str | None = None,
         raise ToolError("benchmark ainda não publicado nesta versão do dado")
     for cand in linhas:
         cand["sinais"] = consultas.desmontar_sinais(cand.pop("sinais", ""))
-    return _resposta({"sinal": sinal, "candidatos": linhas, "n": len(linhas),
-                      "regua": "sinal = métrica > p95 do grupo cargo×UF (BR-TODAS se o grupo "
-                               f"local não existe); razão gasto÷arrecadado só acima de "
-                               f"{consultas.MARGEM_GASTO_ACIMA}×"})
+    return _resposta({
+        "sinal": sinal, "candidatos": linhas, "n": len(linhas),
+        "regua": "métrica > p95 do grupo cargo×UF (BR-TODAS se o grupo local não existe); "
+                 f"razão gasto÷arrecadado só acima de {consultas.MARGEM_GASTO_ACIMA}×",
+        "ressalvas": [
+            "O p95 marca 5% do grupo por construção: estar na lista é a definição do "
+            "corte, não um achado.",
+            "Gastar muito é legal; a métrica não distingue campanha grande de "
+            "irregularidade, e a prestação está em aberto.",
+        ],
+    })
 
 
 @mcp.tool(annotations=SOMENTE_LEITURA)
@@ -348,24 +386,46 @@ async def declaracoes_removidas(tipo: str = "despesa", uf: str | None = None,
         raise _erro_de_consulta(e) from None
     if linhas is None:
         raise ToolError("tabela de removidas ainda não publicada nesta versão do dado")
-    return _resposta({"tipo": tipo, "declaracoes": linhas, "n": len(linhas),
-                      # soma SÓ do que foi listado (o `limite` corta a lista)
-                      "valor_listado": round(sum(d.get("valor") or 0 for d in linhas), 2)})
+    return _resposta({
+        "tipo": tipo, "declaracoes": linhas, "n": len(linhas),
+        # soma SÓ do que foi listado (o `limite` corta a lista)
+        "valor_listado": round(sum(d.get("valor") or 0 for d in linhas), 2),
+        "o_que_esta_medido": "conteúdo que esteve declarado numa extração, não está na mais "
+                             "recente e não reapareceu corrigido nem renumerado",
+        "ressalvas": [
+            "Sair da prestação não é confissão nem prova de ocultação: a prestação está "
+            "em aberto e o próprio candidato corrige o que declarou.",
+            "O pareamento erra para o lado de 'corrigida' de propósito — o que sobra aqui "
+            "é o que não achou sucessora, e ainda assim pode ter explicação trivial.",
+        ],
+    })
 
 
 @mcp.tool(annotations=SOMENTE_LEITURA)
 async def fornecedores_compartilhados(uf: str | None = None, cargo: str | None = None,
                                       partido: str | None = None, minimo_candidatos: int = 2,
                                       limite: int = 30) -> dict[str, Any]:
-    """Fornecedores identificados que atendem N ou mais candidatos no recorte
-    (rateio, esquema, ou só um fornecedor grande — a lista diz quem é quem)."""
+    """Fornecedores identificados que atendem N ou mais candidatos no recorte.
+
+    Atender vários candidatos é o normal de gráficas, produtoras, agências e
+    fornecedores contratados pelo diretório do partido. O número de candidatos
+    é um fato sobre o fornecedor; o que ele significa depende do ramo e do
+    recorte — confira com ficha_fornecedor antes de descrever qualquer coisa."""
     sql = consultas.sql_fornecedores_compartilhados(
         uf, cargo, partido, max(int(minimo_candidatos), 2), min(max(int(limite), 1), 200))
     try:
         linhas = await _linhas(sql)
     except Exception as e:  # noqa: BLE001
         raise _erro_de_consulta(e) from None
-    return _resposta({"fornecedores": linhas or [], "n": len(linhas or [])})
+    return _resposta({
+        "fornecedores": linhas or [], "n": len(linhas or []),
+        "ressalvas": [
+            "Compartilhar fornecedor é comum e frequentemente banal, sobretudo entre "
+            "candidatos do mesmo partido e da mesma cidade.",
+            "Plataformas de anúncio, pagamento e vaquinha aparecem no topo por atender "
+            "quase todo mundo — são infraestrutura, não vínculo.",
+        ],
+    })
 
 
 @mcp.tool(annotations=SOMENTE_LEITURA)
@@ -373,13 +433,26 @@ async def sem_nota(uf: str | None = None, cargo: str | None = None,
                    partido: str | None = None, limite: int = 30) -> dict[str, Any]:
     """Candidatos com mais gasto declarado SEM documento fiscal onde a nota é a
     norma (fornecedor PJ, categoria em que a maioria emite nota) — a régua do
-    indicador valor_sem_nota, com o p95 do grupo ao lado."""
+    indicador valor_sem_nota, com o p95 do grupo ao lado.
+
+    Mede a FORMA do documento declarado, não a existência da despesa nem a
+    obrigação legal de emitir nota naquele caso."""
     sql = consultas.sql_sem_nota(uf, cargo, partido, min(max(int(limite), 1), 200))
     try:
         linhas = await _linhas(sql, ("indicadores",))
     except Exception as e:  # noqa: BLE001
         raise _erro_de_consulta(e) from None
-    return _resposta({"candidatos": linhas or [], "n": len(linhas or [])})
+    return _resposta({
+        "candidatos": linhas or [], "n": len(linhas or []),
+        "o_que_esta_medido": "valor declarado com documento não fiscal, só entre fornecedores "
+                             "PJ e só nas categorias em que a nota é a norma (norma_documento)",
+        "ressalvas": [
+            "Categorias inteiras não emitem nota por praxe (militância, impulsionamento) e "
+            "por isso ficam fora da conta — sem esse filtro o indicador pegaria metade do "
+            "dinheiro do país.",
+            "Documento não fiscal declarado não é o mesmo que despesa sem comprovação.",
+        ],
+    })
 
 
 @mcp.tool(annotations=SOMENTE_LEITURA)
@@ -415,6 +488,194 @@ async def visao_geral() -> dict[str, Any]:
         "maiores_candidatos": (r.get("top_candidatos") or [])[:10],
         "fora_da_curva_destaques": (r.get("fora_da_curva") or [])[:10],
         "tabelas_disponiveis": banco.tabelas,
+    })
+
+
+@mcp.tool(annotations=SOMENTE_LEITURA)
+async def notas_fora_do_preco(uf: str | None = None, cargo: str | None = None,
+                              partido: str | None = None, sq_candidato: str | None = None,
+                              categoria: str | None = None, limite: int = 30) -> dict[str, Any]:
+    """Notas cujo valor está acima do p95 do preço da MESMA categoria de gasto
+    (benchmark_precos), com mediana, p95 e tamanho do grupo ao lado. A unidade
+    é a nota (itens de mesma SQ_DESPESA somados), a mesma que gerou os
+    percentis. Exige ao menos um recorte (uf, cargo, partido, sq_candidato ou
+    categoria). Preço acima do p95 é posição na distribuição da categoria, não
+    veredito: categorias misturam serviços muito diferentes de tamanho."""
+    if not any((uf, cargo, partido, sq_candidato, categoria)):
+        raise ToolError("informe ao menos um recorte: uf, cargo, partido, sq_candidato ou categoria")
+    sql_ = consultas.sql_notas_fora_do_preco(uf, cargo, partido, sq_candidato, categoria,
+                                             min(max(int(limite), 1), 200))
+    try:
+        linhas = await _linhas(sql_, ("despesas_atual", "benchmark_precos"))
+    except Exception as e:  # noqa: BLE001
+        raise _erro_de_consulta(e) from None
+    if linhas is None:
+        raise ToolError("despesas_atual/benchmark_precos ainda não publicados nesta versão do dado")
+    return _resposta({
+        "notas": linhas, "n": len(linhas),
+        "o_que_esta_medido": (
+            "valor da nota comparado ao p95 das notas da mesma DS_ORIGEM_DESPESA na UF "
+            "(nacional quando a UF não tem grupo); mínimo de "
+            f"{consultas.MIN_NOTAS_BENCHMARK_PRECO} notas por grupo"),
+        "ressalvas": [
+            "Uma categoria do TSE agrupa serviços de tamanhos muito diferentes: a nota mais "
+            "cara da categoria pode ser só a contratação maior, não um preço fora do lugar.",
+            "Por construção, 5% das notas de qualquer categoria ficam acima do p95.",
+        ],
+    })
+
+
+@mcp.tool(annotations=SOMENTE_LEITURA)
+async def candidatos_conectados(sq_candidato: str, niveis: int = 2,
+                                tipos: str | None = None,
+                                max_candidatos_por_contraparte: int | None = None,
+                                limite: int = 50) -> dict[str, Any]:
+    """Quem se liga a um candidato por contrapartes compartilhadas: nível 1 são
+    os que usam os MESMOS fornecedores/doadores; níveis seguintes seguem a
+    cadeia (máximo 3). Cada candidato aparece uma vez, no nível mais curto, com
+    `por_meio_de` — a contraparte que fez a ponte. `tipos` filtra as arestas
+    ('despesa', 'doacao', 'doacao_originaria', separados por vírgula).
+
+    Contrapartes que atendem mais de `max_candidatos_por_contraparte`
+    candidatos são tratadas como infraestrutura (plataformas de anúncio,
+    pagamento e vaquinha), não geram ligação e vão listadas em
+    `contrapartes_ignoradas`; sem esse corte o nível 1 já alcança ~40% do país
+    por causa de uma única plataforma. Suba o teto para enxergar através delas,
+    ciente de que o resultado passa a ser "usa a mesma plataforma". Dividir
+    fornecedor é comum e frequentemente banal (a gráfica do bairro, o fornecedor
+    do partido) — a lista mostra por onde a ligação passa para poder ser
+    conferida, não afirma combinação."""
+    sq = (sq_candidato or "").strip()
+    if not sq.isdigit():
+        raise ToolError("sq_candidato é o código numérico do TSE (obtenha com buscar_candidato)")
+    escolhidos = tuple(t.strip() for t in (tipos or "").split(",") if t.strip())
+    invalidos = [t for t in escolhidos if t not in consultas.TIPOS_REDE]
+    if invalidos:
+        raise ToolError(f"tipo desconhecido: {', '.join(invalidos)}. "
+                        f"Use um de {', '.join(consultas.TIPOS_REDE)}")
+    usados = escolhidos or consultas.TIPOS_REDE
+    n = max(1, min(int(niveis), consultas.MAX_NIVEIS_CONEXAO))
+    maximo = (consultas.MAX_CANDIDATOS_CONTRAPARTE_COMUM
+              if max_candidatos_por_contraparte is None
+              else min(max(int(max_candidatos_por_contraparte), 1), 5000))
+    try:
+        conectados, ignoradas = await asyncio.gather(
+            _linhas(consultas.sql_candidatos_conectados(
+                sq, n, usados, maximo, min(max(int(limite), 1), 200)), ("rede",)),
+            _linhas(consultas.sql_contrapartes_ignoradas(usados, maximo), ("rede",)))
+    except Exception as e:  # noqa: BLE001
+        raise _erro_de_consulta(e) from None
+    if conectados is None:
+        raise ToolError("tabela rede ainda não publicada nesta versão do dado")
+    return _resposta({
+        "sq_candidato": sq, "niveis": n, "tipos": list(usados),
+        "conectados": conectados, "n": len(conectados),
+        "contrapartes_ignoradas": ignoradas or [],
+        "criterio_do_corte": (
+            f"contraparte com mais de {maximo} candidatos é tratada como infraestrutura "
+            "e não gera ligação"),
+        "ressalvas": [
+            "Compartilhar fornecedor é comum: gráficas, produtoras e fornecedores de "
+            "partido atendem muitos candidatos por atividade normal.",
+            "Do nível 2 em diante a ligação é indireta — confira `por_meio_de` antes de "
+            "descrever qualquer proximidade entre as campanhas.",
+        ],
+    })
+
+
+@mcp.tool(annotations=SOMENTE_LEITURA)
+async def buscar_fornecedor(nome: str, uf: str | None = None,
+                            limite: int = 20) -> dict[str, Any]:
+    """Localiza uma contraparte por nome (parcial) ou CNPJ e devolve o `id` que
+    ficha_fornecedor consome, com quantos candidatos atende e quanto movimentou.
+    Procura nos dois papéis: quem recebeu despesa e quem doou."""
+    if not (nome or "").strip():
+        raise ToolError("informe um nome (parcial) ou o CNPJ")
+    sql_ = consultas.sql_buscar_fornecedor(nome, uf, min(max(int(limite), 1), 100))
+    try:
+        linhas = await _linhas(sql_, ("despesas_atual", "receitas_atual"))
+    except Exception as e:  # noqa: BLE001
+        raise _erro_de_consulta(e) from None
+    if linhas is None:
+        raise ToolError("despesas_atual/receitas_atual ainda não publicados nesta versão do dado")
+    return _resposta({"contrapartes": linhas, "n": len(linhas)})
+
+
+@mcp.tool(annotations=SOMENTE_LEITURA)
+async def fornecedores_por_cadastro(uf: str | None = None, cargo: str | None = None,
+                                    partido: str | None = None, situacao: str | None = None,
+                                    aberto_apos: str | None = None,
+                                    limite: int = 30) -> dict[str, Any]:
+    """Fornecedores do recorte cruzados com o cadastro da Receita Federal:
+    situação cadastral (e a anterior, quando mudou), data de abertura, porte,
+    MEI, capital social, CNAE e município. `situacao` filtra por texto parcial
+    ('ATIVA', 'BAIXADA', 'INAPTA', 'SUSPENSA'); `aberto_apos` por data ISO
+    ('2025-10-01' = aberta às vésperas da eleição).
+
+    O cadastro é preenchido aos poucos (limite diário de consultas), então a
+    resposta traz `cobertura`: quantos CNPJs do recorte já foram consultados.
+    Sem esse denominador, "poucas empresas baixadas" se confunde com "poucas
+    empresas verificadas". Situação cadastral é um fato sobre a empresa hoje,
+    não sobre a despesa: uma empresa pode ter sido baixada depois de prestar
+    o serviço, e a data da consulta (`dt_consulta`) diz quando foi vista."""
+    ex = executor()
+    if not ex.tem_tabela("fornecedores"):
+        raise ToolError("cadastro de fornecedores ainda não publicado nesta versão do dado")
+    try:
+        linhas, cobertura = await asyncio.gather(
+            _linhas(consultas.sql_fornecedores_por_cadastro(
+                uf, cargo, partido, situacao, aberto_apos,
+                min(max(int(limite), 1), 200)), ("fornecedores",)),
+            _linhas(consultas.sql_cobertura_do_cadastro(uf, cargo, partido), ("fornecedores",)))
+    except Exception as e:  # noqa: BLE001
+        raise _erro_de_consulta(e) from None
+    return _resposta({
+        "fornecedores": linhas or [], "n": len(linhas or []),
+        "cobertura": (cobertura or [None])[0],
+        "ressalvas": [
+            "A cobertura é parcial e cresce a cada dia: a ausência de um CNPJ na lista pode "
+            "significar apenas que ele ainda não foi consultado.",
+            "Situação cadastral é de hoje, não da data da despesa; `dt_consulta` diz quando "
+            "o cadastro foi visto.",
+        ],
+    })
+
+
+@mcp.tool(annotations=SOMENTE_LEITURA)
+async def novidades(tipo: str = "despesa", desde: str | None = None, uf: str | None = None,
+                    cargo: str | None = None, partido: str | None = None,
+                    sq_candidato: str | None = None, limite: int = 30) -> dict[str, Any]:
+    """O que ENTROU na prestação de contas (o contrário de
+    declaracoes_removidas): declarações cuja primeira aparição é da extração
+    `desde` (data ISO) em diante. Sem `desde`, só as da extração mais recente.
+    `tipo` = 'despesa' ou 'receita'. Traz os totais do recorte inteiro em
+    `resumo`, além da lista cortada por `limite`.
+
+    Declarar tarde é o normal: a prestação é incremental e corre até o prazo
+    legal. O que a ferramenta mostra é o ritmo, não uma falta."""
+    if tipo not in ("despesa", "receita"):
+        raise ToolError("tipo deve ser 'despesa' ou 'receita'")
+    tabela = "receitas_atual" if tipo == "receita" else "despesas_atual"
+    try:
+        linhas, resumo_ = await asyncio.gather(
+            _linhas(consultas.sql_novidades(tipo, desde, uf, cargo, partido, sq_candidato,
+                                            min(max(int(limite), 1), MAX_LINHAS)), (tabela,)),
+            _linhas(consultas.sql_resumo_das_novidades(tipo, desde, uf, cargo, partido,
+                                                       sq_candidato), (tabela,)))
+    except Exception as e:  # noqa: BLE001
+        raise _erro_de_consulta(e) from None
+    if linhas is None:
+        raise ToolError(f"{tabela} ainda não publicada nesta versão do dado")
+    return _resposta({
+        "tipo": tipo, "desde": desde, "declaracoes": linhas, "n": len(linhas),
+        "resumo": (resumo_ or [None])[0],
+        "o_que_esta_medido": "dt_primeira_extracao: a extração em que o conteúdo apareceu "
+                             "pela primeira vez, não a data declarada do fato",
+        "ressalvas": [
+            "A prestação é incremental: declarar em cima do prazo é comum e não é indício.",
+            "A data de entrada é a da EXTRAÇÃO; a data do fato está no campo `data` e pode "
+            "ser bem anterior.",
+        ],
     })
 
 
