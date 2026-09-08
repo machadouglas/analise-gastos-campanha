@@ -36,15 +36,11 @@ NOME_TABELA = re.compile(r"^[a-z][a-z0-9_]*$")
 NOME_PARQUET = re.compile(r"^[a-z][a-z0-9_]*\.parquet$")
 
 # Nome de urna por candidato (NOME_EXIBICAO/JOIN_NOMES_URNA em consultas.ts):
-# a prestação só traz o nome civil. Sem o parquet de candidatos a view existe
-# vazia — os JOINs degradam para o civil em vez de quebrar a consulta. Mesma
-# definição de site/src/lib/duckdb.ts (tests/test_sincronia_site.py confere).
+# a prestação só traz o nome civil. Mesma definição de site/src/lib/duckdb.ts
+# (tests/test_sincronia_site.py confere).
 VIEW_NOMES_URNA = (
     "SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO"
     " FROM candidatos GROUP BY 1"
-)
-VIEW_NOMES_URNA_VAZIA = (
-    "SELECT NULL::VARCHAR AS SQ_CANDIDATO, NULL::VARCHAR AS NM_URNA_CANDIDATO WHERE false"
 )
 
 # Configuração da conexão de leitura: sem acesso externo (read_csv/httpfs/glob/
@@ -112,11 +108,8 @@ def construir(parquets: dict[str, Path], resumo: dict, destino: Path,
                 f'CREATE TABLE "{nome}" AS SELECT * FROM read_parquet(?)', [caminho.as_posix()]
             )
             tabelas.append(nome)
-        try:
+        if "candidatos" in tabelas:   # bancos sintéticos de teste podem não trazê-la
             con.execute(f"CREATE OR REPLACE VIEW nomes_urna AS {VIEW_NOMES_URNA}")
-            con.execute("SELECT * FROM nomes_urna LIMIT 0")  # parquet antigo sem a coluna
-        except duckdb.Error:
-            con.execute(f"CREATE OR REPLACE VIEW nomes_urna AS {VIEW_NOMES_URNA_VAZIA}")
         con.execute("CHECKPOINT")
     finally:
         con.close()
@@ -138,13 +131,9 @@ def construir_de_diretorio(dir_parquets: Path, destino: Path) -> Banco:
 
 def _nomes_parquet(resumo: dict) -> list[str]:
     nomes = [n for n in (resumo.get("arquivos") or {}) if n.endswith(".parquet")]
-    if nomes:
-        return nomes
-    # release antigo sem o mapa `arquivos`: a lista do próprio pipeline
-    from src import exportar
-
-    return sorted(set(exportar.EXPORTS) | set(exportar.EXPORTS_ATUAL)
-                  | set(exportar.EXPORTS_REMOVIDAS) | set(exportar.EXPORTS_ALTERADAS))
+    if not nomes:
+        raise RuntimeError("resumo.json sem o mapa `arquivos`: não há como saber o que baixar")
+    return nomes
 
 
 def baixar_parquets(dir_cache: Path, base: str | None = None,
@@ -240,12 +229,12 @@ class Servico:
         self.ultima_verificacao = time.time()   # o poll também conta para o debounce da API
         resumo = publicado.baixar_resumo(self.base)
         novos = resumo.get("arquivos") or {}
-        if self.banco and novos and novos == self.banco.arquivos:
+        if self.banco and novos == self.banco.arquivos:
             return False
         resumo, parquets, carregados = baixar_parquets(self.dir_cache, self.base, resumo)
         if self.banco and carregados == self.banco.arquivos:
-            # release incompleto (parquet ainda 404) ou antigo sem `arquivos`:
-            # nada novo chegou de fato, o banco atual continua
+            # release incompleto (parquet ainda 404): nada novo chegou de fato,
+            # o banco atual continua
             return False
         novo = construir_novo(self.dir_cache, resumo, parquets, carregados)
         antigo, self.banco = self.banco, novo

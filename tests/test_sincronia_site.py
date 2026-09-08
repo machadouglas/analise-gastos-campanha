@@ -10,21 +10,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src import analises, historico, resumo  # noqa: E402
+from src import analises, resumo  # noqa: E402
 
 RAIZ = Path(__file__).parent.parent
 CONSULTAS_TS = (RAIZ / "site" / "src" / "lib" / "consultas.ts").read_text(encoding="utf-8")
 DUCKDB_TS = (RAIZ / "site" / "src" / "lib" / "duckdb.ts").read_text(encoding="utf-8")
-
-
-def test_categorias_sem_nota_iguais_no_front():
-    """CATEGORIAS_SEM_NOTA_ESPERADA em consultas.ts == src/analises.py."""
-    bloco = re.search(
-        r"CATEGORIAS_SEM_NOTA_ESPERADA = \[(.*?)\]", CONSULTAS_TS, re.DOTALL
-    )
-    assert bloco, "lista CATEGORIAS_SEM_NOTA_ESPERADA não encontrada em consultas.ts"
-    do_front = re.findall(r"'([^']+)'", bloco.group(1))
-    assert do_front == list(analises.CATEGORIAS_SEM_NOTA_ESPERADA)
 
 
 def test_condicao_sem_nota_igual_no_front():
@@ -35,8 +25,6 @@ def test_condicao_sem_nota_igual_no_front():
     # fornecedor PJ e o corte pela norma medida
     assert "LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14" in CONSULTAS_TS
     assert "FROM norma_documento WHERE exige_documento" in CONSULTAS_TS
-    # e o fallback sem o parquet novo continua sendo a lista fixa
-    assert "SQL_CATEGORIAS_SEM_NOTA" in CONSULTAS_TS
 
 
 def test_reguas_por_nota_iguais_no_front():
@@ -172,40 +160,9 @@ def test_sinais_do_fora_da_curva_iguais_no_front():
         )
 
 
-def test_essencia_das_removidas_igual_no_front():
-    """As views despesas_removidas/receitas_removidas do site usam a MESMA régua
-    do versionamento (src/historico.py): a IDENTIDADE casa por igualdade e os
-    campos VARIAVEIS são contados, para que nem a retransmissão renumerada (3 de
-    3 iguais) nem a edição de um campo (2 de 3) apareçam como declaração
-    apagada. Se a régua do Python mudar e a do site não, a mesma pergunta passa
-    a ter duas respostas conforme o parquet publicado exista ou não."""
-    for tabela, alias in (("despesas_contratadas", "d"), ("receitas", "r")):
-        # TODA a essência compara com IS NOT DISTINCT FROM (identidade inclusa):
-        # `NULL = NULL` não casa, e uma retransmissão com campo NULL viraria
-        # falsa remoção — o erro que o projeto não pode cometer
-        for coluna in historico.IDENTIDADE[tabela]:
-            esperado = f"v.{coluna} IS NOT DISTINCT FROM {alias}.{coluna}"
-            assert esperado in DUCKDB_TS, (
-                f"coluna de identidade {coluna} ({tabela}) fora da view de removidas do "
-                f"site: esperava '{esperado}' em site/src/lib/duckdb.ts"
-            )
-        variaveis = historico.VARIAVEIS[tabela]
-        for coluna in variaveis:
-            esperado = f"v.{coluna} IS NOT DISTINCT FROM {alias}.{coluna}"
-            assert esperado in DUCKDB_TS, (
-                f"campo variável {coluna} ({tabela}) fora da contagem de removidas do "
-                f"site: esperava '{esperado}' em site/src/lib/duckdb.ts"
-            )
-        # o corte tem de ser o mesmo: "pelo menos todos-menos-um campos iguais"
-        assert f">= {len(variaveis) - 1})" in DUCKDB_TS, (
-            f"corte de campos iguais ({tabela}) divergente do backend: "
-            f"esperava '>= {len(variaveis) - 1}' em site/src/lib/duckdb.ts"
-        )
-        # a comparação cobre exatamente essência = identidade + variáveis
-        assert DUCKDB_TS.count(f"IS NOT DISTINCT FROM {alias}.") == (
-            len(historico.IDENTIDADE[tabela]) + len(variaveis)
-        )
-    # e o próprio backend não pode regredir para `=` na essência
+def test_essencia_do_backend_nao_regride_para_igualdade():
+    """A essência do versionamento compara com IS NOT DISTINCT FROM: `NULL = NULL`
+    não casa, e uma retransmissão com campo NULL viraria falsa remoção."""
     historico_py = (RAIZ / "src" / "historico.py").read_text(encoding="utf-8")
     assert 'f"v.{c} = m.{c}"' not in historico_py, (
         "essência em historico.py voltou a comparar com '=' — NULL não casa e "
@@ -235,40 +192,15 @@ def _normalizar(texto: str) -> str:
     return " ".join(texto.split())
 
 
-def test_filtro_placeholder_igual_no_front():
-    """O filtro de linha-placeholder (contraparte '-1'/'#NULO' E valor zero) é
-    espelhado 4× em duckdb.ts (views *_atual e *_removidas derivadas). Se a
-    definição mudar em src/carga.py e a do site não, o fallback do site passa a
-    contar (ou descartar) linhas que o backend não conta."""
-    from src.carga import filtro_placeholder
-
-    site = _normalizar(DUCKDB_TS)
-    casos = [
-        ("NR_CPF_CNPJ_FORNECEDOR", "VR_DESPESA_CONTRATADA"),   # despesas_atual
-        ("NR_CPF_CNPJ_DOADOR", "VR_RECEITA"),                  # receitas_atual
-        ("d.NR_CPF_CNPJ_FORNECEDOR", "d.VR_DESPESA_CONTRATADA"),  # despesas_removidas
-        ("r.NR_CPF_CNPJ_DOADOR", "r.VR_RECEITA"),              # receitas_removidas
-    ]
-    for contraparte, valor in casos:
-        esperado = _normalizar(filtro_placeholder(contraparte, valor))
-        assert esperado in site, (
-            f"filtro_placeholder({contraparte}) divergente em site/src/lib/duckdb.ts: "
-            f"esperava '{esperado}'"
-        )
-
-
-def test_derivacao_do_estado_atual_igual_no_front():
-    """As views despesas_atual/receitas_atual derivadas no site precisam do
-    mesmo recorte do parquet dedicado (src/exportar.py): última extração viva e
-    `valor` = VR × qt_linhas."""
-    exportar_py = (RAIZ / "src" / "exportar.py").read_text(encoding="utf-8")
-    for fonte, nome in ((DUCKDB_TS, "duckdb.ts"), (exportar_py, "exportar.py")):
-        texto = _normalizar(fonte)
-        for trecho in (
-            "AS DOUBLE) * qt_linhas AS valor",
-            "dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM",
-        ):
-            assert trecho in texto, f"recorte do estado atual ausente de {nome}: '{trecho}'"
+def test_estado_atual_publicado_e_a_ultima_extracao_viva():
+    """despesas_atual/receitas_atual (src/exportar.py) são a última extração
+    viva com `valor` = VR × qt_linhas — o site lê o parquet, não deriva."""
+    exportar_py = _normalizar((RAIZ / "src" / "exportar.py").read_text(encoding="utf-8"))
+    for trecho in (
+        "AS DOUBLE) * qt_linhas AS valor",
+        "dt_ultima_extracao = (SELECT MAX(dt_ultima_extracao) FROM",
+    ):
+        assert trecho in exportar_py, f"recorte do estado atual ausente de exportar.py: '{trecho}'"
 
 
 def test_colunas_de_corrigidas_batem_com_a_view_do_backend():
@@ -287,21 +219,21 @@ def test_colunas_de_corrigidas_batem_com_a_view_do_backend():
             SQ_CANDIDATO VARCHAR, NM_CANDIDATO VARCHAR, NR_CANDIDATO VARCHAR,
             SG_PARTIDO VARCHAR, DS_CARGO VARCHAR, SG_UF VARCHAR, SQ_DESPESA VARCHAR,
             NM_FORNECEDOR VARCHAR, NR_CPF_CNPJ_FORNECEDOR VARCHAR, DS_DESPESA VARCHAR,
-            VR_DESPESA_CONTRATADA VARCHAR, DT_DESPESA VARCHAR);
+            VR_DESPESA_CONTRATADA VARCHAR, DT_DESPESA VARCHAR, NM_FORNECEDOR_RFB VARCHAR);
         CREATE TABLE receitas (DT_GERACAO VARCHAR, HH_GERACAO VARCHAR,
             SQ_CANDIDATO VARCHAR, NM_CANDIDATO VARCHAR, NR_CANDIDATO VARCHAR,
             SG_PARTIDO VARCHAR, DS_CARGO VARCHAR, SG_UF VARCHAR, SQ_RECEITA VARCHAR,
             NM_DOADOR VARCHAR, NR_CPF_CNPJ_DOADOR VARCHAR, DS_ORIGEM_RECEITA VARCHAR,
-            VR_RECEITA VARCHAR, DT_RECEITA VARCHAR);
+            VR_RECEITA VARCHAR, DT_RECEITA VARCHAR, NM_DOADOR_RFB VARCHAR);
     """)
     con.execute(
         "INSERT INTO despesas_contratadas VALUES ('20/08/2026','04:00:00','160001','F','1',"
-        "'X','Dep','XX','1','FORN','11222333000144','BANDEIRA','100,00','15/08/2026')")
+        "'X','Dep','XX','1','FORN','11222333000144','BANDEIRA','100,00','15/08/2026','#NULO')")
     h.versionar(con)
     con.execute("DELETE FROM despesas_contratadas")
     con.execute(
         "INSERT INTO despesas_contratadas VALUES ('21/08/2026','04:00:00','160001','F','1',"
-        "'X','Dep','XX','2','FORN','11222333000144','BANDEIRA','150,00','15/08/2026')")
+        "'X','Dep','XX','2','FORN','11222333000144','BANDEIRA','150,00','15/08/2026','#NULO')")
     h.versionar(con)
 
     corpo = CONSULTAS_TS.split("export function sqlCorrigidas", 1)[1].split("`;", 1)[0]
@@ -510,7 +442,5 @@ def test_view_nomes_urna_e_a_mesma_no_wasm_e_no_mcp():
         return re.sub(r"\s+", " ", sql).strip()
 
     cheia = normalizar(dados.VIEW_NOMES_URNA)
-    vazia = normalizar(dados.VIEW_NOMES_URNA_VAZIA)
     wasm = normalizar(DUCKDB_TS)
     assert cheia in wasm, f"duckdb.ts não define nomes_urna como o MCP: {cheia}"
-    assert vazia in wasm, f"duckdb.ts não define a nomes_urna vazia como o MCP: {vazia}"

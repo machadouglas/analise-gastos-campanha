@@ -110,14 +110,12 @@ def test_cota_fefc_usa_o_registro_de_candidaturas_como_denominador(banco):
     inclusive o cargo, 'DEPUTADO ESTADUAL'), o grupo com candidatura e sem um
     centavo de fundo TEM de aparecer — é o que a régua de proporcionalidade
     precisa ver — e a grafia publicada do cargo é a da prestação."""
-    banco.execute("ALTER TABLE candidatos ADD COLUMN DS_GENERO VARCHAR")
-    banco.execute("ALTER TABLE candidatos ADD COLUMN DS_COR_RACA VARCHAR")
     for sq, nome, genero, cor in (("160001", "FULANO", "MASCULINO", "BRANCA"),
                                   ("160002", "BELTRANA", "FEMININO", "PARDA"),
                                   ("160003", "CICRANA", "FEMININO", "PRETA")):
         banco.execute(
             "INSERT INTO candidatos VALUES (?, '1', ?, ?, 'DEPUTADO ESTADUAL', 'XYZ', 'XX', "
-            "'#NE', ?, ?)", [sq, nome, nome, genero, cor])
+            "'#NE', ?, ?, '6259', 'XX')", [sq, nome, nome, genero, cor])
     extrair_dia(banco, "20/08/2026", receitas=[
         {"SQ_RECEITA": "1", "VR_RECEITA": "7000,00", "DS_FONTE_RECEITA": "FUNDO ESPECIAL"},
     ])

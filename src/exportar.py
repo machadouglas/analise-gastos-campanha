@@ -55,7 +55,7 @@ EXPORTS_ATUAL = {
 
 # Removidas prontas: o backend já sabe o que sumiu (v_removidas_*); publicar o
 # resultado evita que cada visitante refaça o anti-join histórico×atual no
-# navegador (site/src/lib/duckdb.ts cai para a derivação se estes faltarem).
+# navegador (o site lê estes parquet diretamente; não deriva nada).
 EXPORTS_REMOVIDAS = {
     "despesas_removidas.parquet": ("v_removidas_despesas_contratadas", "VR_DESPESA_CONTRATADA"),
     "receitas_removidas.parquet": ("v_removidas_receitas", "VR_RECEITA"),
@@ -207,14 +207,10 @@ def ultima_publicacao(con) -> str | None:
 
 
 def hashes_publicados(con) -> dict[str, str] | None:
-    """Hashes por arquivo da última publicação (None se nunca publicou ou se o
-    registro é de uma versão antiga do esquema)."""
+    """Hashes por arquivo da última publicação (None se nunca publicou)."""
     if not _existe(con, "publicacoes"):
         return None
-    try:
-        linha = con.execute("SELECT arquivos FROM publicacoes").fetchone()
-    except Exception:
-        return None  # esquema antigo, sem a coluna — trata como primeira publicação
+    linha = con.execute("SELECT arquivos FROM publicacoes").fetchone()
     return json.loads(linha[0]) if linha and linha[0] else None
 
 

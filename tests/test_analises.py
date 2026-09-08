@@ -22,7 +22,7 @@ def test_todas_as_analises_rodam_no_schema_do_tse(banco):
     precisa executar sem erro sobre as colunas reais dos arquivos."""
     banco.execute(
         "INSERT INTO candidatos VALUES ('160001', '12345', 'FULANO', 'FULANO DA URNA', "
-        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO')"
+        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO', 'MASCULINO', 'BRANCA', '6259', 'XX')"
     )
     inserir_despesa(banco)
     inserir_receita(banco)
@@ -149,7 +149,7 @@ def test_resumo_financeiro_conta_dinheiro_publico_pela_fonte(banco):
     a fonte (DS_FONTE_RECEITA) é quem diz se é dinheiro público."""
     banco.execute(
         "INSERT INTO candidatos VALUES ('160001', '12345', 'FULANO', 'FULANO', "
-        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO')"
+        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO', 'MASCULINO', 'BRANCA', '6259', 'XX')"
     )
     inserir_receita(banco, SQ_RECEITA="1", DS_FONTE_RECEITA="FUNDO ESPECIAL",
                     DS_ORIGEM_RECEITA="Recursos de partido político", VR_RECEITA="8000,00")
@@ -176,11 +176,11 @@ def test_fornecedor_que_e_candidato_aparece_apenas_quando_ha_vinculo(banco):
 def test_filtro_por_numero_e_uf_limita_o_recorte(banco):
     banco.execute(
         "INSERT INTO candidatos VALUES ('160001', '12345', 'FULANO', 'FULANO', "
-        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO')"
+        "'Deputado Estadual', 'XYZ', 'XX', 'DEFERIDO', 'MASCULINO', 'BRANCA', '6259', 'XX')"
     )
     banco.execute(
         "INSERT INTO candidatos VALUES ('160002', '54321', 'BELTRANO', 'BELTRANO', "
-        "'Deputado Estadual', 'XYZ', 'YY', 'DEFERIDO')"
+        "'Deputado Estadual', 'XYZ', 'YY', 'DEFERIDO', 'MASCULINO', 'BRANCA', '6259', 'XX')"
     )
     inserir_despesa(banco, SQ_CANDIDATO="160001")
     inserir_despesa(banco, SQ_CANDIDATO="160002", NM_CANDIDATO="BELTRANO",

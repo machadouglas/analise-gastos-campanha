@@ -1,7 +1,6 @@
 /** Construtores de SQL do Explorar e regras espelhadas do backend.
  *
  *  Este arquivo é o ponto único de sincronia com o Python:
- *  - CATEGORIAS_SEM_NOTA_ESPERADA espelha src/analises.py
  *  - SINAIS_CTE / SINAIS_FILTRO espelham METRICAS_SINAL em src/resumo.py
  *  - SITUACAO_NAO_ENCONTRADA espelha SITUACAO_NAO_ENCONTRADO em src/cnpj.py
  *  tests/test_sincronia_site.py lê este arquivo e falha se as listas divergirem.
@@ -66,20 +65,6 @@ export const CONDICAO_DOACAO_DIRETA =
  *  13 — espelha CATEGORIA_IMPULSIONAMENTO em src/analises.py. */
 export const CATEGORIA_IMPULSIONAMENTO = 'Despesa com Impulsionamento de Conteúdos';
 
-// manter em sincronia com CATEGORIAS_SEM_NOTA_ESPERADA em src/analises.py
-// (teste automático em tests/test_sincronia_site.py)
-export const CATEGORIAS_SEM_NOTA_ESPERADA = [
-  'Doações financeiras a outros candidatos/partidos',
-  'Encargos financeiros, taxas bancárias e/ou op. cartão de crédito',
-  'Encargos sociais',
-  'Impostos, contribuições e taxas',
-  'Locação/cessão de bens imóveis',
-  'Despesas com pessoal',
-];
-
-const SQL_CATEGORIAS_SEM_NOTA = CATEGORIAS_SEM_NOTA_ESPERADA
-  .map((c) => `'${escSQL(c)}'`)
-  .join(', ');
 
 /** Documento declarado que não comprova a despesa perante o fisco. Cupom fiscal
  *  conta como fiscal — espelha DOCUMENTOS_FISCAIS em src/analises.py. */
@@ -89,14 +74,12 @@ export const CONDICAO_DOCUMENTO_NAO_FISCAL =
   ` AND DS_TIPO_DOCUMENTO NOT ILIKE '%cupom fiscal%'))`;
 
 /** Régua do "sem documento fiscal", espelho de cond_sem_documento_fiscal em
- *  src/analises.py: documento não fiscal + fornecedor PJ + tipo de gasto que
- *  costuma ter documento fiscal. `temNorma` diz se o parquet `norma_documento`
- *  foi publicado; sem ele o corte por categoria cai na lista fixa (o release
- *  antigo continua navegável, só com a régua anterior). */
-export function condicaoSemNota(temNorma: boolean): string {
-  const categoria = temNorma
-    ? 'DS_ORIGEM_DESPESA IN (SELECT DS_ORIGEM_DESPESA FROM norma_documento WHERE exige_documento)'
-    : `DS_ORIGEM_DESPESA NOT IN (${SQL_CATEGORIAS_SEM_NOTA})`;
+ *  src/analises.py: documento não fiscal + fornecedor PJ + tipo de gasto em que
+ *  a nota é a norma (`norma_documento`, que já embute a lista fixa de
+ *  categorias sem NF esperada como piso). */
+export function condicaoSemNota(): string {
+  const categoria =
+    'DS_ORIGEM_DESPESA IN (SELECT DS_ORIGEM_DESPESA FROM norma_documento WHERE exige_documento)';
   return `${CONDICAO_DOCUMENTO_NAO_FISCAL}`
     + ` AND LENGTH(NR_CPF_CNPJ_FORNECEDOR) = 14`
     + ` AND ${categoria}`;
@@ -310,18 +293,16 @@ export function condTexto(termo: string, colunas: string[], plural = false): str
  *  receitas_*), que só traz NM_CANDIDATO. Número bate direto; nome casa o
  *  civil ali mesmo OU, via registro, o de urna — a mesma régua de
  *  sqlBuscaCandidatos, e pela mesma razão: sem ela, "ACM NETO" listava o
- *  candidato no cartão e o painel logo abaixo dizia zero candidatos. Sem o
- *  parquet de candidatos publicado (`temRegistro`), fica só o nome civil. */
-export function condCandidato(cand: string, prefixo = '', temRegistro = true): string {
+ *  candidato no cartão e o painel logo abaixo dizia zero candidatos. */
+export function condCandidato(cand: string, prefixo = ''): string {
   if (/^\d+$/.test(cand)) return `${prefixo}NR_CANDIDATO = '${cand}'`;
   const civil = condTexto(cand, [`${prefixo}NM_CANDIDATO`])!;
-  if (!temRegistro) return civil;
   const urna = condTexto(cand, ['NM_URNA_CANDIDATO'])!;
   return `(${civil} OR ${prefixo}SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos WHERE ${urna}))`;
 }
 
-/** Nome de exibição em SQL — o de urna é o principal (view `nomes_urna`, sempre
- *  registrada por duckdb.ts; vazia sem o parquet de candidatos), o civil da
+/** Nome de exibição em SQL — o de urna é o principal (view `nomes_urna`,
+ *  registrada por duckdb.ts sobre o registro de candidaturas), o civil da
  *  prestação é o fallback. Toda consulta que mostra candidato junta a view com
  *  JOIN_NOMES_URNA e projeta nomeExibicao(); a mesma régua em texto é
  *  nomeCandidato() em format.ts, para o que vem do resumo.json. */
@@ -331,14 +312,14 @@ export function nomeExibicao(prefixo = ''): string {
 }
 
 /** Filtros aplicáveis sobre `indicadores` (fornecedor/descrição não existem lá). */
-export function whereIndicadores(f: Filtros, temRegistro = true): string {
+export function whereIndicadores(f: Filtros): string {
   const partes = ['1=1'];
   const uf = condUF(f.uf, 'i.');
   if (uf) partes.push(uf);
   if (f.cargo) partes.push(`i.DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
   if (f.partido) partes.push(`i.SG_PARTIDO = '${escSQL(f.partido)}'`);
   const cand = f.candidato.trim();
-  if (cand) partes.push(condCandidato(cand, 'i.', temRegistro));
+  if (cand) partes.push(condCandidato(cand, 'i.'));
   return partes.join(' AND ');
 }
 
@@ -361,14 +342,14 @@ export function cteCategoria(categoria: string): string {
     WHERE COALESCE(buf.p95, bbr.p95) IS NOT NULL AND g.total > COALESCE(buf.p95, bbr.p95))`;
 }
 
-export function montarWhere(f: Filtros, receitas = false, temRegistro = true): string {
+export function montarWhere(f: Filtros, receitas = false): string {
   const partes = ['1=1'];
   const uf = condUF(f.uf);
   if (uf) partes.push(uf);
   if (f.cargo) partes.push(`DS_CARGO ILIKE '${escSQL(f.cargo)}'`);
   if (f.partido) partes.push(`SG_PARTIDO = '${escSQL(f.partido)}'`);
   const cand = f.candidato.trim();
-  if (cand) partes.push(condCandidato(cand, '', temRegistro));
+  if (cand) partes.push(condCandidato(cand));
   const forn = f.fornecedor.trim();
   if (forn) {
     const [colId, colNome, colNomeRfb] = receitas
@@ -398,13 +379,11 @@ export function whereDaVisao(
   f: Filtros,
   sinal: SinalFiltro,
   categoria: string,
-  temNorma = false,
-  temRegistro = true,
 ): { base: string; where: string } {
   if (visao === 'removidas-receitas') {
-    return { base: 'receitas_removidas', where: montarWhere(f, true, temRegistro) };
+    return { base: 'receitas_removidas', where: montarWhere(f, true) };
   }
-  const w = montarWhere(f, false, temRegistro);
+  const w = montarWhere(f);
   if (visao === 'removidas') return { base: 'despesas_removidas', where: w };
   if (visao === 'fora-da-curva') {
     // gráficos e KPIs mostram os gastos DOS candidatos fora da curva do recorte
@@ -414,7 +393,7 @@ export function whereDaVisao(
         where:
           `${w} AND SQ_CANDIDATO IN (WITH ${cteCategoria(categoria)} ` +
           `SELECT e.SQ_CANDIDATO FROM estouro e ` +
-          `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f, temRegistro)})`,
+          `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)})`,
       };
     }
     const porSinal = sinal ? ` AND s.metrica = '${sinal}'` : '';
@@ -423,11 +402,11 @@ export function whereDaVisao(
       where:
         `${w} AND SQ_CANDIDATO IN (WITH ${SINAIS_CTE} ` +
         `SELECT DISTINCT s.SQ_CANDIDATO FROM sinais s ` +
-        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f, temRegistro)}${porSinal})`,
+        `JOIN indicadores i USING (SQ_CANDIDATO) WHERE ${whereIndicadores(f)}${porSinal})`,
     };
   }
   if (visao === 'sem-nota') {
-    return { base: 'despesas_atual', where: `${w} AND ${condicaoSemNota(temNorma)}` };
+    return { base: 'despesas_atual', where: `${w} AND ${condicaoSemNota()}` };
   }
   if (visao === 'pessoa-fisica') {
     return { base: 'despesas_atual', where: `${w} AND DS_TIPO_FORNECEDOR ILIKE '%f_sica%'` };
@@ -463,23 +442,22 @@ export function sqlForaDaCurvaCards(
   s: SinalFiltro,
   pag: number,
   porPagina: number,
-  comFoto: boolean,
 ): string {
-  return `WITH ${SINAIS_CTE}${comFoto ? `,
+  return `WITH ${SINAIS_CTE},
     foto AS (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd, ANY_VALUE(SG_UE) AS ue
-             FROM candidatos GROUP BY 1)` : ''}
+             FROM candidatos GROUP BY 1)
     SELECT i.SQ_CANDIDATO, i.NM_CANDIDATO, i.SG_PARTIDO || '/' || i.SG_UF AS partido_uf,
            i.DS_CARGO, ROUND(i.total_contratado, 2) AS contratado,
            ROUND(i.total_receitas, 2) AS arrecadado,
-           ${comFoto ? 'ANY_VALUE(c.cd) AS cd, ANY_VALUE(c.ue) AS ue,' : 'NULL AS cd, NULL AS ue,'}
+           ANY_VALUE(c.cd) AS cd, ANY_VALUE(c.ue) AS ue,
            ${s ? `ROUND(MAX(CASE WHEN s.metrica = '${s}' THEN s.valor END), 4) AS sinal_sel,` : 'NULL AS sinal_sel,'}
            COUNT(*) AS n_sinais,
            STRING_AGG(s.metrica || '~' || ROUND(s.valor, 4) || '~' || ROUND(s.p95, 4), ';' ORDER BY s.metrica) AS sinais,
            ANY_VALUE(n.NM_URNA_CANDIDATO) AS nome_urna
     FROM sinais s JOIN indicadores i USING (SQ_CANDIDATO)
     ${JOIN_NOMES_URNA}
-    ${comFoto ? 'LEFT JOIN foto c USING (SQ_CANDIDATO)' : ''}
-    WHERE ${whereIndicadores(f, comFoto)}
+    LEFT JOIN foto c USING (SQ_CANDIDATO)
+    WHERE ${whereIndicadores(f)}
     GROUP BY ALL
     ${s ? 'HAVING sinal_sel IS NOT NULL ORDER BY sinal_sel DESC' : 'ORDER BY n_sinais DESC, contratado DESC'}
     LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
@@ -494,7 +472,6 @@ export function sqlTabelaDaVisao(
   cat: string,
   pag: number,
   porPagina: number,
-  temRegistro = true,
 ): string {
   const paginacao = `LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
   if (v === 'removidas-receitas')
@@ -520,7 +497,7 @@ export function sqlTabelaDaVisao(
                     ROUND(i.total_receitas, 2) AS "Arrecadado"
              FROM estouro e JOIN indicadores i USING (SQ_CANDIDATO)
              ${JOIN_NOMES_URNA}
-             WHERE ${whereIndicadores(f, temRegistro)}
+             WHERE ${whereIndicadores(f)}
              ORDER BY "Neste tipo de gasto" DESC
              ${paginacao}`;
   if (v === 'fora-da-curva') return ''; // sem categoria, a visão vira cards
@@ -660,8 +637,8 @@ function recorteCandidatura(f: Filtros, comUrna: boolean): string {
  *  candidaturas no início da campanha) — `tem_movimento` separa as duas na tela.
  *  Filtro de fornecedor/descrição recorta despesa, não candidatura: quando há
  *  um, a lista se restringe a quem tem despesa no recorte. */
-export function sqlBuscaCandidatos(f: Filtros, limite: number, temRegistro = true): string {
-  const recorteReg = recorteCandidatura(f, temRegistro);
+export function sqlBuscaCandidatos(f: Filtros, limite: number): string {
+  const recorteReg = recorteCandidatura(f, true);
   // o nome já foi casado em `reg` (com urna); repeti-lo aqui, onde só existe
   // NM_CANDIDATO, desfaria a busca por nome de urna assim que houvesse filtro
   // de fornecedor — é exatamente o bug que esta função corrige
@@ -669,9 +646,8 @@ export function sqlBuscaCandidatos(f: Filtros, limite: number, temRegistro = tru
     f.fornecedor.trim() || f.descricao.trim()
       ? `\n    WHERE r.SQ_CANDIDATO IN (\n      SELECT SQ_CANDIDATO FROM despesas_atual WHERE ${montarWhere({ ...f, candidato: '' })})`
       : '';
-  // sem o parquet de candidatos publicado, degrada para o que a prestação sabe
-  const reg = temRegistro
-    ? `SELECT SQ_CANDIDATO,
+  // registro (com urna) + quem só aparece na prestação (sem registro casado)
+  const reg = `SELECT SQ_CANDIDATO,
              ANY_VALUE(NM_CANDIDATO) AS nome, ANY_VALUE(NM_URNA_CANDIDATO) AS urna,
              ANY_VALUE(NR_CANDIDATO) AS numero, ANY_VALUE(SG_PARTIDO) AS partido,
              ANY_VALUE(DS_CARGO) AS cargo, ANY_VALUE(SG_UF) AS uf
@@ -679,10 +655,7 @@ export function sqlBuscaCandidatos(f: Filtros, limite: number, temRegistro = tru
       UNION ALL
       SELECT SQ_CANDIDATO, NM_CANDIDATO, NULL, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF
       FROM indicadores WHERE ${recorteCandidatura(f, false)}
-        AND SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM candidatos)`
-    : `SELECT SQ_CANDIDATO, NM_CANDIDATO AS nome, NULL AS urna, NR_CANDIDATO AS numero,
-             SG_PARTIDO AS partido, DS_CARGO AS cargo, SG_UF AS uf
-      FROM indicadores WHERE ${recorteReg}`;
+        AND SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM candidatos)`;
   return `
     WITH reg AS (
       ${reg})

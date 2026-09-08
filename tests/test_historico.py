@@ -15,7 +15,7 @@ from src import historico  # noqa: E402
 COLUNAS = (
     "DT_GERACAO, HH_GERACAO, SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, "
     "DS_CARGO, SG_UF, SQ_DESPESA, NM_FORNECEDOR, NR_CPF_CNPJ_FORNECEDOR, "
-    "DS_DESPESA, VR_DESPESA_CONTRATADA, DT_DESPESA"
+    "DS_DESPESA, VR_DESPESA_CONTRATADA, DT_DESPESA, NM_FORNECEDOR_RFB"
 )
 
 
@@ -26,7 +26,8 @@ def montar_banco():
         CREATE TABLE receitas (DT_GERACAO VARCHAR, HH_GERACAO VARCHAR, SQ_CANDIDATO VARCHAR,
             NM_CANDIDATO VARCHAR, NR_CANDIDATO VARCHAR, SG_PARTIDO VARCHAR, DS_CARGO VARCHAR,
             SG_UF VARCHAR, SQ_RECEITA VARCHAR, NM_DOADOR VARCHAR, NR_CPF_CNPJ_DOADOR VARCHAR,
-            DS_ORIGEM_RECEITA VARCHAR, VR_RECEITA VARCHAR, DT_RECEITA VARCHAR);
+            DS_ORIGEM_RECEITA VARCHAR, VR_RECEITA VARCHAR, DT_RECEITA VARCHAR,
+            NM_DOADOR_RFB VARCHAR);
     """)
     return con
 
@@ -36,7 +37,7 @@ def inserir_despesa(con, dia, sq, descricao, valor, repeticoes=1):
         con.execute(
             "INSERT INTO despesas_contratadas VALUES (?, '04:00:00', '160001', 'FULANO', "
             "'12345', 'XYZ', 'Deputado Estadual', 'XX', ?, 'FORNECEDOR LTDA', "
-            "'11222333000144', ?, ?, '15/08/2026')",
+            "'11222333000144', ?, ?, '15/08/2026', '#NULO')",
             [dia, sq, descricao, valor],
         )
 
@@ -296,13 +297,13 @@ def test_retransmissao_com_campo_nulo_nao_vira_remocao():
     con.execute(
         "INSERT INTO despesas_contratadas VALUES ('20/08/2026', '04:00:00', '160001', "
         "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '100', 'FORNECEDOR LTDA', "
-        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL)")
+        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL, '#NULO')")
     historico.versionar(con)
     con.execute("DELETE FROM despesas_contratadas")
     con.execute(
         "INSERT INTO despesas_contratadas VALUES ('21/08/2026', '04:00:00', '160001', "
         "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '999', 'FORNECEDOR LTDA', "
-        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL)")
+        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL, '#NULO')")
     historico.versionar(con)
     assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
 
@@ -314,13 +315,13 @@ def test_edicao_com_campo_nulo_nao_vira_remocao():
     con.execute(
         "INSERT INTO despesas_contratadas VALUES ('20/08/2026', '04:00:00', '160001', "
         "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '100', 'FORNECEDOR LTDA', "
-        "'11222333000144', 'CARRO DE SOM', '50000,00', NULL)")
+        "'11222333000144', 'CARRO DE SOM', '50000,00', NULL, '#NULO')")
     historico.versionar(con)
     con.execute("DELETE FROM despesas_contratadas")
     con.execute(
         "INSERT INTO despesas_contratadas VALUES ('21/08/2026', '04:00:00', '160001', "
         "'FULANO', '12345', 'XYZ', 'Deputado Estadual', 'XX', '999', 'FORNECEDOR LTDA', "
-        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL)")
+        "'11222333000144', 'CARRO DE SOM', '5000,00', NULL, '#NULO')")
     historico.versionar(con)
     assert contar(con, "SELECT COUNT(*) FROM v_removidas_despesas_contratadas") == 0
     assert contar(con, "SELECT COUNT(*) FROM v_alteradas_pares_despesas_contratadas") == 1

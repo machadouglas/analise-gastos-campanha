@@ -40,7 +40,7 @@ ANO = 2026
 COLS_CANDIDATOS = [
     "SQ_CANDIDATO", "NR_CANDIDATO", "NM_CANDIDATO", "NM_URNA_CANDIDATO",
     "DS_CARGO", "SG_PARTIDO", "SG_UF", "DS_SITUACAO_CANDIDATURA",
-    "CD_ELEICAO", "SG_UE",
+    "CD_ELEICAO", "SG_UE", "DS_GENERO", "DS_COR_RACA",
 ]
 COLS_PAGAS = ["DT_GERACAO", "SQ_PRESTADOR_CONTAS", "SG_UF",
               "VR_PAGTO_DESPESA", "DT_PAGTO_DESPESA"]
@@ -148,7 +148,9 @@ def _publicar_zip_do_dia(dir_raw: Path, dia: str, com_removida: bool,
          "NM_CANDIDATO": f"CANDIDATO {i:04d}", "NM_URNA_CANDIDATO": f"CAND {i:04d}",
          "DS_CARGO": "Deputado Estadual", "SG_PARTIDO": "XYZ" if i % 2 else "ABC",
          "SG_UF": "XX", "DS_SITUACAO_CANDIDATURA": "APTO",
-         "CD_ELEICAO": "2045202026", "SG_UE": "XX"}
+         "CD_ELEICAO": "2045202026", "SG_UE": "XX",
+         "DS_GENERO": "FEMININO" if i % 2 else "MASCULINO",
+         "DS_COR_RACA": "PARDA" if i % 3 == 0 else "BRANCA"}
         for i in range(1, 1051)
     ]
     pagas = [

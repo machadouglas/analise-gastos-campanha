@@ -20,7 +20,6 @@ import sys
 import zlib
 from pathlib import Path
 
-import duckdb
 import httpx2
 import pytest
 
@@ -227,21 +226,6 @@ def test_view_nomes_urna_existe_como_no_wasm(banco):
                             "WHERE n.NM_URNA_CANDIDATO IS NOT NULL LIMIT 3"}))
     assert r.status_code == 200, r.text
     assert r.json()["linhas"], "o fixture tem registro com nome de urna; a view veio vazia"
-
-
-def test_view_nomes_urna_vazia_sem_o_parquet_de_candidatos(tmp_path):
-    con = duckdb.connect()
-    con.execute(f"COPY (SELECT '1' AS SQ_CANDIDATO, 1.0 AS total_contratado) "
-                f"TO '{(tmp_path / 'indicadores.parquet').as_posix()}' (FORMAT PARQUET)")
-    con.close()
-    b = dados.construir_de_diretorio(tmp_path, tmp_path / "radar.duckdb")
-    try:
-        assert b.cursor().execute("SELECT COUNT(*) FROM nomes_urna").fetchone()[0] == 0
-        assert b.cursor().execute(
-            "SELECT n.NM_URNA_CANDIDATO FROM indicadores i LEFT JOIN nomes_urna n USING (SQ_CANDIDATO)"
-        ).fetchall() == [(None,)]
-    finally:
-        b.fechar()
 
 
 @pytest.mark.parametrize("rotulo,consulta", _consultas(), ids=[r for r, _ in _consultas()])

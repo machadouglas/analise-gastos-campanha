@@ -52,29 +52,11 @@ METRICAS_SINAL = [
 _existe = db.existe
 
 
-def _tem_metadados_foto(con) -> bool:
-    """A foto oficial do TSE precisa de CD_ELEICAO e SG_UE (registro de
-    candidaturas); bancos de teste/antigos podem não ter as colunas."""
-    if not _existe(con, "candidatos"):
-        return False
-    cols = {r[0] for r in con.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = 'candidatos'"
-    ).fetchall()}
-    return {"CD_ELEICAO", "SG_UE"} <= cols
-
-
-def _join_urna(con, on: str = "USING (SQ_CANDIDATO)") -> str:
+def _join_urna(on: str = "USING (SQ_CANDIDATO)") -> str:
     """Nome de urna do registro para todo candidato citado no resumo: o site o
-    exibe como principal (é como a campanha divulga). NULL sem o parquet/coluna
-    — o banco cru dos testes e extrações antigas não o têm."""
-    cols = {r[0] for r in con.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = 'candidatos'"
-    ).fetchall()}
-    if "NM_URNA_CANDIDATO" in cols:
-        return ("LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) "
-                f"AS NM_URNA_CANDIDATO FROM candidatos GROUP BY 1) u {on}")
-    return ("LEFT JOIN (SELECT CAST(NULL AS VARCHAR) AS SQ_CANDIDATO, "
-            f"CAST(NULL AS VARCHAR) AS NM_URNA_CANDIDATO) u {on}")
+    exibe como principal (é como a campanha divulga)."""
+    return ("LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) "
+            f"AS NM_URNA_CANDIDATO FROM candidatos GROUP BY 1) u {on}")
 
 
 def _fora_da_curva(con, limite: int = 10) -> list[dict]:
@@ -88,13 +70,10 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
         f"FROM indicadores WHERE {filtro}"
         for nome, expr, filtro in METRICAS_SINAL
     )
-    # metadados da foto oficial (divulgacandcontas): o site usa como hotlink,
-    # com fallback para iniciais quando ausentes
+    # metadados da foto oficial (divulgacandcontas): o site usa como hotlink
     foto = (
         "LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd_eleicao, "
         "ANY_VALUE(SG_UE) AS sg_ue FROM candidatos GROUP BY 1) c USING (SQ_CANDIDATO)"
-        if _tem_metadados_foto(con)
-        else "LEFT JOIN (SELECT NULL AS SQ_CANDIDATO, NULL AS cd_eleicao, NULL AS sg_ue) c USING (SQ_CANDIDATO)"
     )
     df = con.execute(f"""
         WITH m AS ({unioes}),
@@ -114,7 +93,7 @@ def _fora_da_curva(con, limite: int = 10) -> list[dict]:
                r.metrica, ROUND(r.valor, 2) AS valor, r.mediana, r.p95, r.grupo_n, r.grupo_ambito
         FROM ref r JOIN indicadores i USING (SQ_CANDIDATO)
         {foto}
-        {_join_urna(con)}
+        {_join_urna()}
         WHERE r.p95 IS NOT NULL AND {CONDICAO_SINAL}
         ORDER BY r.SQ_CANDIDATO
     """).df()
@@ -259,8 +238,8 @@ def gerar(con) -> dict:
     nome_fornecedor_h = privacidade.sql_pseudonimo(
         "COALESCE(NULLIF(h.NM_FORNECEDOR_RFB,'#NULO'), h.NM_FORNECEDOR)", privacidade.sal())
     # nome de urna (registro) para todo candidato citado — ver _join_urna
-    urna = _join_urna(con)
-    urna_h = _join_urna(con, "ON u.SQ_CANDIDATO = h.SQ_CANDIDATO")
+    urna = _join_urna()
+    urna_h = _join_urna("ON u.SQ_CANDIDATO = h.SQ_CANDIDATO")
     novas = _registros(con, f"""
         WITH estreia AS (
             SELECT {chave_essencia}, MIN(dt_primeira_extracao) AS dt
