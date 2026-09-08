@@ -38,7 +38,7 @@ Consequências:
 
 | Peça | Onde | Papel |
 |---|---|---|
-| **Container MCP** | o mesmo host Docker que roda a rotina, como aplicação separada | Python + DuckDB em memória sobre os Parquet publicados. Implementa o protocolo MCP e as ferramentas. Stateless. |
+| **Container MCP** | o mesmo host Docker que roda a rotina, como aplicação separada | Python + DuckDB (arquivo local só-leitura, montado dos Parquet publicados). Implementa o protocolo MCP e as ferramentas. Stateless. |
 | **Borda** | Cloudflare (plano gratuito) + túnel | DNS do domínio público, TLS, rate limit por IP, IP de origem invisível. |
 | **Dado** | GitHub Releases | Os Parquet e o `resumo.json` que a rotina já publica. Nada novo a publicar. |
 
@@ -146,13 +146,16 @@ da extração) e `versao_codigo` (commit) em toda resposta.
 
 | Ferramenta | Argumentos | Retorna | Fonte |
 |---|---|---|---|
-| `buscar_candidato` | `nome` (parcial), `uf?`, `cargo?`, `partido?` | até 20 candidatos (SQ, nome, urna, número, cargo, partido, UF, totais) | `candidatos` ⋈ `indicadores` |
+| `buscar_candidato` | `nome` (parcial ou número de urna), `uf?`, `cargo?`, `partido?`, `limite?` (20, até 100) | candidatos (SQ, nome, urna, número, cargo, partido, UF, totais) | `candidatos` ⋈ `indicadores` |
 | `ficha_candidato` | `sq_candidato` | scorecard, sinais fora da curva, maiores fornecedores, composição da receita, declarações removidas/corrigidas | `indicadores`, `benchmark_indicadores`, `rede`, `despesas_removidas`, `despesas_alteradas` |
-| `ficha_fornecedor` | `id` (CNPJ ou `pf-…`) | cadastro RFB (se CNPJ), candidatos atendidos, totais, flags 12/13 | `fornecedores`, `rede`, `despesas_atual` |
-| `ficha_partido` | `sigla`, `uf?` | totais, candidatos, fundos públicos, cota do FEFC | `indicadores`, `cota_fefc` |
+| `ficha_fornecedor` | `id` (CNPJ ou `pf-…`) | cadastro RFB (se CNPJ), candidatos atendidos, totais, flags 12/13 | `fornecedores`, `despesas_atual` |
+| `ficha_partido` | `sigla`, `uf?` | totais, candidatos, fundos públicos, fornecedores compartilhados, cota do FEFC | `despesas_atual`, `receitas_atual`, `cota_fefc` |
 | `fora_da_curva` | `sinal?`, `uf?`, `cargo?`, `limite?` | candidatos acima do p95 do grupo, por métrica | `indicadores` ⋈ `benchmark_indicadores` |
 | `declaracoes_removidas` | `uf?`, `cargo?`, `sq_candidato?`, `tipo` (despesa/receita) | declarações que saíram do ar de verdade | `despesas_removidas` / `receitas_removidas` |
-| `fornecedores_compartilhados` | `uf?`, `minimo_candidatos?` | fornecedores atendendo N+ candidatos | `rede` |
+| `fornecedores_compartilhados` | `uf?`, `cargo?`, `partido?`, `minimo_candidatos?` | fornecedores atendendo N+ candidatos | `despesas_atual` |
+| `sem_nota` | `uf?`, `cargo?`, `partido?` | quem mais gasta sem documento fiscal onde a nota é a norma, com o p95 do grupo | `indicadores` ⋈ `benchmark_indicadores` |
+| `gastos_por_categoria` | `uf?`, `cargo?`, `partido?`, `categoria?` | total por tipo de despesa, com a mediana nacional do preço por nota | `despesas_atual`, `benchmark_precos` |
+| `visao_geral` | — | totais do dia, mudanças desde a última extração, série, destaques | `resumo.json` |
 | `sql` | `consulta` | linhas (máx. 500) ou erro explicativo | banco inteiro, leitura |
 
 As ferramentas curadas reutilizam as consultas do site (`site/src/lib/
@@ -225,8 +228,9 @@ Tudo no plano gratuito do Cloudflare; nenhum código próprio na borda:
 - **Rate limit** por IP (uma regra de Rate Limiting, incluída no plano):
   ex.: 60 chamadas/min. Público e anônimo, como o site.
 - **WAF gerenciado** gratuito ligado; nada além do padrão.
-- **Sem cache na borda**: MCP é POST JSON-RPC, o CDN não cacheia. O cache é
-  em memória do processo, por ferramenta + argumentos + md5 do dado.
+- **Sem cache na borda**: MCP é POST JSON-RPC, o CDN não cacheia. Não há
+  cache de respostas no processo: cada chamada consulta o DuckDB local (dado
+  de 26 MB, consultas curadas em milissegundos).
 
 ## 7. Escala e capacidade
 
@@ -256,8 +260,9 @@ Tudo no plano gratuito do Cloudflare; nenhum código próprio na borda:
   escuta em porta alguma.
 - **Abuso**: rate limit na borda + semáforo + timeout. Um modelo em loop
   bate no 429 antes de encher a fila.
-- **Logs**: nunca gravam o SQL completo com valores; gravam ferramenta,
-  duração, linhas, status e hash da consulta. Sem IP em log de aplicação.
+- **Logs**: a aplicação não registra chamadas (nem SQL, nem argumentos, nem
+  IP) — só boot, troca de banco e falhas do poll. O acesso fica no log da
+  borda (túnel/CDN).
 - **Repositório**: nenhum arquivo versionado cita host, provedor, IP ou
   nome de máquina. Os guias de deploy são genéricos, como o da rotina.
 
@@ -299,20 +304,20 @@ exporem com qual pipeline o dado foi gerado.
 ```
 src/publicado.py  # download do release (extraído de scripts/previa-local.py)
 src/mcp/
-  servidor.py     # FastMCP, transporte, instructions, recursos
-  dados.py        # boot, poll de md5, troca atômica
-  gate.py         # validação de statement (parser do DuckDB)
+  servidor.py     # MCPServer, transporte, ferramentas, recursos, /saude
+  dados.py        # boot, poll de md5, troca atômica; Executor (timeout, LIMIT, célula, bytes, filas)
+  gate.py         # validação de statement (parser sem acesso ao disco), teto de tamanho do SQL
   consultas.py    # SQL das ferramentas curadas (espelho de consultas.ts)
   api.py          # rota do site: GET /api/v1/consulta e /api/v1/resumo (§12)
-  esquema.py      # instructions = trecho do prompt.ts
-Dockerfile.mcp    # python:3.12-slim + duckdb + mcp; sem gh; ARG GIT_SHA; uid 10001
+  esquema.py      # instructions = trecho do prompt.ts do site
+Dockerfile.mcp    # python:3.12-slim + duckdb + mcp; sem gh; ARG SOURCE_COMMIT; uid 10001
 tests/
   test_mcp_gate.py        # statements aceitos/recusados, timeout, LIMIT, bytes
   test_mcp_api.py         # rota do site: formato, cache por versão, CORS, 4xx/5xx,
                           # exemplos.ts pela rota == cursor cru
   test_mcp_ferramentas.py # cada ferramenta contra o banco montado do fixture E2E;
                           # exemplos.ts pela ferramenta sql == execução direta
-  test_mcp_protocolo.py   # MCP Inspector (CLI) contra o container
+  test_mcp_protocolo.py   # cliente oficial do SDK contra o app, em processo
   test_sincronia_site.py  # ganha: VERBOS_LEITURA <-> gate.py (exceção do PIVOT);
                           # prompt.ts <-> instructions; constantes de consultas.ts
 .github/dependabot.yml    # pip: mcp, duckdb — o teste de protocolo autoriza o bump

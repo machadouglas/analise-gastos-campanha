@@ -17,6 +17,7 @@ navegador quando esta rota não responde) e /saude.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -68,6 +69,7 @@ _servico: dados.Servico | None = None
 _executor: dados.Executor | None = None
 
 
+@functools.cache
 def versao_codigo() -> str:
     """Commit da imagem: RADAR_GIT_SHA (build arg) ou SOURCE_COMMIT (o Coolify
     injeta em runtime, mas não como build arg — o deploy de 05/09 saiu
@@ -115,11 +117,6 @@ def _resposta(dados_: dict[str, Any]) -> dict[str, Any]:
 async def _linhas(sql: str, tabelas: tuple[str, ...] = (), **kw) -> list[dict] | None:
     r = await executor().consultar_opcional(sql, tabelas, **kw)
     return None if r is None else r.linhas
-
-
-async def _uma(sql: str, tabelas: tuple[str, ...] = ()) -> dict | None:
-    linhas = await _linhas(sql, tabelas, max_linhas=1)
-    return linhas[0] if linhas else None
 
 
 def _erro_de_consulta(e: Exception) -> ToolError:
@@ -173,7 +170,7 @@ async def ficha_candidato(sq_candidato: str) -> dict[str, Any]:
     sqls = consultas.sql_ficha_candidato(sq, ex.tem_tabela("fornecedores"))
     tabelas_de = {
         "registro": ("candidatos",), "bens": ("bens",), "serie": ("serie_diaria",),
-        "dinheiro_que_volta": ("rede",), "sinais": ("indicadores", "benchmark_indicadores"),
+        "dinheiro_que_volta": ("rede", "receitas_atual"), "sinais": ("indicadores", "benchmark_indicadores"),
         "comparacao": ("benchmark_indicadores",),
         "removidas": ("despesas_removidas",), "receitas_removidas": ("receitas_removidas",),
         "corrigidas_despesas": ("despesas_alteradas",), "corrigidas_receitas": ("receitas_alteradas",),
@@ -352,7 +349,8 @@ async def declaracoes_removidas(tipo: str = "despesa", uf: str | None = None,
     if linhas is None:
         raise ToolError("tabela de removidas ainda não publicada nesta versão do dado")
     return _resposta({"tipo": tipo, "declaracoes": linhas, "n": len(linhas),
-                      "valor_total": round(sum(d.get("valor") or 0 for d in linhas), 2)})
+                      # soma SÓ do que foi listado (o `limite` corta a lista)
+                      "valor_listado": round(sum(d.get("valor") or 0 for d in linhas), 2)})
 
 
 @mcp.tool(annotations=SOMENTE_LEITURA)
@@ -394,10 +392,12 @@ async def gastos_por_categoria(uf: str | None = None, cargo: str | None = None,
     sql = consultas.sql_gastos_por_categoria(uf, cargo, partido, categoria,
                                              min(max(int(limite), 1), 200))
     try:
-        linhas = await _linhas(sql)
+        linhas = await _linhas(sql, ("despesas_atual", "benchmark_precos"))
     except Exception as e:  # noqa: BLE001
         raise _erro_de_consulta(e) from None
-    return _resposta({"categorias": linhas or [], "n": len(linhas or [])})
+    if linhas is None:
+        raise ToolError("despesas_atual/benchmark_precos ainda não publicados nesta versão do dado")
+    return _resposta({"categorias": linhas, "n": len(linhas)})
 
 
 @mcp.tool(annotations=SOMENTE_LEITURA)
@@ -422,7 +422,7 @@ async def visao_geral() -> dict[str, Any]:
 async def sql(consulta: str, limite: int = MAX_LINHAS) -> dict[str, Any]:
     """Consulta livre em SQL (dialeto DuckDB) sobre todas as tabelas publicadas
     — só leitura, um statement, até 500 linhas e 100 colunas, texto cortado em
-    2.000 caracteres por célula, 10 s. O esquema está nas
+    2.000 caracteres por célula, tempo limitado (10 s por padrão). O esquema está nas
     instruções do servidor e no recurso radar://esquema. Prefira despesas_atual
     e receitas_atual (extração mais recente, coluna `valor` pronta) e as views
     despesas_removidas/receitas_removidas para remoções. Erros voltam com a

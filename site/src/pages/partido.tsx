@@ -239,7 +239,7 @@ export function Partido() {
   useEffect(() => {
     if (!sigla) return;
     setDados('carregando');
-    carregarPartido(decodeURIComponent(sigla))
+    carregarPartido(sigla)
       .then((d) => setDados(d ?? 'nao-encontrado'))
       .catch(() => setDados('nao-encontrado'));
   }, [sigla]);

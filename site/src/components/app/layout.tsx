@@ -85,7 +85,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </a>
             , extraídos diariamente. Os dados são declaratórios: refletem o que os próprios candidatos
             informam e podem ser retificados. Remoções e alterações são indícios a investigar,{' '}
-            <strong className="text-foreground">nunca acusações</strong>. CPFs são anonimizados pelo próprio TSE.
+            <strong className="text-foreground">nunca acusações</strong>. CPFs de pessoas físicas são pseudonimizados por este projeto antes da publicação.
           </p>
           <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2">

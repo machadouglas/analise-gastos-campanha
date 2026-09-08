@@ -46,6 +46,8 @@ Tabelas brutas (todas as colunas VARCHAR, nomes originais do TSE):
 Views tipadas (use nas análises — valores `VR` são DOUBLE, datas `DT` são DATE):
 
 - `v_despesas` (de despesas_contratadas), `v_despesas_pagas`, `v_receitas`, `v_bens` — mesmas colunas + `VR` e `DT` convertidos.
+- `v_prestadores` — uma linha por `SQ_PRESTADOR_CONTAS` (candidato, número, nome, partido, cargo, UF colapsados com MIN, de despesas ∪ receitas). É o que dá candidato a `v_despesas_pagas` (o arquivo de pagas não traz SQ_CANDIDATO); `verificar` aborta se um prestador apontar para dois candidatos.
+- `publicacoes` (`src/exportar.py`) — uma linha só: fingerprint e md5 por arquivo da última publicação; é o que faz a `rotina` publicar apenas o que mudou.
 
 Histórico de extrações (`src/historico.py`, alimentado automaticamente pelo `carregar`):
 
@@ -58,10 +60,10 @@ Histórico de extrações (`src/historico.py`, alimentado automaticamente pelo `
 
 Valores originais usam vírgula decimal e datas `DD/MM/AAAA`; as views já convertem.
 
-Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas exportadas em Parquet):
+Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar` e exportadas em Parquet — exceções marcadas):
 
-- `extracoes` — registro de cada dia de extração já visto (alimenta a série).
-- `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
+- `extracoes` (`src/historico.py`, alimentada pelo `versionar`; **não é exportada** — `scripts/previa-local.py` a reconstrói das janelas do histórico) — registro de cada dia de extração já visto (alimenta a série).
+- `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens_despesa (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
 - `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
 - `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): `NM_URNA_CANDIDATO` (do registro; NULL sem o parquet/coluna — é o nome principal do site), totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
 - `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
@@ -69,7 +71,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
 - `cota_fefc` — Fundo Especial que **chegou a candidato**, por partido × cargo × gênero × cor/raça (`genero`/`cor_raca` normalizados em MAIÚSCULAS — a prestação vem 'Feminino', o registro 'FEMININO'): `candidatos_fefc`, `fefc`, e `candidaturas` (registros do consulta_cand no mesmo recorte, inclusive quem não recebeu nada; NULL quando o registro não traz as colunas). Réguas legais: mínimo de 30% do FEFC para mulheres (EC 117/2022) e proporcionalidade às candidaturas negras — `COR_RACA_NEGRA` = pretas + pardas (Res. TSE 23.607, art. 17). Alimenta a ficha `/partido/:sigla` e `resumo.cota_fefc`. **É termômetro, não a conta oficial**: a lei mede o total aplicado pelo partido (inclui gasto direto do diretório) e a prestação está aberta — a Metodologia diz isso, e todo texto que citar o número tem de dizer também.
 - `rede` — arestas agregadas candidato↔contraparte (tipos: despesa, doacao, doacao_originaria).
-- `fornecedores` — cadastro RFB dos CNPJs (via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário). Pendentes novos primeiro (maiores valores); a folga do limite reconsulta os cadastros mais antigos (`dt_consulta`, vencidos há 30+ dias, ciclo de ~30 dias pela base). Mudança de situação cadastral preserva `situacao_anterior`/`dt_situacao_anterior` (base da futura red flag "baixado após receber"). CNPJ 404 vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (reconsultado só no ciclo, como os demais).
+- `fornecedores` — cadastro RFB dos CNPJs (**persistente e incremental**, nunca recriada: via `cnpj.enriquecer_em_massa`, chamado na rotina com limite diário — o subcomando `enriquecer` só imprime uma tabela, não grava aqui). Pendentes novos primeiro (maiores valores); a folga do limite reconsulta os cadastros mais antigos (`dt_consulta`, vencidos há 30+ dias, ciclo de ~30 dias pela base). Mudança de situação cadastral preserva `situacao_anterior`/`dt_situacao_anterior` (base da futura red flag "baixado após receber"). CNPJ 404 vira cache negativo + linha 'NAO ENCONTRADO NA BASE PUBLICA' (reconsultado só no ciclo, como os demais).
 
 ## Testes e verificação
 
@@ -91,7 +93,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 | 7 | Valores redondos/repetidos | notas fracionadas (indicador exige mesmo fornecedor + 3 notas distintas) |
 | 8 | Fornecedor que é candidato | negócio entre candidatos |
 | 9 | Despesas sem documento fiscal | documento não fiscal (nem nota nem cupom) + fornecedor PJ + categoria em que a nota é a norma (`norma_documento`); a lista fixa de categorias sem NF esperada é o piso |
-| 10 | CNPJ recém-aberto (via `enriquecer`) | empresa criada às vésperas da eleição (reportar sempre com a cobertura: fornecedores_consultados/fornecedores_cnpj) |
+| 10 | CNPJ recém-aberto (indicador `fornecedores_recem_abertos`, alimentado pela tabela `fornecedores` que só a `rotina` preenche) | empresa criada às vésperas da eleição (reportar sempre com a cobertura: fornecedores_consultados/fornecedores_cnpj) |
 | 11 | Fora da curva do grupo | métrica acima do p95 dos candidatos ao mesmo cargo na mesma UF (`benchmark_indicadores`) |
 | 12 | Nota fiscal sem número | documento fiscal cujo `NR_DOCUMENTO` não tem um dígito (ex.: 'SN') — nota afirmada e não localizável |
 | 13 | Mesmo nº de nota em candidatos diferentes | mesmo fornecedor declarando o mesmo `NR_DOCUMENTO` (3+ dígitos) para 2+ candidatos — nota reaproveitada ou erro. **Exclui** impulsionamento (`CATEGORIA_IMPULSIONAMENTO`): a plataforma não emite nota sequencial e o número é digitado à mão ('001', '12345') — 16 dos 17 pares eram isso |
@@ -127,7 +129,7 @@ SPA Vite + React + Tailwind v4. Se existir uma pasta local de padrão visual
 existente (tema único papel/creme, acentos navy, lucide-react, componentes em
 `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release —
 inclui `serie_nacional` para os sparklines dos cartões; a Home NÃO carrega DuckDB-WASM),
-Explorar (visões prontas via `?visao=` — fora-da-curva (com `&sinal=` para filtrar a métrica; sem
+Explorar (visões prontas via `?visao=` — ranking, fora-da-curva (com `&sinal=` para filtrar a métrica; sem
 categoria vira lista de cards com foto e chips), removidas, removidas-receitas, compartilhados,
 sem-nota, pessoa-fisica — combináveis com os filtros; mapa de tiles por UF clicável) e Consultar
 (MCP-first: URL do servidor, clientes, a lista de ferramentas — `FERRAMENTAS_MCP` em

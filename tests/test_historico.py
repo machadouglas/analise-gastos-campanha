@@ -253,8 +253,10 @@ def test_views_de_mudanca_nascem_sem_precisar_de_carga_nova():
 
     historico.criar_views_mudancas(con)  # sem versionar: é o dia do 304
 
+    existentes = {r[0] for r in con.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_type = 'VIEW'").fetchall()}
     for v in esperadas:
-        assert contar(con, f"SELECT COUNT(*) FROM {v}") >= 0, f"{v} não foi recriada"
+        assert v in existentes, f"{v} não foi recriada"
     assert contar(con, f"SELECT COUNT(*) FROM v_alteradas_pares_{tabela}") == 1
 
 

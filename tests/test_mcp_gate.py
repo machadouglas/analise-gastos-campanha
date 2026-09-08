@@ -6,6 +6,7 @@ linhas e de bytes. Cada barreira é provada aqui contra um banco sintético.
 """
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -41,7 +42,8 @@ def test_gate_aceita_leitura(sql):
     ("ATTACH 'x.duckdb' AS y", "ATTACH"),
     ("EXPLAIN SELECT 1", "EXPLAIN"),
     # PRAGMA com atribuição é SET; `PRAGMA database_list` o parser reescreve
-    # como SELECT de uma função de leitura e passa (inofensivo)
+    # como SELECT e passa o gate, mas quebra ao ser embrulhado na subconsulta
+    # do executor (erro de parser devolvido ao modelo, como `SELECT 1; -- c`)
     ("PRAGMA threads = 8", "SET"),
     ("CALL pragma_version()", "CALL"),
     ("", "vazia"),
@@ -246,3 +248,59 @@ def test_filtro_de_uf_com_apostrofo_continua_literal():
     n = duckdb.sql("SELECT count(*) FROM (SELECT 'SP' AS SG_UF) WHERE "
                    + consultas.cond_uf("SP,X'Y")).fetchone()[0]
     assert n == 1
+
+
+def test_tipos_sem_representacao_json_viram_texto(executor):
+    """Medido em 08/09/2026: `now()` (TIMESTAMPTZ) exigia o pytz na conversão
+    para Python, e time/INTERVAL/UUID estouravam no json.dumps — quatro
+    consultas legítimas voltavam como 'erro inesperado'."""
+    r = _rodar(executor.consultar(
+        "SELECT now() AS agora, current_time AS hora, INTERVAL 1 DAY AS iv, "
+        "'0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'::UUID AS u"))
+    linha = r.linhas[0]
+    assert linha["agora"][:4].isdigit() and ("-" in linha["agora"][19:] or "+" in linha["agora"][19:])
+    assert isinstance(linha["hora"], str) and ":" in linha["hora"]
+    assert linha["iv"] == "1 day, 0:00:00"
+    assert linha["u"] == "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f"
+    json.dumps(r.linhas)
+
+
+def test_parser_do_gate_nao_le_o_disco(tmp_path):
+    """`IMPORT DATABASE '<dir>'` fazia o parser abrir <dir>/schema.sql antes de
+    qualquer guarda, e a mensagem virava oráculo de existência de caminho."""
+    (tmp_path / "schema.sql").write_text("CREATE TABLE t(x INT);", encoding="utf-8")
+    with pytest.raises(gate.ConsultaRecusada) as e:
+        gate.validar_leitura(f"IMPORT DATABASE '{tmp_path.as_posix()}'")
+    # a mensagem só ecoa o caminho pedido; nada foi aberto no disco
+    assert "file system operations are disabled" in str(e.value)
+
+
+def test_parquet_que_faltou_no_boot_e_retentado_no_poll(tmp_path, monkeypatch):
+    """Antes, o md5 ESPERADO era registrado mesmo sem o arquivo: o poll via
+    `arquivos` igual ao release e a tabela ficava ausente até o release
+    seguinte (um boot durante a publicação servia o dado misto por um dia)."""
+    fonte = tmp_path / "fonte"
+    fonte.mkdir()
+    for nome in ("a", "b"):
+        duckdb.sql(f"COPY (SELECT 1 AS {nome}) TO '{(fonte / nome).as_posix()}.parquet'")
+    resumo = {"gerado_em": "2026-09-08",
+              "arquivos": {n: dados.publicado.md5(fonte / n) for n in ("a.parquet", "b.parquet")}}
+    disponiveis = {"a.parquet"}
+
+    def baixar(nome, alvo, base=None, **kw):
+        if nome not in disponiveis:
+            raise OSError("404")
+        alvo.write_bytes((fonte / nome).read_bytes())
+
+    monkeypatch.setattr(dados.publicado, "baixar_arquivo", baixar)
+    monkeypatch.setattr(dados.publicado, "baixar_resumo", lambda base=None: resumo)
+    s = dados.Servico(tmp_path / "cache", carencia=0)
+    s.banco = dados.baixar_e_construir(s.dir_cache, resumo=resumo)
+    try:
+        assert s.banco.tabelas == ["a"]
+        assert s.verificar() is False and s.banco.tabelas == ["a"]   # ainda 404: nada muda
+        disponiveis.add("b.parquet")
+        assert s.verificar() is True and s.banco.tabelas == ["a", "b"]
+        assert s.verificar() is False                                # estável depois disso
+    finally:
+        s.parar()

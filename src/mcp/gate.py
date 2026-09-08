@@ -27,6 +27,13 @@ INICIO_PIVOT = re.compile(r"^\s*(un)?pivot\b", re.IGNORECASE)
 MAX_CHARS_SQL = 50_000
 
 
+# O parser roda ANTES de qualquer guarda: numa conexão comum, `IMPORT DATABASE
+# '<dir>'` abre <dir>/schema.sql em tempo de parse e a mensagem de erro vira um
+# oráculo de existência de caminho no container. Sem acesso externo, vira
+# PermissionException — que o gate devolve como "SQL inválido".
+_PARSER = duckdb.connect(config={"enable_external_access": "false"})
+
+
 class ConsultaRecusada(ValueError):
     """SQL que o gate não deixa passar — a mensagem é para o modelo corrigir."""
 
@@ -53,7 +60,7 @@ def validar_leitura(sql: str) -> str:
             "CREATE + SELECT). Use agregação condicional: SUM(CASE WHEN ... END)."
         )
     try:
-        statements = duckdb.extract_statements(texto)
+        statements = _PARSER.extract_statements(texto)
     except duckdb.Error as e:
         raise ConsultaRecusada(f"SQL inválido: {e}") from None
     if len(statements) != 1:

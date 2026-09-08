@@ -317,15 +317,20 @@ SELECT NR_CPF_CNPJ_DOADOR AS doador_id, {NOME_DOADOR_OU_ANONIMO} AS doador,
        ROUND(SUM(valor), 2) AS total,
        ROUND(SUM(valor) FILTER (WHERE {CONDICAO_DOACAO_DIRETA}), 2) AS doacao_direta
 FROM receitas_atual WHERE {w} GROUP BY 1, 2 ORDER BY total DESC LIMIT 12""",
+        # o anel só fecha com doação DIRETA a ESTE candidato (mesma regra da
+        # ficha do site: o repasse de plataforma não conta) — a versão anterior
+        # excluía quem doasse via plataforma a QUALQUER candidato
         "dinheiro_que_volta": f"""
 SELECT d.contraparte_id AS id, d.contraparte AS nome,
-       ROUND(d.valor, 2) AS recebeu_como_fornecedor, ROUND(o.valor, 2) AS doou_ao_candidato
-FROM rede d JOIN rede o
-  ON o.SQ_CANDIDATO = d.SQ_CANDIDATO AND o.contraparte_id = d.contraparte_id AND o.tipo = 'doacao'
+       ROUND(d.valor, 2) AS recebeu_como_fornecedor, ROUND(o.total, 2) AS doou_ao_candidato,
+       ROUND(o.direta, 2) AS doacao_direta
+FROM rede d JOIN (
+    SELECT SQ_CANDIDATO, NR_CPF_CNPJ_DOADOR AS contraparte_id, SUM(valor) AS total,
+           SUM(valor) FILTER (WHERE {CONDICAO_DOACAO_DIRETA}) AS direta
+    FROM receitas_atual GROUP BY 1, 2) o
+  ON o.SQ_CANDIDATO = d.SQ_CANDIDATO AND o.contraparte_id = d.contraparte_id
 WHERE d.tipo = 'despesa' AND d.{w} AND d.contraparte_id NOT IN ('-1', '#NULO')
-  AND d.contraparte_id NOT IN (
-    SELECT NR_CPF_CNPJ_DOADOR FROM receitas_atual
-    WHERE NOT ({CONDICAO_DOACAO_DIRETA}))
+  AND o.direta > 0
 ORDER BY recebeu_como_fornecedor DESC LIMIT 10""",
         "sinais": f"""
 WITH {sinais_cte()}
@@ -527,10 +532,13 @@ SELECT i.SQ_CANDIDATO AS sq_candidato, i.NM_CANDIDATO AS candidato, i.SG_PARTIDO
        i.SG_UF AS uf, i.DS_CARGO AS cargo,
        ROUND(i.valor_sem_nota, 2) AS valor_sem_nota, ROUND(i.pct_sem_nota, 1) AS pct_sem_nota,
        ROUND(i.total_contratado, 2) AS contratado,
-       b.p95 AS p95_do_grupo, b.SG_UF AS grupo_ambito
+       COALESCE(buf.p95, bbr.p95) AS p95_do_grupo,
+       CASE WHEN buf.p95 IS NOT NULL THEN i.SG_UF ELSE 'BR-TODAS' END AS grupo_ambito
 FROM indicadores i
-LEFT JOIN benchmark_indicadores b
-  ON b.DS_CARGO = i.DS_CARGO AND b.SG_UF = i.SG_UF AND b.metrica = 'pct_sem_nota'
+LEFT JOIN benchmark_indicadores buf
+  ON buf.DS_CARGO = i.DS_CARGO AND buf.SG_UF = i.SG_UF AND buf.metrica = 'pct_sem_nota'
+LEFT JOIN benchmark_indicadores bbr
+  ON bbr.DS_CARGO = i.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = 'pct_sem_nota'
 WHERE {w} AND i.valor_sem_nota > 0
 ORDER BY i.valor_sem_nota DESC LIMIT {int(limite)}"""
 
