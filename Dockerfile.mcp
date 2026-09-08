@@ -28,7 +28,7 @@ COPY site/src/lib/*.ts site/src/lib/
 COPY gastos.py .
 
 # imagem quebrada não sobe: gate, ferramentas contra o fixture E2E e protocolo
-RUN python -m pytest tests/test_mcp_gate.py tests/test_mcp_ferramentas.py \
+RUN python -m pytest tests/test_mcp_gate.py tests/test_mcp_ferramentas.py tests/test_mcp_api.py \
     tests/test_mcp_protocolo.py -q
 
 RUN useradd -m -u 10001 app && mkdir -p /app/data/mcp && chown -R app:app /app

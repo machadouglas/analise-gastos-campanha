@@ -74,7 +74,7 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar`; todas e
 ## Testes e verificação
 
 - `python -m pytest tests/` — cenários sintéticos do versionamento (removida/alterada/idempotência) + integridade do banco real + **E2E do pipeline** (`test_e2e_pipeline.py`: zip com CSV no formato do TSE → `carregar` → `versionar` → agregados → `verificar` → `exportar` → as consultas do console rodam sobre os parquets **pseudonimizados** — as duas emendas que nenhuma outra suíte cobre: o parse real do CSV e o consumo do dado mascarado) + **sincronia backend↔site** (`test_sincronia_site.py` lê `site/src/lib/consultas.ts`/`duckdb.ts` e falha se as regras espelhadas divergirem do Python) + **consultas prontas do console** (`test_consultas_do_site.py` executa cada SQL de `site/src/lib/exemplos.ts` contra o banco real, com as views que o release publica; exige que devolvam linhas, salvo os monitores declarados). Rode após mudar `src/` OU as regras/consultas do site.
-- `npm test` (em `site/`) — vitest em duas frentes, num comando só (ambiente jsdom global, setup em `site/src/test/setup.ts`): **funções puras** — construtores de SQL (`lib/consultas.ts`), detecção de gráfico (`lib/grafico-auto.ts`), formatação/mascaramento (`lib/format.ts`) — e **renderização das páginas** com @testing-library/react (`src/pages/*.test.tsx`), cobrindo os estados condicionais: lápide de CNPJ não encontrado (ficha do fornecedor e tabela do candidato, com a coluna oculta `_situacao` que nunca pode ser renderizada), seção de declarações removidas que some sem remoção e cartões da Home, colunas da visão "Quem mais gastou" do Explorar. As páginas são isoladas do DuckDB-WASM pelo dublê `src/test/duckdb-falso.ts` (`vi.mock('@/lib/duckdb', …)`, respostas por trecho do SQL) e da Home pelo mock de `lib/resumo`; o grafo de conexões (canvas) é substituído por um stub. Rode após mudar `site/src/lib/` ou `site/src/pages/`.
+- `npm test` (em `site/`) — vitest em duas frentes, num comando só (ambiente jsdom global, setup em `site/src/test/setup.ts`): **funções puras** — construtores de SQL (`lib/consultas.ts`), detecção de gráfico (`lib/grafico-auto.ts`), formatação/mascaramento (`lib/format.ts`) — e **renderização das páginas** com @testing-library/react (`src/pages/*.test.tsx`), cobrindo os estados condicionais: lápide de CNPJ não encontrado (ficha do fornecedor e tabela do candidato, com a coluna oculta `_situacao` que nunca pode ser renderizada), seção de declarações removidas que some sem remoção e cartões da Home, colunas da visão "Quem mais gastou" do Explorar. As páginas são isoladas da camada de dados pelo dublê `src/test/duckdb-falso.ts` (`vi.mock('@/lib/dados', …)` nas fichas/Explorar, `vi.mock('@/lib/duckdb', …)` no console; respostas por trecho do SQL) e da Home pelo mock de `lib/resumo`; o grafo de conexões (canvas) é substituído por um stub. `lib/dados.test.ts` cobre a escada API → WASM (5xx/rede/timeout caem e grudam; 400 propaga; sem `VITE_RADAR_API` é só WASM). Rode após mudar `site/src/lib/` ou `site/src/pages/`.
 - `python gastos.py verificar` — checagens de integridade (conversão de valores, datas dentro do ciclo eleitoral em despesas E receitas, reconciliação agregados×fonte, janelas coerentes, decomposição das linhas mortas). A `rotina` roda isso automaticamente e **não publica** se falhar. Há também **avisos** (`[verificacao] aviso`), que nunca barram: data posterior à própria extração (150 despesas e 32 receitas em 03/09/2026, uma em 24/11) é erro de quem declarou, e o dado é publicado como veio — barrar a série inteira por um typo alheio seria pior.
 - `python scripts/previa-local.py` — monta um banco a partir dos **Parquet já publicados**, roda o pipeline do código atual por cima (views + agregados + `verificar` + export) e entrega em `site/public/dados/`. É o único jeito de ver o efeito de uma mudança na base inteira antes de subir — bug de volume e de dado sujo não aparece em fixture. Também é o caminho curto para quem só quer mexer no site: dispensa `baixar` (200+ MB) e `carregar`. Sobrescreve `site/public/dados/` (gitignorado); `RADAR_SAL_CPF` pode ser qualquer valor, porque os CPFs publicados já vêm `pf-…` e a pseudonimização é idempotente sobre eles.
 
@@ -190,6 +190,23 @@ gráficos por página, declare `aberta` só no que é essencial) e zoom via
 (`docs/deploy-cloudflare.md`). Os dados chegam ao site via Pages Function `/dados/*` que faz
 proxy do GitHub Releases (sem CORS lá).
 
+**Onde a consulta roda** (`site/src/lib/dados.ts`): as fichas e o Explorar importam
+`executarSQL`/`obterConexao`/`tabelasDisponiveis` de `@/lib/dados` — mesma assinatura de
+`@/lib/duckdb`, mas o SQL vai primeiro para a API do servidor (`GET /api/v1/consulta`,
+`src/mcp/api.py`; base em `VITE_RADAR_API`, variável de build do Pages) num GET com a
+consulta comprimida (`q` = deflate-raw + base64url) e a versão do dado (`v` =
+`publicado_em` do `resumo.json`) na URL — a borda cacheia a resposta imutável e o visitante
+recebe ~10 KB em vez do motor (~10 MB) + pedaços dos Parquet. `tabelasDisponiveis` vem do
+mapa `arquivos` do resumo, sem bootar motor nenhum. Se a API não responde (rede, 5xx,
+timeout de 4 s, 404 de imagem antiga), a página importa o `duckdb.ts` sob demanda e roda o
+**mesmo texto de SQL** sobre os Parquet — o caminho de sempre, que não depende do host — e
+a contingência gruda por 5 min (faixa amarela no layout). 400 é erro da própria consulta e
+propaga (o Explorar tenta uma variante e recua no catch). Sem `VITE_RADAR_API` (fork,
+prévia local) tudo roda no WASM como antes. O console SQL livre NÃO passa por aí:
+`consultar.tsx` importa `@/lib/duckdb` direto — SQL livre roda no CPU de quem digita.
+Paridade por construção: um texto de consulta, dois executores; `tests/test_mcp_api.py`
+roda cada consulta de `exemplos.ts` pela rota e exige o resultado do cursor cru.
+
 ## Servidor MCP público (`src/mcp/`)
 
 Container Python (SDK oficial `mcp` 2.x, classe `MCPServer`; Streamable HTTP **stateless**, `json_response`; negocia a revisão 2026-07-28 e atende o `initialize` clássico)
@@ -222,6 +239,16 @@ md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
 - **Deploy**: `Dockerfile.mcp` (testes no build), aplicação separada no mesmo
   host da rotina, sem volume nem segredo, atrás de túnel — `docs/deploy-mcp.md`
   (genérico). Local: `python -m src.mcp.servidor` → `http://localhost:8000/mcp`.
+- **Rota do site** (`api.py`, `GET /api/v1/consulta?q|sql=…&v=…`): executa o SQL que as
+  páginas montam, na fila `site` (8 vagas, `MCP_MAX_SIMULTANEAS_SITE`; timeout de 5 s,
+  `MCP_TIMEOUT_SITE`; teto de 2.000 linhas/1 MB — a dispersão do Explorar pede 1.500),
+  com os mesmos guarda-corpos da `sql` e o resultado no formato do console (`colunas` +
+  `linhas` como listas). `Cache-Control` imutável de 1 dia **só** quando `v` bate com o
+  `publicado_em` do banco; senão `no-store` — e `v` mais novo que o banco dispara
+  `Servico.pedir_verificacao()` (debounce de 60 s), porque o site vê o release novo
+  antes do poll de 5 min. CORS `*` fixo (a borda ignora `Vary`). 400 = consulta errada
+  (gate, DuckDB), 503 = fila cheia (`Retry-After`), 504 = timeout — o site cai para o
+  WASM nos 5xx, nunca no 400. `tests/test_mcp_api.py`.
 - `tests/test_mcp_protocolo.py` fala com o app pelo cliente oficial do SDK
   (o `Client` 2.x negocia `LATEST_PROTOCOL_VERSION` via discover; o
   `ClientSession` clássico ainda inicializa; tools/list com `output_schema` e

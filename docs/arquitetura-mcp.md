@@ -29,6 +29,10 @@ Consequências:
   expõe CPF, porque o dado não está lá.
 - **Paridade com o site.** Mesmos arquivos, mesmas views, mesma régua de
   leitura. O que o console mostra, o MCP mostra.
+- **O site consulta este container, mas não depende dele** (§12, desde
+  06/09/2026): as fichas e o Explorar mandam o SQL para `GET /api/v1/consulta`
+  e caem para o DuckDB-WASM sobre o release se a rota não responder. O
+  release continua sendo o único dado; o container é um executor a mais.
 
 ## 2. Visão geral
 
@@ -338,7 +342,44 @@ tests/
    latência p95, taxa de 429 e de timeout. Decidir com dado se vale chave
    de API, mais ferramentas curadas, ou mudar de host.
 
-## 12. Decisões em aberto
+## 12. A rota do site (`/api/v1/consulta`)
+
+Adicionada em 06/09/2026, depois de medir: a ficha inteira (16 consultas)
+custa 55–65 ms no servidor e devolve 6–32 KB de JSON; no navegador custava o
+motor (~10 MB gzip, mais compilação) e leituras parciais de vários MB de
+Parquet. Em 2 vCPU o processo satura em ~45 páginas/s (p95 de 379 ms com 8
+simultâneos) — e isso **sem** cache, que é o ponto do desenho:
+
+- **O site manda o texto do SQL**, o mesmo que o DuckDB-WASM rodaria
+  (`site/src/lib/consultas.ts` e as páginas). Não há uma segunda camada de
+  contrato por página para manter em sincronia: um texto, dois executores, e
+  o fallback é paridade por construção. O custo é aceitar SQL arbitrário na
+  rota — exatamente o que a ferramenta `sql` já aceita, com os mesmos
+  guarda-corpos (§5), numa fila própria com timeout menor (5 s).
+- **GET, com a versão do dado na URL** (`v` = `publicado_em`), para a
+  Cloudflare cachear a resposta como imutável e servir os *hits* sem tocar no
+  host. Hostname próprio (`api.<domínio>`) em vez de Pages Function: uma
+  Function conta invocação mesmo respondendo do cache (100 mil/dia no plano
+  gratuito), e a rota do MCP tem rate limit de 60/min por IP, que um leitor
+  normal (15 GETs por ficha) estouraria.
+- **Contingência no cliente** (`site/src/lib/dados.ts`): 5xx, rede ou 4 s sem
+  resposta → importa o `duckdb.ts` sob demanda, roda o mesmo SQL e gruda por
+  5 min. 400 (SQL recusado, coluna ausente) propaga: é erro da consulta, e o
+  WASM daria o mesmo. O console SQL livre nunca passa pela rota — roda no CPU
+  de quem digita.
+- **Janela de versão**: o site vê o release novo antes deste processo (cache
+  de 5 min do `resumo.json` na borda + poll de 5 min aqui). Uma requisição
+  com `v` mais novo que o banco dispara verificação imediata (debounce de
+  60 s) e sai `no-store` — a borda nunca fixa a resposta velha na chave nova.
+- **O que isso muda no §1**: o site passa a depender do host no caminho
+  feliz, não na disponibilidade. Derrubar o container degrada para o que o
+  site era antes; nada some.
+
+O segundo ato, depois das prestações finais: o dado congela, o mesmo
+`consultas.py`/SQL das páginas roda uma vez como gerador de JSON estático, e o
+container pode ser desligado (site 100% estático, `consultas.ts` aposentado).
+
+## 13. Decisões em aberto
 
 - **Domínio**: dedicado ao MCP, na conta Cloudflare (registrado lá ou com
   os nameservers lá, para o túnel gerenciar o DNS).

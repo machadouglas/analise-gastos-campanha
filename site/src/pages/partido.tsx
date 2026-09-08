@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import { escSQL, JOIN_NOMES_URNA, nomeExibicao } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 

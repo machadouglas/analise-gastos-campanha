@@ -9,7 +9,7 @@ import { Tabela, CelulaNum, CelulaTexto } from '@/components/app/tabela';
 import { SecaoRecolhivel } from '@/components/app/recolhivel';
 import { BarrasHorizontais, LinhaTemporal, type ItemBarra, type PontoLinha } from '@/components/app/graficos';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import {
   CONDICAO_DOACAO_DIRETA,
   CONDICAO_DOCUMENTO_NUMERADO,

@@ -20,7 +20,7 @@ import {
 import { FluxoDinheiro, type NoFluxo } from '@/components/app/sankey';
 import { GrafoConexoes, type NoConexao, type NoSecundario } from '@/components/app/grafo';
 import { Ampliavel } from '@/components/app/ampliavel';
-import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/duckdb';
+import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import {
   CONDICAO_DOACAO_DIRETA, MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas,
   sqlNotasDoCandidato, JOIN_NOMES_URNA, nomeExibicao,

@@ -498,3 +498,19 @@ def test_busca_de_candidato_cobre_o_nome_de_urna_nos_dois_lados():
         corpo = re.search(rf"export function {fn}\(.*?\n}}", CONSULTAS_TS, re.DOTALL)
         assert corpo, f"{fn} não encontrada em consultas.ts"
         assert "condCandidato(" in corpo.group(), f"{fn} filtra nome sem passar por condCandidato"
+
+
+def test_view_nomes_urna_e_a_mesma_no_wasm_e_no_mcp():
+    """As páginas mandam para a rota do site (src/mcp/api.py) o mesmo SQL que
+    rodariam no navegador, e esse SQL faz LEFT JOIN nomes_urna: a view precisa
+    existir com a MESMA definição nos dois executores (duckdb.ts e dados.py)."""
+    from src.mcp import dados
+
+    def normalizar(sql: str) -> str:
+        return re.sub(r"\s+", " ", sql).strip()
+
+    cheia = normalizar(dados.VIEW_NOMES_URNA)
+    vazia = normalizar(dados.VIEW_NOMES_URNA_VAZIA)
+    wasm = normalizar(DUCKDB_TS)
+    assert cheia in wasm, f"duckdb.ts não define nomes_urna como o MCP: {cheia}"
+    assert vazia in wasm, f"duckdb.ts não define a nomes_urna vazia como o MCP: {vazia}"
