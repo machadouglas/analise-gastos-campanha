@@ -5,7 +5,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
-import { escSQL } from '@/lib/consultas';
+import { escSQL, JOIN_NOMES_URNA, nomeExibicao } from '@/lib/consultas';
 import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 /** Mínimo constitucional do FEFC para candidaturas femininas (EC 117/2022). */
@@ -95,9 +95,9 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
       ORDER BY "Total" DESC LIMIT 15`),
     executarSQL(`
       WITH r AS (SELECT SQ_CANDIDATO, ROUND(SUM(valor), 2) AS receitas FROM receitas_atual GROUP BY 1)
-      SELECT d.SQ_CANDIDATO, ANY_VALUE(d.NM_CANDIDATO), ANY_VALUE(d.DS_CARGO), ANY_VALUE(d.SG_UF),
+      SELECT d.SQ_CANDIDATO, ANY_VALUE(${nomeExibicao('d.')}), ANY_VALUE(d.DS_CARGO), ANY_VALUE(d.SG_UF),
              ROUND(SUM(d.valor), 2) AS contratado, ANY_VALUE(r.receitas)
-      FROM despesas_atual d LEFT JOIN r USING (SQ_CANDIDATO)
+      FROM despesas_atual d LEFT JOIN r USING (SQ_CANDIDATO) ${JOIN_NOMES_URNA}
       WHERE d.${w} GROUP BY 1 ORDER BY contratado DESC LIMIT 50`),
     // FEFC por gênero e cor — o MESMO SQL de sql_cota_por_partido em
     // src/resumo.py: a fatia das candidaturas vem do registro quando o partido

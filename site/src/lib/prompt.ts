@@ -35,7 +35,7 @@ TABELAS DISPONÍVEIS:
 
 5b. bens — patrimônio declarado no registro: SQ_CANDIDATO, DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, VR (DOUBLE, valor do bem)
 
-6. indicadores — scorecard pronto por candidato (1 linha cada): SQ_CANDIDATO, NM_CANDIDATO, NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens, total_receitas, total_pago, pct_pago, razao_gasto_receita, fundos_publicos, pct_fundos_publicos, recursos_proprios, total_bens (patrimônio declarado), pct_maior_fornecedor, n_fornecedores, fornecedores_cnpj, fornecedores_consultados, valor_sem_nota, pct_sem_nota, valor_pessoa_fisica, pct_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos
+6. indicadores — scorecard pronto por candidato (1 linha cada): SQ_CANDIDATO, NM_CANDIDATO, NM_URNA_CANDIDATO (nome de campanha, do registro; NULL se ausente), NR_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens, total_receitas, total_pago, pct_pago, razao_gasto_receita, fundos_publicos, pct_fundos_publicos, recursos_proprios, total_bens (patrimônio declarado), pct_maior_fornecedor, n_fornecedores, fornecedores_cnpj, fornecedores_consultados, valor_sem_nota, pct_sem_nota, valor_pessoa_fisica, pct_pessoa_fisica, grupos_valor_repetido, valor_removido, fornecedores_recem_abertos
 
 7. serie_diaria — total declarado por dia de extração × candidato: dt_extracao, SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, DS_CARGO, SG_UF, total_contratado, itens_despesa, total_receitas
 

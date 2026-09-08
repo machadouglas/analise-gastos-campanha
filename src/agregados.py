@@ -258,6 +258,15 @@ def _indicadores(con) -> None:
         else "LEFT JOIN (SELECT NULL AS SQ_CANDIDATO, CAST(NULL AS DOUBLE) AS total_pago) pagas USING (SQ_CANDIDATO)"
     )
 
+    # nome de urna, do registro: é como a campanha divulga e como o eleitor
+    # procura — a prestação só traz o civil. NULL sem o parquet/coluna.
+    urna = (
+        "LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO "
+        "FROM candidatos GROUP BY 1) urna USING (SQ_CANDIDATO)"
+        if _tem(con, "candidatos") and _tem_colunas(con, "candidatos", ("NM_URNA_CANDIDATO",))
+        else "LEFT JOIN (SELECT NULL AS SQ_CANDIDATO, CAST(NULL AS VARCHAR) AS NM_URNA_CANDIDATO) urna USING (SQ_CANDIDATO)"
+    )
+
     con.execute(f"""
         CREATE OR REPLACE TABLE indicadores AS
         WITH cand AS (
@@ -311,6 +320,7 @@ def _indicadores(con) -> None:
             SELECT SQ_CANDIDATO, ROUND(SUM({VALOR_DESPESA} * qt_linhas), 2) AS valor_removido
             FROM v_removidas_despesas_contratadas GROUP BY SQ_CANDIDATO)
         SELECT cand.*,
+               urna.NM_URNA_CANDIDATO,
                COALESCE(tot.total_contratado, 0) AS total_contratado,
                COALESCE(tot.itens, 0) AS itens,
                rec.total_receitas,
@@ -339,6 +349,7 @@ def _indicadores(con) -> None:
         LEFT JOIN pf USING (SQ_CANDIDATO)
         LEFT JOIN rep USING (SQ_CANDIDATO)
         LEFT JOIN removidas USING (SQ_CANDIDATO)
+        {urna}
         {pagas}
         {bens}
         {consultados}

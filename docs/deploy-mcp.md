@@ -143,9 +143,14 @@ o servidor só vê o *miss*.
    cache** (o padrão "standard" inclui — confira: sem a query na chave, todos
    os candidatos viram a mesma entrada). Sem essa regra a Cloudflare não
    cacheia JSON de rota dinâmica, e cada visita desce ao servidor.
-3. **Rate Limiting** próprio para `api.<domínio>`, mais folgado que o do MCP:
-   uma ficha dispara ~15 GETs e o Explorar ~8 — ex.: 300 requisições/min por
-   IP, Block por 1 min. A regra do MCP (60/min) bloquearia um leitor normal.
+3. **Rate Limiting**: o plano gratuito dá **uma** regra, e ela já é do MCP.
+   Confira que essa regra casa pelo **caminho** `/mcp*` (não pelo hostname):
+   assim ela não alcança `/api/v1/…`, e um leitor normal (uma ficha dispara
+   ~15 GETs) não é bloqueado por um limite de 60/min. A rota do site fica sem
+   limite por IP na borda — os guarda-corpos são os do processo (fila `site`
+   de 8 vagas, 5 s de timeout, teto de linhas) e o cache, que absorve as
+   repetições. Se um dia houver regra sobrando, o valor certo é ~300/min por
+   IP para `api.<domínio>`.
 4. **CORS**: a rota responde `Access-Control-Allow-Origin: *` (dado público,
    sem credencial; GET simples, sem preflight). Nada a configurar na borda.
 5. **Pages**: variável de build `VITE_RADAR_API = https://api.<domínio>` e um

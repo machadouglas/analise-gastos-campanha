@@ -13,10 +13,12 @@ ao cursor cru.
 
 import asyncio
 import base64
+import re
 import sys
 import zlib
 from pathlib import Path
 
+import duckdb
 import httpx2
 import pytest
 
@@ -187,6 +189,34 @@ def test_teto_de_linhas_do_site_cobre_a_dispersao_do_explorar(banco):
     assert len(r["linhas"]) == 1500 and r["truncado"] is False
     r = _rodar(_get({"sql": "SELECT range AS i FROM range(5000)"})).json()
     assert len(r["linhas"]) == 2000 and r["truncado"] is True
+
+
+def test_view_nomes_urna_existe_como_no_wasm(banco):
+    """As páginas fazem LEFT JOIN nomes_urna (JOIN_NOMES_URNA em consultas.ts)
+    — no navegador a view é criada por duckdb.ts; aqui, por dados.construir.
+    Sem ela toda ficha voltaria 400 com a API ligada."""
+    consultas_ts = (Path(__file__).parent.parent / "site/src/lib/consultas.ts").read_text(
+        encoding="utf-8")
+    join = re.search(r"JOIN_NOMES_URNA = '([^']+)'", consultas_ts).group(1)
+    r = _rodar(_get({"sql": f"SELECT i.SQ_CANDIDATO, n.NM_URNA_CANDIDATO FROM indicadores i {join} "
+                            "WHERE n.NM_URNA_CANDIDATO IS NOT NULL LIMIT 3"}))
+    assert r.status_code == 200, r.text
+    assert r.json()["linhas"], "o fixture tem registro com nome de urna; a view veio vazia"
+
+
+def test_view_nomes_urna_vazia_sem_o_parquet_de_candidatos(tmp_path):
+    con = duckdb.connect()
+    con.execute(f"COPY (SELECT '1' AS SQ_CANDIDATO, 1.0 AS total_contratado) "
+                f"TO '{(tmp_path / 'indicadores.parquet').as_posix()}' (FORMAT PARQUET)")
+    con.close()
+    b = dados.construir_de_diretorio(tmp_path, tmp_path / "radar.duckdb")
+    try:
+        assert b.cursor().execute("SELECT COUNT(*) FROM nomes_urna").fetchone()[0] == 0
+        assert b.cursor().execute(
+            "SELECT n.NM_URNA_CANDIDATO FROM indicadores i LEFT JOIN nomes_urna n USING (SQ_CANDIDATO)"
+        ).fetchall() == [(None,)]
+    finally:
+        b.fechar()
 
 
 @pytest.mark.parametrize("rotulo,consulta", _consultas(), ids=[r for r, _ in _consultas()])

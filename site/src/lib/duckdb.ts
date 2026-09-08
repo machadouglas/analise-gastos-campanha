@@ -209,6 +209,21 @@ async function iniciar(): Promise<duckdb.AsyncDuckDBConnection> {
       // nem o parquet dedicado nem o histórico publicados — a página degrada
     }
   }
+  // Nome de urna por candidato, para o COALESCE de exibição das páginas
+  // (NOME_EXIBICAO em consultas.ts): a prestação só traz o nome civil. Sem o
+  // parquet de candidatos a view existe vazia — os JOINs degradam para o civil
+  // em vez de quebrar a consulta.
+  const vazia = `SELECT NULL::VARCHAR AS SQ_CANDIDATO, NULL::VARCHAR AS NM_URNA_CANDIDATO WHERE false`;
+  try {
+    await con.query(`CREATE OR REPLACE VIEW nomes_urna AS ${
+      tabelasDisponiveis.has('candidatos')
+        ? `SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO
+           FROM candidatos GROUP BY 1`
+        : vazia
+    }`);
+  } catch {
+    await con.query(`CREATE OR REPLACE VIEW nomes_urna AS ${vazia}`);
+  }
   return con;
 }
 

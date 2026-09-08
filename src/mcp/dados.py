@@ -2,9 +2,12 @@
 só para leitura, e um laço em segundo plano troca o banco inteiro (de forma
 atômica) quando o release muda.
 
-Não há recomputação de agregados nem view própria: cada parquet vira a tabela
-de mesmo nome, exatamente como o site os consome. A régua de remoção,
-retificação, sinais e pseudonimização é a do pipeline (src/), publicada pronta.
+Não há recomputação de agregados: cada parquet vira a tabela de mesmo nome,
+exatamente como o site os consome. A régua de remoção, retificação, sinais e
+pseudonimização é a do pipeline (src/), publicada pronta. A única view é
+`nomes_urna`, espelho da que o site cria no DuckDB-WASM (site/src/lib/
+duckdb.ts): as páginas mandam para a rota do site (api.py) o mesmo SQL que
+rodariam no navegador, e esse SQL faz `LEFT JOIN nomes_urna`.
 """
 
 from __future__ import annotations
@@ -31,6 +34,18 @@ log = logging.getLogger("radar.mcp")
 
 NOME_TABELA = re.compile(r"^[a-z][a-z0-9_]*$")
 NOME_PARQUET = re.compile(r"^[a-z][a-z0-9_]*\.parquet$")
+
+# Nome de urna por candidato (NOME_EXIBICAO/JOIN_NOMES_URNA em consultas.ts):
+# a prestação só traz o nome civil. Sem o parquet de candidatos a view existe
+# vazia — os JOINs degradam para o civil em vez de quebrar a consulta. Mesma
+# definição de site/src/lib/duckdb.ts (tests/test_sincronia_site.py confere).
+VIEW_NOMES_URNA = (
+    "SELECT SQ_CANDIDATO, ANY_VALUE(NULLIF(NM_URNA_CANDIDATO, '#NULO')) AS NM_URNA_CANDIDATO"
+    " FROM candidatos GROUP BY 1"
+)
+VIEW_NOMES_URNA_VAZIA = (
+    "SELECT NULL::VARCHAR AS SQ_CANDIDATO, NULL::VARCHAR AS NM_URNA_CANDIDATO WHERE false"
+)
 
 # Configuração da conexão de leitura: sem acesso externo (read_csv/httpfs/glob/
 # getenv fora), memória e threads limitadas, e tudo travado — uma consulta não
@@ -100,6 +115,11 @@ def construir(parquets: dict[str, Path], resumo: dict, destino: Path) -> Banco:
                 f'CREATE TABLE "{nome}" AS SELECT * FROM read_parquet(?)', [caminho.as_posix()]
             )
             tabelas.append(nome)
+        try:
+            con.execute(f"CREATE OR REPLACE VIEW nomes_urna AS {VIEW_NOMES_URNA}")
+            con.execute("SELECT * FROM nomes_urna LIMIT 0")  # parquet antigo sem a coluna
+        except duckdb.Error:
+            con.execute(f"CREATE OR REPLACE VIEW nomes_urna AS {VIEW_NOMES_URNA_VAZIA}")
         con.execute("CHECKPOINT")
     finally:
         con.close()
