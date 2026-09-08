@@ -34,7 +34,8 @@ python gastos.py analisar --numero 12345 --numero 678 --uf XX --saida relatorios
 # 5. Consultas SQL livres sobre o banco
 python gastos.py sql "SELECT DS_CARGO, SUM(VR) FROM v_despesas GROUP BY 1 ORDER BY 2 DESC"
 
-# 6. Enriquecer fornecedores com dados da Receita Federal (data de abertura, sócios, CNAE)
+# 6. Consultar na Receita Federal os fornecedores de um candidato (data de abertura, sócios, CNAE) — só imprime;
+#    a tabela `fornecedores` que alimenta o indicador de CNPJ recém-aberto é preenchida pela `rotina`
 python gastos.py enriquecer --numero 12345 --uf XX
 
 # 7. Ver o que foi removido/alterado nas declarações entre extrações

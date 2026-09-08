@@ -790,7 +790,7 @@ export function Explorar() {
             ) : (
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
-              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Sinais', 'Neste sinal', 'Neste tipo de gasto', 'p95 do grupo', 'Itens', 'Fornecedores'].includes(c),
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Neste tipo de gasto', 'p95 do grupo', 'Itens', 'Fornecedores'].includes(c),
             }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
@@ -807,14 +807,13 @@ export function Explorar() {
                       return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Arrecadado')
                       return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
-                    if (col === 'Neste sinal' || col === 'Neste tipo de gasto' || col === 'p95 do grupo') {
-                      const fmt = sinal ? metrica(sinal).formatar : (n: number) => brl.format(n);
-                      return <CelulaNum key={j}>{v == null ? '—' : fmt(Number(v))}</CelulaNum>;
-                    }
-                    if (col === 'Candidatos' || col === 'Partidos' || col === 'Sinais'
-                        || col === 'Itens' || col === 'Fornecedores')
+                    // as duas colunas são totais em R$ da tabela por categoria; `sinal`
+                    // pode estar na URL junto de `categoria` (o SQL o ignora nesse caso)
+                    if (col === 'Neste tipo de gasto' || col === 'p95 do grupo')
+                      return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
+                    if (col === 'Candidatos' || col === 'Partidos' || col === 'Itens' || col === 'Fornecedores')
                       return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
-                    if (col === 'Descrição' || col === 'Acima do típico do grupo em')
+                    if (col === 'Descrição')
                       return <CelulaTexto key={j}>{celula(v)}</CelulaTexto>;
                     if (col === 'CNPJ/CPF')
                       return <td key={j} className="whitespace-nowrap text-muted-foreground">{cnpjCpf(celula(v))}</td>;

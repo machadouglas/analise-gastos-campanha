@@ -419,7 +419,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
   // na Metodologia como duas réguas que não se misturam
   if (razao > MARGEM_GASTO_ACIMA) flags.push(metrica('razao_gasto_receita').frase(razao));
   if (Number(linha.pct_maior_fornecedor ?? 0) >= 50 && Number(linha.n_fornecedores) > 1)
-    flags.push(`${linha.pct_maior_fornecedor}% do gasto em um único fornecedor`);
+    flags.push(`${metrica('pct_maior_fornecedor').formatar(Number(linha.pct_maior_fornecedor))} do gasto em um único fornecedor`);
   if (Number(linha.valor_sem_nota ?? 0) > 0)
     flags.push(`${brl.format(Number(linha.valor_sem_nota))} sem documento fiscal`);
   if (Number(linha.valor_pessoa_fisica ?? 0) > 0)

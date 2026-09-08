@@ -23,10 +23,14 @@ VARIAVEL = "RADAR_SAL_CPF"
 # NR_DOCUMENTO/NR_DOCUMENTO_DOACAO entram porque o TSE grava ali o PRÓPRIO CPF
 # da contraparte em centenas de linhas (medido em 01/09/2026: 245 recibos de
 # doação e 213 documentos de despesa idênticos ao CPF já mascarado na coluna ao
-# lado) — e NM_* porque há linhas com o CPF digitado no campo de nome. Como o
-# mascaramento só toca valores de EXATAMENTE 11 dígitos, nomes e números de
-# nota legítimos passam intactos.
-_PADRAO_COLUNA_CPF = re.compile(r"CPF|contraparte_id|^NR_DOCUMENTO|^NM_", re.IGNORECASE)
+# lado) — e NM_* porque há linhas com o CPF digitado no campo de nome (medido
+# em 08/09/2026: 3 linhas reais com NM_DOADOR/NM_DOADOR_ORIGINARIO iguais ao
+# CPF). As colunas DERIVADAS de nome (`contraparte` da rede, `nome_contraparte`
+# das alteradas, os aliases `fornecedor`/`doador` do resumo) herdam esse valor
+# e entram pelo mesmo motivo. Como o mascaramento só toca valores de
+# EXATAMENTE 11 dígitos, nomes e números de nota legítimos passam intactos.
+_PADRAO_COLUNA_CPF = re.compile(
+    r"CPF|contraparte|^NR_DOCUMENTO|^NM_|^nome_|^fornecedor$|^doador$", re.IGNORECASE)
 
 # colunas pessoais do consulta_cand que nada no projeto usa — não se publica
 COLUNAS_DESCARTADAS = {"DS_EMAIL", "NR_TITULO_ELEITORAL_CANDIDATO"}

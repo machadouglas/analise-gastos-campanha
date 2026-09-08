@@ -235,3 +235,18 @@ def test_fora_da_curva_nao_dispara_por_arrecadar_muito(banco):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_cpf_digitado_no_nome_nao_sai_no_resumo(banco):
+    """Há linhas reais com o CPF no campo de nome; o resumo.json publica nomes
+    de fornecedor/doador e por isso passa pelo mesmo pseudônimo pf-…"""
+    from tests.conftest import inserir_receita
+    cpf = "12345678901"
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "9", "DS_DESPESA": "X", "VR_DESPESA_CONTRATADA": "10,00",
+         "NM_FORNECEDOR": cpf, "NM_FORNECEDOR_RFB": "#NULO", "NR_CPF_CNPJ_FORNECEDOR": cpf}])
+    inserir_receita(banco, NM_DOADOR=cpf, NR_CPF_CNPJ_DOADOR=cpf, VR_RECEITA="10,00")
+    extrair_dia(banco, "21/08/2026")   # a receita some -> removidas
+    texto = json.dumps(resumo.gerar(banco), ensure_ascii=False)
+    assert cpf not in texto
+    assert not __import__("re").search(r"(?<!\d)\d{11}(?!\d)", texto)

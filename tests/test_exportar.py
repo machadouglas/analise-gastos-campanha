@@ -136,3 +136,14 @@ def test_alteradas_tem_uma_linha_por_declaracao_e_conta_a_ambiguidade(banco, tmp
     assert len(linhas) == 1, "uma linha por declaração morta, não por combinação"
     # o representante é o de valor mais próximo — determinístico entre publicações
     assert linhas == [(pytest.approx(100.0), pytest.approx(300.0), 2)]
+
+
+def test_colunas_derivadas_de_nome_sao_sensiveis():
+    """rede.contraparte, nome_contraparte das alteradas e os aliases do resumo
+    herdam o campo de nome — que às vezes traz o CPF digitado."""
+    from src import privacidade
+    for c in ("contraparte", "contraparte_id", "nome_contraparte", "fornecedor", "doador",
+              "NM_DOADOR", "NR_DOCUMENTO_DOACAO", "NR_CPF_CNPJ_FORNECEDOR"):
+        assert privacidade.coluna_sensivel(c), c
+    for c in ("DS_DESPESA", "valor", "fornecedores_cnpj", "SQ_CANDIDATO", "hash_linha"):
+        assert not privacidade.coluna_sensivel(c), c

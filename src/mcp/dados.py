@@ -62,12 +62,6 @@ class Banco:
         v = self.resumo.get("publicado_em")
         return str(v) if v else None
 
-    @property
-    def versao_pipeline(self) -> str | None:
-        """stamp_codigo do pipeline que gerou o dado (quando o resumo o traz)."""
-        v = self.resumo.get("versao_codigo")
-        return str(v) if v else None
-
     def cursor(self) -> duckdb.DuckDBPyConnection:
         return self.con.cursor()
 
@@ -85,8 +79,11 @@ def assinatura(arquivos: dict[str, str]) -> str:
     return h.hexdigest()[:12]
 
 
-def construir(parquets: dict[str, Path], resumo: dict, destino: Path) -> Banco:
-    """Cria o arquivo DuckDB com uma tabela por parquet e o reabre só leitura."""
+def construir(parquets: dict[str, Path], resumo: dict, destino: Path,
+              arquivos: dict[str, str] | None = None) -> Banco:
+    """Cria o arquivo DuckDB com uma tabela por parquet e o reabre só leitura.
+    `arquivos` é a assinatura do que foi DE FATO carregado (md5 medido); sem
+    ela, vale o mapa do resumo."""
     if destino.exists():
         destino.unlink()
     destino.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +101,8 @@ def construir(parquets: dict[str, Path], resumo: dict, destino: Path) -> Banco:
     finally:
         con.close()
     leitura = duckdb.connect(str(destino), read_only=True, config=CONFIG_LEITURA)
-    arquivos = {k: v for k, v in (resumo.get("arquivos") or {}).items()}
+    if arquivos is None:
+        arquivos = {k: v for k, v in (resumo.get("arquivos") or {}).items()}
     return Banco(caminho=destino, resumo=resumo, arquivos=arquivos, tabelas=tabelas, con=leitura)
 
 
@@ -129,9 +127,11 @@ def _nomes_parquet(resumo: dict) -> list[str]:
                   | set(exportar.EXPORTS_REMOVIDAS) | set(exportar.EXPORTS_ALTERADAS))
 
 
-def baixar_e_construir(dir_cache: Path, base: str | None = None,
-                       resumo: dict | None = None) -> Banco:
-    """Baixa o que mudou (md5 do resumo × cache local) e monta o banco."""
+def baixar_parquets(dir_cache: Path, base: str | None = None,
+                    resumo: dict | None = None) -> tuple[dict, dict[str, Path], dict[str, str]]:
+    """Baixa o que mudou (md5 do resumo × cache local). Devolve o resumo, os
+    parquets prontos para virar tabela e a assinatura do que DE FATO entrou
+    (md5 medido, arquivo por arquivo)."""
     resumo = resumo or publicado.baixar_resumo(base)
     esperados = resumo.get("arquivos") or {}
     dir_cache.mkdir(parents=True, exist_ok=True)
@@ -157,8 +157,28 @@ def baixar_e_construir(dir_cache: Path, base: str | None = None,
             if md5_esperado and publicado.md5(alvo) != md5_esperado:
                 log.warning("md5 de %s não bate com o resumo.json — usando assim mesmo", nome)
         parquets[alvo.stem] = alvo
-    destino = dir_cache / f"radar-{assinatura(esperados) if esperados else int(time.time())}.duckdb"
-    return construir(parquets, resumo, destino)
+    # a assinatura do banco é o md5 MEDIDO do que entrou: parquet que faltou,
+    # ficou na versão anterior ou veio diferente do resumo deixa a assinatura
+    # diferente do release, e o próximo poll tenta baixar de novo (antes, o
+    # md5 esperado era registrado mesmo sem o arquivo, e a tabela ficava
+    # ausente até o release seguinte — medido em 08/09/2026)
+    carregados = {alvo.name: publicado.md5(alvo) for alvo in parquets.values()}
+    return resumo, parquets, carregados
+
+
+def construir_novo(dir_cache: Path, resumo: dict, parquets: dict[str, Path],
+                   carregados: dict[str, str]) -> Banco:
+    # sufixo único: o release pode voltar a uma assinatura anterior enquanto o
+    # banco antigo (mesmo caminho) ainda está aberto na carência
+    destino = dir_cache / f"radar-{assinatura(carregados)}-{time.time_ns()}.duckdb"
+    return construir(parquets, resumo, destino, carregados)
+
+
+def baixar_e_construir(dir_cache: Path, base: str | None = None,
+                       resumo: dict | None = None) -> Banco:
+    """Baixa o que mudou e monta o banco (boot)."""
+    resumo, parquets, carregados = baixar_parquets(dir_cache, base, resumo)
+    return construir_novo(dir_cache, resumo, parquets, carregados)
 
 
 class Servico:
@@ -178,7 +198,6 @@ class Servico:
         self.banco: Banco | None = None
         self._parar = threading.Event()
         self._thread: threading.Thread | None = None
-        self.ultima_verificacao: float | None = None
 
     def iniciar(self) -> None:
         self.banco = baixar_e_construir(self.dir_cache, self.base)
@@ -196,12 +215,16 @@ class Servico:
 
     def verificar(self) -> bool:
         """Uma rodada: True se trocou de banco."""
-        self.ultima_verificacao = time.time()
         resumo = publicado.baixar_resumo(self.base)
         novos = resumo.get("arquivos") or {}
         if self.banco and novos and novos == self.banco.arquivos:
             return False
-        novo = baixar_e_construir(self.dir_cache, self.base, resumo)
+        resumo, parquets, carregados = baixar_parquets(self.dir_cache, self.base, resumo)
+        if self.banco and carregados == self.banco.arquivos:
+            # release incompleto (parquet ainda 404) ou antigo sem `arquivos`:
+            # nada novo chegou de fato, o banco atual continua
+            return False
+        novo = construir_novo(self.dir_cache, resumo, parquets, carregados)
         antigo, self.banco = self.banco, novo
         log.info("banco trocado: dado de %s (%s)", novo.versao_dado, novo.caminho.name)
         if antigo:
@@ -266,6 +289,11 @@ def expressao_limitada(coluna: str, tipo: str) -> str:
     (cortar uma lista pela metade mudaria o significado)."""
     q = '"' + coluna.replace('"', '""') + '"'
     tipo = tipo.strip().upper()
+    if tipo == "TIMESTAMP WITH TIME ZONE":
+        # antes da regex de compactos, que o engloba: a conversão para Python
+        # exige pytz (que não é dependência); como texto o valor chega inteiro,
+        # com o offset — `SELECT now()` falhava
+        return f"CAST({q} AS VARCHAR) AS {q}"
     if _TIPOS_COMPACTOS.match(tipo):
         return q
     if tipo == "VARCHAR":
@@ -308,7 +336,12 @@ def json_seguro(v: Any) -> Any:
         return [json_seguro(x) for x in v]
     if isinstance(v, dict):
         return {str(k): json_seguro(x) for k, x in v.items()}
-    return v
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    # time, timedelta (INTERVAL), UUID e o que mais o DuckDB devolver como
+    # objeto: texto, nunca TypeError no json.dumps (medido em 08/09/2026:
+    # `SELECT current_time`, `INTERVAL 1 DAY` e `uuid()` derrubavam a consulta)
+    return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
 
 class Executor:

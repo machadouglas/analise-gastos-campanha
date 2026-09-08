@@ -123,7 +123,7 @@ def test_remocoes_e_correcoes_sao_as_do_backend(banco):
     mesmas que o E2E confere direto no export."""
     r = _rodar(servidor.declaracoes_removidas())
     assert [d["descricao"] for d in r["declaracoes"]] == ["CARRO DE SOM QUE SOME"]
-    assert r["valor_total"] > 0
+    assert r["valor_listado"] > 0
     sq = r["declaracoes"][0]["sq_candidato"]
     f = _rodar(servidor.ficha_candidato(sq))
     assert [d["descricao"] for d in f["declaracoes_removidas"]] == ["CARRO DE SOM QUE SOME"]

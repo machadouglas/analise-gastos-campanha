@@ -194,6 +194,11 @@ def _serie_nacional(con) -> list[dict]:
 def gerar(con) -> dict:
     # o resumo.json é público como os parquet: CPFs saem pseudonimizados (pf-…)
     pseudo_fornecedor = privacidade.sql_pseudonimo("NR_CPF_CNPJ_FORNECEDOR", privacidade.sal())
+    # o campo de NOME também pode trazer o CPF digitado (há linhas reais assim):
+    # o nome publicado passa pelo mesmo pseudônimo — só valor de 11 dígitos muda
+    nome_fornecedor = privacidade.sql_pseudonimo(
+        "COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR)", privacidade.sal())
+    nome_doador = privacidade.sql_pseudonimo("NM_DOADOR", privacidade.sal())
     dt_extracao, dt_inicio = con.execute(
         "SELECT MAX(dt_ultima_extracao), MIN(dt_primeira_extracao) FROM hist_despesas_contratadas"
     ).fetchone()
@@ -235,12 +240,14 @@ def gerar(con) -> dict:
     )
     pseudo_fornecedor_h = privacidade.sql_pseudonimo(
         "h.NR_CPF_CNPJ_FORNECEDOR", privacidade.sal())
+    nome_fornecedor_h = privacidade.sql_pseudonimo(
+        "COALESCE(NULLIF(h.NM_FORNECEDOR_RFB,'#NULO'), h.NM_FORNECEDOR)", privacidade.sal())
     novas = _registros(con, f"""
         WITH estreia AS (
             SELECT {chave_essencia}, MIN(dt_primeira_extracao) AS dt
             FROM hist_despesas_contratadas GROUP BY ALL)
         SELECT h.SQ_CANDIDATO, h.NM_CANDIDATO, h.SG_PARTIDO, h.DS_CARGO, h.SG_UF,
-               COALESCE(NULLIF(h.NM_FORNECEDOR_RFB,'#NULO'), h.NM_FORNECEDOR) AS fornecedor,
+               {nome_fornecedor_h} AS fornecedor,
                {pseudo_fornecedor_h} AS NR_CPF_CNPJ_FORNECEDOR,
                h.DS_ORIGEM_DESPESA, h.DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(h.VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * h.qt_linhas, 2) AS valor,
@@ -255,7 +262,7 @@ def gerar(con) -> dict:
 
     removidas = _registros(con, f"""
         SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF,
-               COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
+               {nome_fornecedor} AS fornecedor,
                {pseudo_fornecedor} AS NR_CPF_CNPJ_FORNECEDOR,
                DS_DESPESA,
                ROUND(TRY_CAST(REPLACE(VR_DESPESA_CONTRATADA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
@@ -264,8 +271,8 @@ def gerar(con) -> dict:
         ORDER BY valor DESC LIMIT 20
     """)
 
-    removidas_receitas = _registros(con, """
-        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF, NM_DOADOR, DS_ORIGEM_RECEITA,
+    removidas_receitas = _registros(con, f"""
+        SELECT SQ_CANDIDATO, NM_CANDIDATO, SG_PARTIDO, SG_UF, {nome_doador} AS NM_DOADOR, DS_ORIGEM_RECEITA,
                ROUND(TRY_CAST(REPLACE(VR_RECEITA,',','.') AS DOUBLE) * qt_linhas, 2) AS valor,
                dt_primeira_extracao, dt_ultima_extracao
         FROM v_removidas_receitas
@@ -273,7 +280,7 @@ def gerar(con) -> dict:
     """)
 
     compartilhados = _registros(con, f"""
-        SELECT COALESCE(NULLIF(NM_FORNECEDOR_RFB,'#NULO'), NM_FORNECEDOR) AS fornecedor,
+        SELECT {nome_fornecedor} AS fornecedor,
                {pseudo_fornecedor} AS cnpj,
                COUNT(DISTINCT SQ_CANDIDATO) AS candidatos,
                COUNT(DISTINCT SG_PARTIDO) AS partidos,
