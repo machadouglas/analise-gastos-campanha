@@ -277,7 +277,7 @@ def test_notas_fora_do_preco_compara_nota_contra_nota(tmp_path):
              "#NULO", "11222333000144", "Publicidade", "PANFLETO", "Nota Fiscal",
              "10", "15/08/2026", None)
     # uma nota fatiada em 5 itens de 300 (total 1500) e uma nota inteira de 400
-    for i in range(5):
+    for _ in range(5):
         con.execute("INSERT INTO despesas_atual VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [*linha[:5], "nota-fatiada", *linha[6:14], 300.0])
     con.execute("INSERT INTO despesas_atual VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -290,9 +290,9 @@ def test_notas_fora_do_preco_compara_nota_contra_nota(tmp_path):
     achado = con.execute(sql_).fetchall()
     colunas = [d[0] for d in con.description]
     con.close()
-    linhas = [dict(zip(colunas, l, strict=True)) for l in achado]
+    linhas = [dict(zip(colunas, linha, strict=True)) for linha in achado]
     # a nota fatiada (5 × 300 = 1500) passa do p95; nenhum item de 300 passaria
-    assert [(l["valor"], l["itens"]) for l in linhas] == [(1500.0, 5)]
+    assert [(x["valor"], x["itens"]) for x in linhas] == [(1500.0, 5)]
     assert linhas[0]["vezes_o_p95"] == 3.0
 
 
