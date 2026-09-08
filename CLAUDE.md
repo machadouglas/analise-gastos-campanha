@@ -197,7 +197,11 @@ proxy do GitHub Releases (sem CORS lá).
 consulta comprimida (`q` = deflate-raw + base64url) e a versão do dado (`v` =
 `publicado_em` do `resumo.json`) na URL — a borda cacheia a resposta imutável e o visitante
 recebe ~10 KB em vez do motor (~10 MB) + pedaços dos Parquet. `tabelasDisponiveis` vem do
-mapa `arquivos` do resumo, sem bootar motor nenhum. Se a API não responde (rede, 5xx,
+mapa `arquivos` do resumo, sem bootar motor nenhum — do `resumo.json` pela Function
+(`carregarResumo` tenta duas vezes: o GitHub por trás dela responde 429 em hora de pico)
+ou, se ela falhar, de `GET /api/v1/resumo` no servidor; a Function guarda uma cópia de
+reserva de 7 dias de cada arquivo completo e a serve quando o GitHub falha. O hostname da
+API tem de estar no `connect-src` da CSP (`site/public/_headers`). Se a API não responde (rede, 5xx,
 timeout de 4 s, 404 de imagem antiga), a página importa o `duckdb.ts` sob demanda e roda o
 **mesmo texto de SQL** sobre os Parquet — o caminho de sempre, que não depende do host — e
 a contingência gruda por 5 min (faixa amarela no layout). 400 é erro da própria consulta e

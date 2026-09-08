@@ -14,6 +14,9 @@ imutável e a Cloudflare a serve sem tocar neste processo — no pico, o servido
 só vê o *miss*. A consulta viaja comprimida (`q` = deflate-raw + base64url) ou
 crua (`sql`); ver `viaApi` em site/src/lib/dados.ts.
 
+`GET /api/v1/resumo` entrega a versão do dado e o mapa de arquivos quando a
+Pages Function `/dados/resumo.json` (GitHub por trás) não responde.
+
 Guarda-corpos: os mesmos da ferramenta `sql` (parser do DuckDB, conexão só
 leitura, timeout por interrupt, teto de linhas/bytes/célula), numa fila
 própria (`site`) com timeout menor. Não há autenticação nem sessão: é o mesmo
@@ -152,4 +155,24 @@ def criar_rotas(obter_executor: Callable[[], dados.Executor],
         }
         return JSONResponse(corpo, headers=cabecalhos_de_cache(versao_pedida, versao_banco))
 
-    return [Route("/api/v1/consulta", consulta, methods=["GET"])]
+    async def resumo(_: Request) -> JSONResponse:
+        """A versão do dado e o mapa `arquivos` (md5 por parquet) que o site
+        precisa antes da primeira consulta. O site tenta primeiro o
+        `/dados/resumo.json` da Pages Function (que vem do GitHub e toma 429
+        nos horários de pico); quando ela falha, lê daqui — assim as fichas
+        não dependem do GitHub em nada. Cache curto: muda uma vez por dia,
+        mas a chave da URL não muda."""
+        try:
+            banco = obter_executor().banco
+        except Exception:  # noqa: BLE001
+            return _erro(503, "o servidor ainda está carregando os dados", {"Retry-After": "10"})
+        r = banco.resumo
+        return JSONResponse(
+            {"gerado_em": r.get("gerado_em"), "publicado_em": banco.publicado_em,
+             "versao_codigo": versao_codigo(), "arquivos": banco.arquivos},
+            headers={"Cache-Control": "public, max-age=300", **CORS,
+                     **({CABECALHO_VERSAO: banco.publicado_em} if banco.publicado_em else {})},
+        )
+
+    return [Route("/api/v1/consulta", consulta, methods=["GET"]),
+            Route("/api/v1/resumo", resumo, methods=["GET"])]

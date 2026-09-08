@@ -41,6 +41,7 @@ async function carregar(api = 'https://api.teste') {
 
 beforeEach(() => {
   wasm.executarSQL.mockReset();
+  wasm.obterConexao.mockClear();
   wasm.executarSQL.mockResolvedValue({ colunas: ['w'], linhas: [['wasm']], total: 1, ms: 0 });
   wasm.tabelasDisponiveis.clear();
   wasm.tabelasDisponiveis.add('indicadores');
@@ -149,9 +150,33 @@ describe('com a API configurada', () => {
     expect(dados.estadoAtual()).toBe('api');
   });
 
-  it('resumo sem o mapa de arquivos cai para o WASM (não dá para saber o que existe)', async () => {
+  it('resumo.json indisponível (429 no GitHub): lê a versão e o mapa da API e segue sem WASM', async () => {
+    resumo.carregarResumo.mockResolvedValue(null);
+    const fetchFalso = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/api/v1/resumo')) {
+        return respostaApi({
+          gerado_em: '2026-09-07',
+          publicado_em: '20260908T100039Z',
+          arquivos: { 'indicadores.parquet': 'x', 'rede.parquet': 'y', 'resumo.json': 'z' },
+        });
+      }
+      return respostaApi({ colunas: ['a'], linhas: [[1]] });
+    });
+    vi.stubGlobal('fetch', fetchFalso);
+    const dados = await carregar();
+
+    const r = await dados.executarSQL('SELECT 1');
+    expect(r.linhas).toEqual([[1]]);
+    expect(dados.estadoAtual()).toBe('api');
+    expect([...dados.tabelasDisponiveis].sort()).toEqual(['indicadores', 'rede']);
+    const consulta = new URL(String(fetchFalso.mock.calls[1][0]));
+    expect(consulta.searchParams.get('v')).toBe('20260908T100039Z');
+    expect(wasm.obterConexao).not.toHaveBeenCalled();
+  });
+
+  it('sem resumo.json E sem /api/v1/resumo cai para o WASM (não dá para saber o que existe)', async () => {
     resumo.carregarResumo.mockResolvedValue({ gerado_em: '2026-09-06' });
-    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })));
     const dados = await carregar();
     await dados.obterConexao();
     expect(dados.estadoAtual()).toBe('contingencia');

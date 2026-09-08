@@ -13,7 +13,13 @@ O diretório `site/` é uma SPA (Vite + React + Tailwind v4):
 Uma *Pages Function* (`site/functions/dados/`) faz proxy dos arquivos do GitHub Releases na
 mesma origem — necessário porque o GitHub não envia CORS nos assets de release. É por ela
 que a Home, o console e o fallback das fichas leem o dado; sem `VITE_RADAR_API` o site
-inteiro funciona só com ela, sem servidor próprio.
+inteiro funciona só com ela, sem servidor próprio. O GitHub responde **429** em hora de
+pico (limite por IP, e os IPs de saída dos Workers são compartilhados): a Function guarda
+uma **cópia de reserva** de cada arquivo completo por 7 dias e a serve (marcada com
+`X-Radar-Copia`) quando o upstream falha; o site ainda tenta o `resumo.json` duas vezes
+e, com a API configurada, lê a versão do dado de `/api/v1/resumo` se a Function não
+responder. Leituras parciais (`Range`, as do DuckDB-WASM) não têm reserva: 206 não é
+cacheável.
 
 ## Publicando
 

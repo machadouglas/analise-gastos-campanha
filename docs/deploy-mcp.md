@@ -151,8 +151,11 @@ o servidor só vê o *miss*.
    de 8 vagas, 5 s de timeout, teto de linhas) e o cache, que absorve as
    repetições. Se um dia houver regra sobrando, o valor certo é ~300/min por
    IP para `api.<domínio>`.
-4. **CORS**: a rota responde `Access-Control-Allow-Origin: *` (dado público,
-   sem credencial; GET simples, sem preflight). Nada a configurar na borda.
+4. **CORS e CSP**: a rota responde `Access-Control-Allow-Origin: *` (dado
+   público, sem credencial; GET simples, sem preflight). Nada a configurar na
+   borda — mas o hostname da API precisa estar no `connect-src` da
+   Content-Security-Policy do site (`site/public/_headers`), senão o
+   navegador bloqueia o `fetch` em silêncio e o site cai para o WASM.
 5. **Pages**: variável de build `VITE_RADAR_API = https://api.<domínio>` e um
    novo deploy do site (`docs/deploy-cloudflare.md`). Sem ela o site continua
    100% WASM — e é assim que se faz o rollback: apagar a variável e
@@ -166,6 +169,11 @@ curl -si "https://api.<domínio>/api/v1/consulta?sql=SELECT%201&v=$(curl -s http
 
 Primeira chamada: `cf-cache-status: MISS`, `Cache-Control: public, max-age=86400…`;
 a segunda, `HIT`. Sem `v` (ou com `v` errado) tem de vir `no-store`.
+
+`GET /api/v1/resumo` devolve a versão do dado e o mapa de arquivos: é de onde o
+site os lê quando a Pages Function `/dados/resumo.json` falha (o GitHub, por
+trás dela, responde 429 em hora de pico — medido em 08/09/2026). Com a API no
+ar, as fichas não dependem do GitHub em nada.
 
 Fallback: derrube o container e abra uma ficha — a faixa amarela "servidor de
 consultas indisponível" aparece, a página carrega pelo WASM em alguns segundos
