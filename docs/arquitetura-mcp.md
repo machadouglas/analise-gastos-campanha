@@ -301,12 +301,15 @@ src/publicado.py  # download do release (extraído de scripts/previa-local.py)
 src/mcp/
   servidor.py     # FastMCP, transporte, instructions, recursos
   dados.py        # boot, poll de md5, troca atômica
-  gate.py         # validação de statement, timeout, LIMIT, teto de bytes
+  gate.py         # validação de statement (parser do DuckDB)
   consultas.py    # SQL das ferramentas curadas (espelho de consultas.ts)
-  ferramentas.py  # registro das ferramentas e formatação das respostas
+  api.py          # rota do site: GET /api/v1/consulta e /api/v1/resumo (§12)
+  esquema.py      # instructions = trecho do prompt.ts
 Dockerfile.mcp    # python:3.12-slim + duckdb + mcp; sem gh; ARG GIT_SHA; uid 10001
 tests/
   test_mcp_gate.py        # statements aceitos/recusados, timeout, LIMIT, bytes
+  test_mcp_api.py         # rota do site: formato, cache por versão, CORS, 4xx/5xx,
+                          # exemplos.ts pela rota == cursor cru
   test_mcp_ferramentas.py # cada ferramenta contra o banco montado do fixture E2E;
                           # exemplos.ts pela ferramenta sql == execução direta
   test_mcp_protocolo.py   # MCP Inspector (CLI) contra o container

@@ -143,14 +143,15 @@ o servidor só vê o *miss*.
    cache** (o padrão "standard" inclui — confira: sem a query na chave, todos
    os candidatos viram a mesma entrada). Sem essa regra a Cloudflare não
    cacheia JSON de rota dinâmica, e cada visita desce ao servidor.
-3. **Rate Limiting**: o plano gratuito dá **uma** regra, e ela já é do MCP.
-   Confira que essa regra casa pelo **caminho** `/mcp*` (não pelo hostname):
-   assim ela não alcança `/api/v1/…`, e um leitor normal (uma ficha dispara
-   ~15 GETs) não é bloqueado por um limite de 60/min. A rota do site fica sem
-   limite por IP na borda — os guarda-corpos são os do processo (fila `site`
-   de 8 vagas, 5 s de timeout, teto de linhas) e o cache, que absorve as
-   repetições. Se um dia houver regra sobrando, o valor certo é ~300/min por
-   IP para `api.<domínio>`.
+3. **Rate Limiting**: o plano gratuito dá **uma** regra. Faça-a cobrir os
+   dois hostnames — expressão
+   `(http.host in {"mcp.<domínio>" "api.<domínio>"})`, por IP, **200
+   requisições por 10 s**, Block pela duração mínima. A conta: uma ficha
+   dispara ~16 GETs e o Explorar ~8; quem navega rápido por meia dúzia de
+   fichas em dez segundos ainda passa, e 200 chamadas em 10 s no MCP não é
+   uso, é loop. Cem por 10 s bloqueou navegação normal em 08/09/2026. O site
+   trata o 429 esperando o `Retry-After` e repetindo (até 3 vezes) antes de
+   cair para o WASM — o bloqueio dura segundos, e o WASM custa o motor inteiro.
 4. **CORS e CSP**: a rota responde `Access-Control-Allow-Origin: *` (dado
    público, sem credencial; GET simples, sem preflight). Nada a configurar na
    borda — mas o hostname da API precisa estar no `connect-src` da

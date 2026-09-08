@@ -171,7 +171,16 @@ interface CorpoApi {
   duracao_ms?: number;
 }
 
-async function viaApi(sql: string): Promise<ResultadoConsulta> {
+/** 429 da borda (rate limit por IP, bloqueio de ~10 s) não é o servidor fora
+ *  do ar: esperar e repetir custa segundos; cair para o WASM custa o motor
+ *  inteiro — e, sob 429, os Parquet costumam falhar também. */
+const TENTATIVAS_429 = 3;
+function esperaDo429(r: Response): number {
+  const s = Number(r.headers.get('Retry-After') ?? '');
+  return Math.min(12_000, Math.max(2_000, Number.isFinite(s) && s > 0 ? s * 1000 : 4_000));
+}
+
+async function viaApi(sql: string, tentativa = 1): Promise<ResultadoConsulta> {
   const url = await montarUrl(sql);
   const controle = new AbortController();
   const relogio = setTimeout(() => controle.abort(), TIMEOUT_MS);
@@ -183,9 +192,13 @@ async function viaApi(sql: string): Promise<ResultadoConsulta> {
   } finally {
     clearTimeout(relogio);
   }
+  if (r.status === 429 && tentativa < TENTATIVAS_429) {
+    await new Promise((ok) => setTimeout(ok, esperaDo429(r)));
+    return viaApi(sql, tentativa + 1);
+  }
   // 400 = a consulta está errada (gate, DuckDB) — o mesmo erro que o WASM
-  // daria. Qualquer outro fracasso (5xx, 404 de imagem antiga, 429 da borda,
-  // 414 de URL longa) é o servidor não servindo: contingência.
+  // daria. Qualquer outro fracasso (5xx, 404 de imagem antiga, 429 que
+  // persistiu, 414 de URL longa) é o servidor não servindo: contingência.
   if (r.status === 400) {
     const corpo = (await r.json().catch(() => null)) as { erro?: string } | null;
     throw new ErroDaConsulta(corpo?.erro ?? `HTTP ${r.status}`);
