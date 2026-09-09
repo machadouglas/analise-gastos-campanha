@@ -63,11 +63,44 @@ def test_data_posterior_a_extracao_avisa_sem_bloquear(banco, capsys):
 
 
 def test_data_fora_do_ciclo_eleitoral_bloqueia_tambem_nas_receitas(banco):
-    """A checagem dura (2025–2027) só existia para despesas."""
+    """A checagem dura (2025–2027) só existia para despesas. Aqui a data fora do
+    ciclo é a única linha do retrato (100%): parse quebrado, publicação barrada."""
     extrair_dia(banco, "20/08/2026", receitas=[
         {"SQ_RECEITA": "1", "DT_RECEITA": "10/08/2016", "VR_RECEITA": "1000,00"},
     ])
     assert "datas de receita dentro do ciclo 2025–2027" in verificacao.verificar(banco)
+
+
+def test_data_fora_do_ciclo_isolada_avisa_sem_bloquear(banco, capsys):
+    """Uma despesa em 2016 no meio de 250: quem declarou digitou o ano errado.
+    A régua "zero fora do ciclo" barrou a rotina de 09/09/2026 por 1 linha em
+    104.878 — segurar a extração do país inteiro por um dígito alheio é pior do
+    que publicá-lo como veio. Parse quebrado (o que a checagem existe para
+    pegar) leva a coluna inteira junto e continua barrando, como no teste acima.
+    """
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": "0", "DT_DESPESA": "10/08/2016", "VR_DESPESA_CONTRATADA": "500,00"},
+    ] + [
+        {"SQ_DESPESA": str(i), "DT_DESPESA": "15/08/2026", "VR_DESPESA_CONTRATADA": "10,00"}
+        for i in range(1, 250)
+    ])
+    falhas = verificacao.verificar(banco)
+    saida = capsys.readouterr().out
+    assert "datas de despesa dentro do ciclo 2025–2027" not in falhas
+    # o aviso mostra a proporção E a data: é o que diz a um humano se é typo
+    assert "aviso  datas de despesa dentro do ciclo 2025–2027 — 1 de 250 fora do intervalo (0.400%) — 10/08/2016" in saida
+
+
+def test_datas_fora_do_ciclo_em_massa_continuam_barrando(banco):
+    """O cenário que a checagem existe para pegar: a coluna inteira mal lida
+    (aqui, século trocado em metade das linhas) não é typo de ninguém."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": str(i),
+         "DT_DESPESA": "15/08/1926" if i % 2 else "15/08/2026",
+         "VR_DESPESA_CONTRATADA": "10,00"}
+        for i in range(250)
+    ])
+    assert "datas de despesa dentro do ciclo 2025–2027" in verificacao.verificar(banco)
 
 
 if __name__ == "__main__":
