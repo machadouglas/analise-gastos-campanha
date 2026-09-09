@@ -28,6 +28,10 @@ COPY . .
 # Os testes do servidor MCP (tests/test_mcp_*.py) importam o SDK `mcp`, que
 # esta imagem não instala nem precisa: eles rodam no build do Dockerfile.mcp
 # e no CI. Sem o ignore, o deploy da rotina quebrava na coleta (05/09/2026).
+# Corolário: teste FORA desse glob não pode importar src/mcp/servidor.py (o
+# único módulo que puxa o SDK) — sobre o texto das tools, leia o fonte com ast,
+# como faz _docstrings_das_ferramentas em tests/test_sincronia_site.py. Importar
+# quebrou este deploy de novo em 08/09/2026.
 RUN python -m pytest tests/ -q --ignore-glob='tests/test_mcp_*.py'
 
 # roda sem root: um RCE na cadeia de parsing não vira root com GH_TOKEN no ambiente.

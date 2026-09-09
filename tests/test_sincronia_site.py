@@ -5,6 +5,7 @@ Cada uma vivia como comentário "manter em sincronia" — estes testes leem os
 arquivos do front e falham quando as cópias divergem.
 """
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -438,13 +439,29 @@ def test_top_n_do_grafo_e_cap_de_desenho_que_o_mcp_nao_aplica():
     assert f"HAVING COUNT(DISTINCT SQ_CANDIDATO) > {consultas.MAX_CANDIDATOS_CONTRAPARTE_COMUM}" in sql
 
 
+def _docstrings_das_ferramentas() -> dict[str, str]:
+    """Docstrings das tools lidas do FONTE de servidor.py, sem importá-lo.
+
+    Importar puxaria o SDK `mcp`, que a imagem da rotina (Dockerfile) não
+    instala nem precisa — e a suíte dela roda este arquivo (o --ignore-glob de
+    lá só cobre tests/test_mcp_*.py). Este teste é sobre o TEXTO das docstrings,
+    então o fonte basta e a garantia vale nas duas imagens.
+    """
+    arvore = ast.parse((RAIZ / "src" / "mcp" / "servidor.py").read_text(encoding="utf-8"))
+    return {no.name: ast.get_docstring(no) or ""
+            for no in ast.walk(arvore)
+            if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
 def test_ferramentas_de_recorte_nao_entregam_veredito():
     """As tools que devolvem "fora da curva" descrevem a medida e a régua; o
     julgamento fica com quem lê. Duas garantias mecânicas: nenhuma docstring
     promete irregularidade, e as instructions dizem ao modelo o que elas NÃO
     afirmam (o modelo pode concluir por conta própria — via sql, mostrando o
     cálculo — mas não emprestando rótulo da ferramenta)."""
-    from src.mcp import esquema, servidor
+    from src.mcp import esquema
+
+    docs = _docstrings_das_ferramentas()
 
     veredito = re.compile(r"\b(fraude|fraudulent\w*|superfatur\w*|desvi(o|os|ado\w*)|"
                           r"irregularidade|suspeit\w+)\b", re.IGNORECASE)
@@ -454,7 +471,8 @@ def test_ferramentas_de_recorte_nao_entregam_veredito():
     for nome in ("fora_da_curva", "notas_fora_do_preco", "sem_nota",
                  "fornecedores_compartilhados", "declaracoes_removidas",
                  "candidatos_conectados", "ficha_candidato", "ficha_fornecedor"):
-        doc = " ".join((getattr(servidor, nome).__doc__ or "").split())
+        assert nome in docs, f"ferramenta {nome} não existe mais em servidor.py"
+        doc = " ".join(docs[nome].split())
         for frase in re.split(r"(?<=[.;:])\s+", doc):
             achado = veredito.search(frase)
             assert not achado or nega.search(frase), (
