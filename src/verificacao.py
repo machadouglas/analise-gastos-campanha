@@ -9,6 +9,9 @@ from src.carga import filtro_placeholder
 
 TOLERANCIA = 0.01  # centavos de diferença por arredondamento
 QUEDA_MAXIMA_PCT = 20.0  # retrato encolher mais que isso = suspeita de arquivo truncado
+# datas fora do ciclo eleitoral acima disso = parse quebrado (barra a publicação);
+# abaixo = typo de quem declarou, que vai publicado como veio, com aviso
+LIMITE_DATAS_FORA_DO_CICLO_PCT = 0.5
 
 
 def queda_de_volume(con, tabela: str, limite_pct: float = QUEDA_MAXIMA_PCT) -> tuple[bool, str]:
@@ -64,13 +67,35 @@ def verificar(con) -> list[str]:
         checar(f"{view}: valores numéricos válidos", invalidos == 0, f"{invalidos} não convertidos de {total}")
         checar(f"{view}: sem valores negativos", negativos == 0, f"{negativos} negativos")
 
-    # --- datas dentro do ciclo eleitoral: fora dele é parse quebrado, não typo
+    # --- datas dentro do ciclo eleitoral. A checagem existe para pegar PARSE
+    # QUEBRADO (formato trocado, ano de dois dígitos), que joga a coluna inteira
+    # para fora de uma vez; typo de declarante é linha solta ('10/08/2016' em vez
+    # de 2026) e cai na mesma régua da data futura logo abaixo — publica como
+    # veio e avisa, porque barrar a série do país por um dígito que alguém
+    # digitou errado é pior do que carregá-lo. Qualquer corte entre os dois
+    # extremos serve: parse quebrado dá ~100%, typo deu 1 em 104.878
+    # (0,001%) na rotina de 09/09/2026, que a régua "zero" reprovava.
     for view, rotulo in (("v_despesas", "despesa"), ("v_receitas", "receita")):
-        fora = con.execute(f"""
-            SELECT COUNT(*) FROM {view}
-            WHERE DT IS NOT NULL AND (DT < DATE '2025-01-01' OR DT > DATE '2027-03-01')
-        """).fetchone()[0]
-        checar(f"datas de {rotulo} dentro do ciclo 2025–2027", fora == 0, f"{fora} fora do intervalo")
+        fora, total = con.execute(f"""
+            SELECT COUNT(*) FILTER (WHERE DT < DATE '2025-01-01' OR DT > DATE '2027-03-01'),
+                   COUNT(DT)
+            FROM {view}
+        """).fetchone()
+        pct = 100.0 * fora / total if total else 0.0
+        nome = f"datas de {rotulo} dentro do ciclo 2025–2027"
+        detalhe = f"{fora} de {total} fora do intervalo ({pct:.3f}%)"
+        if fora:
+            # as datas em si: é o que diz a um humano se é typo ou século errado
+            datas = con.execute(f"""
+                SELECT DISTINCT DT FROM {view}
+                WHERE DT < DATE '2025-01-01' OR DT > DATE '2027-03-01'
+                ORDER BY DT LIMIT 5
+            """).fetchall()
+            detalhe += " — " + ", ".join(d[0].strftime("%d/%m/%Y") for d in datas)
+        if pct > LIMITE_DATAS_FORA_DO_CICLO_PCT:
+            checar(nome, False, detalhe)
+        else:
+            avisar(nome, fora == 0, detalhe)
 
     # --- datas posteriores à própria extração: erro do DECLARANTE (digitou
     # 24/11 em vez de 24/08), não do pipeline — aviso, nunca falha. Barrar a
