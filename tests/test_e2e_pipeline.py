@@ -4,7 +4,7 @@ As outras suítes cobrem pedaços (versionamento sintético, export a partir de
 tabelas prontas, consultas do console contra o banco real), mas duas emendas
 ficavam sem teste algum:
 
-1. a CARGA real (`carga.carregar`): zip → CSV latin-1, separador ';', aspas,
+1. a CARGA real (`carga.carregar`): zip → CSV Windows-1252, separador ';', aspas,
    '#NULO', linhas-placeholder — nada exercitava o parse de verdade;
 2. o site consome os PARQUETS PSEUDONIMIZADOS, e as consultas do console eram
    testadas contra o banco cru — nenhum teste as rodava sobre o dado mascarado
@@ -50,7 +50,9 @@ COLS_BENS = ["SQ_CANDIDATO", "SG_UF", "DS_TIPO_BEM_CANDIDATO",
              "DS_BEM_CANDIDATO", "VR_BEM_CANDIDATO", "DT_ULT_ATUAL_BEM_CANDIDATO"]
 
 # valores que provam o parse: acento, cedilha e ';' DENTRO de campo com aspas
-DESCRICAO_ACENTUADA = 'PLACA "VOTE JÁ"; CONFECÇÃO ESPECIAL Nº 1'
+# ’ (0x92) só existe no Windows-1252 — o `encoding='latin-1'` do DuckDB recusava o
+# arquivo inteiro por um byte desses (rotina de 12/09/2026)
+DESCRICAO_ACENTUADA = 'PLACA "VOTE JÁ"; CONFECÇÃO ESPECIAL Nº 1 – D’ÁGUA'
 CPF_FORNECEDOR_PF = "12345678901"
 CPF_DOADOR_PF = "98765432100"
 
@@ -85,7 +87,7 @@ def _despesas_do_dia(dia: str, com_removida: bool, valor_editada: str, sq_editad
         NR_CPF_CNPJ_FORNECEDOR=CPF_FORNECEDOR_PF, DS_TIPO_FORNECEDOR="PESSOA FÍSICA",
         DS_TIPO_DOCUMENTO="Recibo", NR_DOCUMENTO=CPF_FORNECEDOR_PF,
         DS_ORIGEM_DESPESA="Despesas com pessoal", VR_DESPESA_CONTRATADA="800,00")
-    # acento + ';' dentro de campo com aspas: o parse latin-1/;/aspas de verdade
+    # acento, ’ e ';' dentro de campo com aspas: o parse cp1252/;/aspas de verdade
     add(**extra, SQ_DESPESA="502", DS_DESPESA=DESCRICAO_ACENTUADA,
         NR_DOCUMENTO="5020", VR_DESPESA_CONTRATADA="300,00")
     # três linhas 100% idênticas (itens repetidos legítimos) -> qt_linhas = 3
@@ -131,13 +133,13 @@ def _receitas_do_dia(dia: str):
     return linhas
 
 
-def _csv_latin1(colunas: list[str], linhas: list[dict]) -> bytes:
+def _csv_cp1252(colunas: list[str], linhas: list[dict]) -> bytes:
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_ALL, lineterminator="\n")
     w.writerow(colunas)
     for linha in linhas:
         w.writerow([linha[c] for c in colunas])
-    return buf.getvalue().encode("latin-1")
+    return buf.getvalue().encode("cp1252")
 
 
 def _publicar_zip_do_dia(dir_raw: Path, dia: str, com_removida: bool,
@@ -174,15 +176,15 @@ def _publicar_zip_do_dia(dir_raw: Path, dia: str, com_removida: bool,
          "VR_BEM_CANDIDATO": "350000,00", "DT_ULT_ATUAL_BEM_CANDIDATO": "15/07/2026"},
     ]
     arquivos = {
-        f"despesas_contratadas_candidatos_{ANO}_BRASIL.csv": _csv_latin1(
+        f"despesas_contratadas_candidatos_{ANO}_BRASIL.csv": _csv_cp1252(
             COLS_DESPESAS, _despesas_do_dia(dia, com_removida, valor_editada, sq_editada)),
-        f"receitas_candidatos_{ANO}_BRASIL.csv": _csv_latin1(
+        f"receitas_candidatos_{ANO}_BRASIL.csv": _csv_cp1252(
             COLS_RECEITAS, _receitas_do_dia(dia)),
-        f"despesas_pagas_candidatos_{ANO}_BRASIL.csv": _csv_latin1(COLS_PAGAS, pagas),
-        f"receitas_candidatos_doador_originario_{ANO}_BRASIL.csv": _csv_latin1(
+        f"despesas_pagas_candidatos_{ANO}_BRASIL.csv": _csv_cp1252(COLS_PAGAS, pagas),
+        f"receitas_candidatos_doador_originario_{ANO}_BRASIL.csv": _csv_cp1252(
             COLS_ORIGINARIO, originario),
-        f"consulta_cand_{ANO}_BRASIL.csv": _csv_latin1(COLS_CANDIDATOS, candidatos),
-        f"bem_candidato_{ANO}_BRASIL.csv": _csv_latin1(COLS_BENS, bens),
+        f"consulta_cand_{ANO}_BRASIL.csv": _csv_cp1252(COLS_CANDIDATOS, candidatos),
+        f"bem_candidato_{ANO}_BRASIL.csv": _csv_cp1252(COLS_BENS, bens),
     }
     destino = dir_raw / str(ANO)
     destino.mkdir(parents=True, exist_ok=True)
@@ -225,7 +227,7 @@ def test_pipeline_completo_do_csv_do_tse_ate_as_consultas_do_site(pipeline):
          'SÓCIO UM', DATE '2026-08-21', NULL, NULL)
     """)
 
-    # --- o parse preservou latin-1, aspas e ';' dentro de campo
+    # --- o parse preservou cp1252, aspas e ';' dentro de campo
     desc = con.execute(
         "SELECT DS_DESPESA FROM despesas_contratadas WHERE SQ_DESPESA = '502'"
     ).fetchone()[0]

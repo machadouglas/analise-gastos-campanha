@@ -1,5 +1,7 @@
 """Extração dos zips do TSE e carga em um banco DuckDB local."""
 
+import codecs
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -86,6 +88,48 @@ def extrair_zips(ano: int) -> Path:
     return destino
 
 
+# O TSE diz "latin-1", mas grava Windows-1252 — o que qualquer Windows brasileiro
+# produz. As duas só divergem nos bytes 0x80–0x9F: controles C1 na ISO-8859-1,
+# caracteres impressos no cp1252 (’ “ ” – — … €). Basta um apóstrofo curvo
+# digitado num nome de fornecedor para o `encoding='latin-1'` do DuckDB recusar o
+# arquivo INTEIRO ("File is not latin-1 encoded" — derrubou a rotina em
+# 12/09/2026). Por isso a carga transcodifica o CSV para UTF-8 em Python antes
+# do read_csv: cp1252 para o que ele define, e os 5 bytes que nem ele define
+# (0x81 0x8D 0x8F 0x90 0x9D) caem no latin-1 — nenhum byte derruba a carga, e
+# nenhuma linha é descartada (ignore_errors faria uma declaração viva parecer
+# apagada no histórico).
+ENCODING_TSE = "cp1252"
+_TRATAMENTO_BYTE_INDEFINIDO = "radar_cp1252_ou_latin1"
+_BOM_UTF8_LIDO_COMO_CP1252 = codecs.BOM_UTF8.decode(ENCODING_TSE)  # 'ï»¿'
+
+
+def _byte_indefinido_como_latin1(erro: UnicodeError) -> tuple[str, int]:
+    return erro.object[erro.start:erro.end].decode("latin-1"), erro.end
+
+
+codecs.register_error(_TRATAMENTO_BYTE_INDEFINIDO, _byte_indefinido_como_latin1)
+
+
+def transcodificar_para_utf8(origem: Path, destino: Path) -> Path:
+    """Copia o CSV do TSE (Windows-1252) para `destino` em UTF-8, em streaming.
+
+    Nunca falha por byte "inválido": codificação de um byte só não tem byte inválido,
+    só byte sem glifo — e esse vira o controle C1 correspondente, em vez de derrubar
+    a carga. `newline=''` preserva o fim de linha do TSE tal como está. Um BOM UTF-8
+    no início (o DuckDB o descartava ao ler direto) é descartado também, senão viraria
+    'ï»¿' colado no nome da primeira coluna."""
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    parcial = destino.with_suffix(destino.suffix + ".part")
+    with open(origem, encoding=ENCODING_TSE, errors=_TRATAMENTO_BYTE_INDEFINIDO,
+              newline="") as entrada, \
+         open(parcial, "w", encoding="utf-8", newline="") as saida:
+        primeiro = entrada.read(1 << 20)
+        saida.write(primeiro.removeprefix(_BOM_UTF8_LIDO_COMO_CP1252))
+        shutil.copyfileobj(entrada, saida, 1 << 20)
+    parcial.replace(destino)
+    return destino
+
+
 def conectar() -> duckdb.DuckDBPyConnection:
     CAMINHO_BANCO.parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(str(CAMINHO_BANCO))
@@ -100,13 +144,20 @@ def carregar(ano: int) -> None:
         if not arquivos:
             print(f"[aviso] nenhum arquivo para {tabela} ({padrao.format(ano=ano)})")
             continue
-        lista = ", ".join(f"'{a.as_posix()}'" for a in arquivos)
-        con.execute(f"""
-            CREATE OR REPLACE TABLE {tabela} AS
-            SELECT * FROM read_csv([{lista}], delim=';', quote='"', header=true,
-                                   encoding='latin-1', all_varchar=true,
-                                   union_by_name=true)
-        """)
+        utf8 = [transcodificar_para_utf8(a, pasta / "utf8" / a.name) for a in arquivos]
+        lista = ", ".join(f"'{a.as_posix()}'" for a in utf8)
+        try:
+            con.execute(f"""
+                CREATE OR REPLACE TABLE {tabela} AS
+                SELECT * FROM read_csv([{lista}], delim=';', quote='"', header=true,
+                                       encoding='utf-8', all_varchar=true,
+                                       union_by_name=true)
+            """)
+        except duckdb.Error as e:
+            # o DuckDB não diz qual arquivo recusou; sem isso o log da rotina
+            # mostra só "Invalid Input Error" e o diagnóstico começa do zero
+            nomes = ", ".join(a.name for a in arquivos)
+            raise RuntimeError(f"falha ao carregar {tabela} ({nomes}): {e}") from e
         n = con.execute(f"SELECT count(*) FROM {tabela}").fetchone()[0]
         print(f"[carregado] {tabela}: {n} linhas")
 

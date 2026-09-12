@@ -2,7 +2,7 @@
 
 ## 1. Portal de Dados Abertos do TSE — https://dadosabertos.tse.jus.br
 
-Fonte primária. Arquivos CSV (latin-1, separador `;`) dentro de ZIPs no CDN `https://cdn.tse.jus.br/estatistica/sead/odsele/`. Atualizados diariamente durante a campanha (madrugada).
+Fonte primária. Arquivos CSV (Windows-1252 — o TSE chama de latin-1, mas usa os bytes 0x80–0x9F do cp1252: ’ “ ” – …; separador `;`) dentro de ZIPs no CDN `https://cdn.tse.jus.br/estatistica/sead/odsele/`. Atualizados diariamente durante a campanha (madrugada).
 
 > O CDN bloqueia curl/requests por fingerprint TLS — use `curl_cffi` com `impersonate="chrome"` (já implementado em `src/tse.py`).
 
