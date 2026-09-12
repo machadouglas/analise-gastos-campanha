@@ -112,7 +112,7 @@ Para análises novas, prefira `gastos.py sql` — e se a consulta for útil de f
 
 - URLs e conteúdo de cada dataset: `docs/fontes-de-dados.md`.
 - O CDN do TSE bloqueia clientes HTTP comuns por fingerprint TLS (Akamai). `src/tse.py` usa `curl_cffi` com `impersonate="chrome"` — **não troque por requests/urllib, não funciona**.
-- CSVs do TSE: `latin-1`, separador `;`, aspas duplas. `#NULO`/`-1`/`-4` significam nulo/anonimizado.
+- CSVs do TSE: o TSE diz `latin-1`, mas grava **Windows-1252** (’ “ ” – … nos bytes 0x80–0x9F, que a ISO-8859-1 reserva a controles) — o `encoding='latin-1'` do DuckDB recusa o arquivo inteiro por um byte desses (derrubou a rotina em 12/09/2026), então `carga.transcodificar_para_utf8` converte cada CSV para UTF-8 antes do `read_csv` (cp1252, com os 5 bytes que nem o cp1252 define caindo no latin-1; nunca descarta linha). Separador `;`, aspas duplas. `#NULO`/`-1`/`-4` significam nulo/anonimizado.
 - O SPCE emite **linhas-placeholder** (contraparte `-1`/`#NULO` **e** valor zero = prestação sem movimento). Não são fatos: `carga.filtro_placeholder` as exclui das views tipadas, das `v_removidas_*`, da série e dos atalhos do site. Contraparte anônima **com** valor é fato (e indício) — nunca filtrar.
 - Os zips de prestação de contas têm arquivos por UF e um `_BRASIL.csv` consolidado; a carga usa o BRASIL.
 - `consulta_cand_{ano}.zip` é nacional com um CSV por UF (não existe zip por UF em 2026).
