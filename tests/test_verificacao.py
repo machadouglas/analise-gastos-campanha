@@ -103,6 +103,32 @@ def test_datas_fora_do_ciclo_em_massa_continuam_barrando(banco):
     assert "datas de despesa dentro do ciclo 2025–2027" in verificacao.verificar(banco)
 
 
+def test_valor_nao_convertido_isolado_avisa_sem_bloquear(banco, capsys):
+    """Uma receita cujo valor não vira número no meio de 250: a régua "zero"
+    barrou a rotina de 29/09/2026 por 1 linha em 137.728. Publica como veio
+    (VR nulo) e avisa com o texto cru — é o que diz a um humano o que houve."""
+    extrair_dia(banco, "20/08/2026", receitas=[
+        {"SQ_RECEITA": "0", "DT_RECEITA": "15/08/2026", "VR_RECEITA": "1.500,00"},
+    ] + [
+        {"SQ_RECEITA": str(i), "DT_RECEITA": "15/08/2026", "VR_RECEITA": "10,00"}
+        for i in range(1, 250)
+    ])
+    falhas = verificacao.verificar(banco)
+    saida = capsys.readouterr().out
+    assert "v_receitas: valores numéricos válidos" not in falhas
+    assert "aviso  v_receitas: valores numéricos válidos — 1 não convertidos de 250 (0.400%) — '1.500,00'" in saida
+
+
+def test_valores_nao_convertidos_em_massa_continuam_barrando(banco):
+    """Separador trocado na coluna inteira é parse quebrado, não declarante."""
+    extrair_dia(banco, "20/08/2026", despesas=[
+        {"SQ_DESPESA": str(i), "DT_DESPESA": "15/08/2026",
+         "VR_DESPESA_CONTRATADA": f"R$ {i},00"}
+        for i in range(1, 250)
+    ])
+    assert "v_despesas: valores numéricos válidos" in verificacao.verificar(banco)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
 
