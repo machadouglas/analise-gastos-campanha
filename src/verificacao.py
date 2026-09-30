@@ -12,6 +12,9 @@ QUEDA_MAXIMA_PCT = 20.0  # retrato encolher mais que isso = suspeita de arquivo 
 # datas fora do ciclo eleitoral acima disso = parse quebrado (barra a publicação);
 # abaixo = typo de quem declarou, que vai publicado como veio, com aviso
 LIMITE_DATAS_FORA_DO_CICLO_PCT = 0.5
+# valores que não convertem para número: mesma régua — em massa é parse quebrado
+# (separador trocado, coluna deslocada), linha solta é o que alguém declarou
+LIMITE_VALORES_INVALIDOS_PCT = 0.5
 
 
 def queda_de_volume(con, tabela: str, limite_pct: float = QUEDA_MAXIMA_PCT) -> tuple[bool, str]:
@@ -56,15 +59,33 @@ def verificar(con) -> list[str]:
         n = con.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
         checar(f"{tabela} tem volume plausível", n >= minimo, f"{n} linhas (mínimo {minimo})")
 
-    # --- valores convertem para número (a vírgula decimal é a pegadinha clássica)
+    # --- valores convertem para número (a vírgula decimal é a pegadinha clássica).
+    # Como as datas abaixo: parse quebrado leva a coluna inteira de uma vez e
+    # barra; linha solta é o que veio do TSE e vai publicada como veio (valor
+    # nulo, fora das somas), com aviso e o texto cru à mostra — a régua "zero"
+    # barrou a rotina de 29/09/2026 por 1 receita em 137.728.
     for view, col in [("v_despesas", "VR_DESPESA_CONTRATADA"), ("v_receitas", "VR_RECEITA")]:
+        invalido = f"VR IS NULL AND {col} IS NOT NULL AND {col} <> '#NULO'"
         total, invalidos, negativos = con.execute(f"""
             SELECT COUNT(*),
-                   COUNT(*) FILTER (WHERE VR IS NULL AND {col} IS NOT NULL AND {col} <> '#NULO'),
+                   COUNT(*) FILTER (WHERE {invalido}),
                    COUNT(*) FILTER (WHERE VR < 0)
             FROM {view}
         """).fetchone()
-        checar(f"{view}: valores numéricos válidos", invalidos == 0, f"{invalidos} não convertidos de {total}")
+        pct = 100.0 * invalidos / total if total else 0.0
+        nome = f"{view}: valores numéricos válidos"
+        detalhe = f"{invalidos} não convertidos de {total} ({pct:.3f}%)"
+        if invalidos:
+            # o texto cru (repr: espaço e aspas à vista) diz se é typo, milhar
+            # com ponto ou coluna deslocada
+            crus = con.execute(f"""
+                SELECT DISTINCT {col} FROM {view} WHERE {invalido} ORDER BY 1 LIMIT 5
+            """).fetchall()
+            detalhe += " — " + ", ".join(repr(c[0]) for c in crus)
+        if pct > LIMITE_VALORES_INVALIDOS_PCT:
+            checar(nome, False, detalhe)
+        else:
+            avisar(nome, invalidos == 0, detalhe)
         checar(f"{view}: sem valores negativos", negativos == 0, f"{negativos} negativos")
 
     # --- datas dentro do ciclo eleitoral. A checagem existe para pegar PARSE
