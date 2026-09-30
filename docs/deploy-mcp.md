@@ -58,16 +58,28 @@ Nunca crie registro A/AAAA na zona: o objetivo é o IP não aparecer.
    para 311 ms; degrada, não cai). Duas vagas deixam um núcleo para os leitores.
 4. **Storages**: nenhum. O cache de Parquet vive no container e é rebaixado
    no boot (~30 MB); um redeploy nunca perde nada.
-5. **Health check**: caminho `/saude`, porta 8000, start period de 2 minutos
-   (o boot baixa o release e monta o banco). O Coolify executa o check com
-   `curl` DENTRO do container — por isso a imagem instala `curl` (sem ele o
-   deploy é revertido com o servidor saudável). O Dockerfile declara um
-   `HEALTHCHECK` equivalente.
+5. **Health check**: caminho `/saude`, porta 8000, **start period de 120 s,
+   intervalo de 10 s, 10 tentativas**. O boot baixa o release inteiro (sem
+   volume, todo redeploy começa do zero) e monta o banco ANTES de o servidor
+   aceitar conexões; `/saude` só responde 200 com o banco pronto — de
+   propósito, é o que impede o rolling update de mandar tráfego para um
+   container sem dados. A janela do check tem de ser maior que o boot, e ele
+   é mais lento quando a rotina roda no mesmo host (disputa a banda).
+   O Coolify executa o check DENTRO do container, como
+   `curl … || wget … || exit 1` — por isso a imagem instala `curl` (sem ele o
+   deploy é revertido com o servidor saudável). **Falso sintoma**: um deploy
+   revertido com `Healthcheck logs: /bin/sh: 1: wget: not found` NÃO é falta
+   de `wget` — o `curl` falhou em silêncio porque o servidor ainda não estava
+   pronto, e o erro do `wget` é só o último da cadeia. Em 30/09/2026 isso
+   custou um deploy: o start period estava em 5 s (a configuração se perdeu
+   num update do Coolify) e o container ainda baixava Parquet quando o check
+   desistiu. Conferir esses três campos depois de qualquer update do Coolify.
+   O Dockerfile declara um `HEALTHCHECK` equivalente.
 6. **Auto Deploy** ligado (webhook do GitHub App). O build roda os testes do
    MCP (`tests/test_mcp_*.py`); imagem quebrada não sobe. O Coolify injeta
    `SOURCE_COMMIT` no container em runtime (não como build arg), e é dele que
    sai o `versao_codigo` de toda resposta.
-7. Deploy. Primeiro boot: ~1 min (download + montagem do banco).
+7. Deploy. Primeiro boot: 1 a 2 min (download + montagem do banco).
 
 Watch paths sugeridos (só reconstrói quando o MCP muda):
 
