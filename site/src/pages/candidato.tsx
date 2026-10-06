@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, Download } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Download, Scale } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { SecaoCorrigidas, montarCorrigidas, type Corrigida } from '@/components/app/corrigidas';
@@ -896,6 +896,14 @@ export function Candidato() {
             {gerandoCartao ? <Spinner className="h-4 w-4" /> : <Download className="h-4 w-4" />}
             Cartão para compartilhar
           </button>
+          <Link
+            to={`/comparar?c=${sq}`}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-foreground sm:w-auto"
+            title="Põe este candidato lado a lado com quem disputou a mesma vaga, ou com quem você escolher"
+          >
+            <Scale className="h-4 w-4" />
+            Comparar
+          </Link>
         </div>
         {p.flags.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-2">

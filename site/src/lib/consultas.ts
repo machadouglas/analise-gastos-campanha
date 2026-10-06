@@ -19,6 +19,10 @@ export interface Filtros {
   descricao: string;
 }
 
+/** Opções dos seletores de UF e cargo ('' = todas/todos). */
+export const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
+export const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
+
 export const FILTROS_VAZIOS: Filtros = {
   uf: '', cargo: '', partido: '', candidato: '', fornecedor: '', descricao: '',
 };
@@ -80,6 +84,116 @@ export function sqlCustoDoRecorte(f: Filtros, ordem: OrdemCusto): string {
           FROM indicadores i
           WHERE i.SQ_CANDIDATO IN (${sqlCandidatosDoCusto(f, ordem)})`;
 }
+
+/** Custo por voto AGREGADO (espelho de sql_custo_por_voto_partido em
+ *  src/resumo.py): soma do contratado ÷ soma dos votos do 1º turno das
+ *  candidaturas com voto — nunca a média dos custos individuais. `grupo` é a
+ *  coluna que separa as linhas (cargo na ficha do partido, sigla na
+ *  comparação); null devolve uma linha só. tests/test_sincronia_site.py
+ *  compara a projeção com o texto do backend. */
+export function sqlCustoPorVotoAgregado(w: string, grupo: 'DS_CARGO' | 'SG_PARTIDO' | null): string {
+  return `
+    SELECT ${grupo ?? 'NULL'} AS grupo,
+           COUNT(*) AS candidatos,
+           COUNT(*) FILTER (WHERE resultado LIKE 'ELEITO%') AS eleitos,
+           SUM(votos) AS votos,
+           ROUND(SUM(total_contratado), 2) AS contratado,
+           ROUND(SUM(total_contratado) / SUM(votos), 2) AS custo_por_voto,
+           ROUND(SUM(custo_publico_por_voto * votos)
+                 / NULLIF(SUM(votos) FILTER (WHERE custo_publico_por_voto IS NOT NULL), 0), 2)
+             AS custo_publico_por_voto,
+           ROUND(SUM(custo_proprio_por_voto * votos)
+                 / NULLIF(SUM(votos) FILTER (WHERE custo_proprio_por_voto IS NOT NULL), 0), 2)
+             AS custo_proprio_por_voto,
+           ROUND(SUM(custo_terceiros_por_voto * votos)
+                 / NULLIF(SUM(votos) FILTER (WHERE custo_terceiros_por_voto IS NOT NULL), 0), 2)
+             AS custo_terceiros_por_voto
+    FROM indicadores
+    WHERE ${w} AND votos > 0 AND custo_por_voto IS NOT NULL
+    GROUP BY ALL ORDER BY custo_por_voto DESC`;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Comparação lado a lado (/comparar): candidaturas ou partidos.
+ * ------------------------------------------------------------------------- */
+
+/** Quantos itens cabem lado a lado: com mais que isso as barras de cada um
+ *  ficam finas demais para ler no celular. */
+export const MAX_COMPARADOS = 4;
+
+export const listaSQL = (valores: string[]) => valores.map((v) => `'${escSQL(v)}'`).join(', ');
+
+/** As candidaturas comparadas, com tudo o que a tela mostra — as colunas vêm
+ *  prontas de `indicadores` (custo por voto e parcelas incluídos: nada é
+ *  recalculado aqui) e a foto do registro. */
+export function sqlCompararCandidatos(sqs: string[]): string {
+  return `
+    WITH foto AS (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd, ANY_VALUE(SG_UE) AS ue
+                  FROM candidatos GROUP BY 1)
+    SELECT i.SQ_CANDIDATO, ${nomeExibicao('i.')} AS nome, i.NM_CANDIDATO,
+           i.SG_PARTIDO, i.SG_UF, i.DS_CARGO,
+           ROUND(i.total_receitas, 2), ROUND(i.total_contratado, 2), ROUND(i.total_pago, 2),
+           ROUND(i.fundos_publicos, 2), ROUND(i.recursos_proprios, 2),
+           i.votos, i.votos_2t, i.resultado,
+           i.custo_por_voto, i.custo_publico_por_voto, i.custo_proprio_por_voto, i.custo_terceiros_por_voto,
+           f.cd, f.ue
+    FROM indicadores i ${JOIN_NOMES_URNA} LEFT JOIN foto f USING (SQ_CANDIDATO)
+    WHERE i.SQ_CANDIDATO IN (${listaSQL(sqs)})`;
+}
+
+/** Recorte dos partidos comparados: as siglas e, opcionalmente, um cargo e
+ *  uma UF — "PT × PL só para deputado federal em SP". Sem prefixo de alias:
+ *  vale para `indicadores` e para `despesas_atual`. */
+export function wherePartidosComparados(siglas: string[], cargo: string, uf: string): string {
+  const partes = [`SG_PARTIDO IN (${listaSQL(siglas)})`];
+  if (cargo) partes.push(`DS_CARGO = '${escSQL(cargo)}'`);
+  const condicaoUF = condUF(uf);
+  if (condicaoUF) partes.push(condicaoUF);
+  return partes.join(' AND ');
+}
+
+/** Totais de cada sigla no recorte, somados das candidaturas de `indicadores`
+ *  (quem movimentou despesa OU receita). O custo por voto vem à parte, de
+ *  sqlCustoPorVotoAgregado — só entre quem teve voto. */
+export function sqlCompararPartidos(w: string): string {
+  return `
+    SELECT SG_PARTIDO, COUNT(*) AS candidatos,
+           COUNT(*) FILTER (WHERE resultado LIKE 'ELEITO%') AS eleitos,
+           ROUND(SUM(total_receitas), 2), ROUND(SUM(total_contratado), 2), ROUND(SUM(total_pago), 2),
+           ROUND(SUM(fundos_publicos), 2), ROUND(SUM(recursos_proprios), 2)
+    FROM indicadores WHERE ${w} GROUP BY 1`;
+}
+
+/** Gasto por tipo (DS_ORIGEM_DESPESA) de cada item comparado — a tela escolhe
+ *  as categorias que mais pesam e junta o resto em "Outras". */
+export function sqlCategoriasComparadas(chave: 'SQ_CANDIDATO' | 'SG_PARTIDO', w: string): string {
+  return `
+    SELECT ${chave}, COALESCE(NULLIF(DS_ORIGEM_DESPESA, '#NULO'), 'Não informada') AS categoria,
+           ROUND(SUM(valor), 2) AS total
+    FROM despesas_atual WHERE ${w}
+    GROUP BY 1, 2 HAVING SUM(valor) > 0`;
+}
+
+/** Concorrentes de uma candidatura: mesmo cargo, mesma UF, os mais votados
+ *  (ou, antes da totalização, os que mais contrataram) — o atalho para
+ *  "comparar com quem disputou a mesma vaga". */
+export function sqlConcorrentes(sq: string, excluir: string[], limite: number): string {
+  return `
+    SELECT i.SQ_CANDIDATO, ${nomeExibicao('i.')} AS nome, i.SG_PARTIDO
+    FROM indicadores i ${JOIN_NOMES_URNA}
+    JOIN (SELECT DS_CARGO, SG_UF FROM indicadores WHERE SQ_CANDIDATO = '${escSQL(sq)}') alvo
+      ON alvo.DS_CARGO = i.DS_CARGO AND alvo.SG_UF = i.SG_UF
+    WHERE i.SQ_CANDIDATO NOT IN (${listaSQL([sq, ...excluir])})
+    ORDER BY i.votos DESC NULLS LAST, i.total_contratado DESC
+    LIMIT ${limite}`;
+}
+
+/** Siglas com movimento, da que mais contratou para a que menos — os chips
+ *  do seletor de partidos. */
+export const SQL_PARTIDOS_COM_MOVIMENTO = `
+  SELECT SG_PARTIDO, ROUND(SUM(total_contratado), 2) AS contratado
+  FROM indicadores WHERE SG_PARTIDO IS NOT NULL AND SG_PARTIDO <> '#NULO'
+  GROUP BY 1 ORDER BY contratado DESC`;
 
 /** A visão de receitas removidas anda sobre a tabela de receitas — a contraparte
  *  é o doador e a categoria é a origem da receita, não a do gasto. */

@@ -172,6 +172,17 @@ e `/fornecedor/:id`
 agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores) com degradação
 graciosa se algum ainda não foi publicado.
 
+Comparar (`/comparar`, `pages/comparar.tsx` + `components/app/comparacao.tsx`): até
+`MAX_COMPARADOS` (4) candidaturas (`?c=sq1,sq2`) ou partidos (`?modo=partidos&p=PT,PL&cargo=&uf=`)
+lado a lado — arrecadado × contratado na mesma escala, composição da receita em barras 100%,
+matriz tipo de gasto × item (fatia do gasto de cada um; as linhas são escolhidas pela soma das
+FATIAS, para o menor não ficar sem as categorias dele), custo por voto repartido e a tabela com
+tudo. Candidato lê as colunas prontas de `indicadores` (`sqlCompararCandidatos`); partido soma
+`indicadores` e usa `sqlCustoPorVotoAgregado` — o MESMO SQL da ficha do partido e de
+`resumo.sql_custo_por_voto_partido` (conferido por `test_custo_por_voto_do_partido_e_o_mesmo_sql_no_site`).
+A identidade de cada item vem do rótulo da linha, nunca de cor: as cores mantêm o significado do
+resto do site. As fichas de candidato e de partido têm botão "Comparar" que abre a tela já com o item.
+
 As red flags **por nota** (7, 12 e 13) são marcas nas fichas, não páginas: a linha
 de fornecedor da ficha do candidato abre e mostra as notas que ela esconde
 (`sqlNotasDoCandidato`), e as flags 12/13 viram chip no cabeçalho da ficha do

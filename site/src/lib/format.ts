@@ -18,6 +18,15 @@ export const brlCentavos = new Intl.NumberFormat('pt-BR', {
 
 export const num = new Intl.NumberFormat('pt-BR');
 
+/** Reais em notação curta ("R$ 1,2 mi", "R$ 350 mil") — para rótulos de barra
+ *  e células apertadas, onde o valor exato fica no título/tabela ao lado. */
+export const brlCompacto = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
 /** Custo por voto para exibição: centavos, e "< R$ 0,01" quando o gasto é tão
  *  pequeno diante dos votos que arredondaria para zero — "R$ 0,00" afirmaria um
  *  voto de graça que não existe. */

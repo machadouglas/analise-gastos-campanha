@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { BarChart3, BookOpen, Radar, Terminal, WifiOff } from 'lucide-react';
+import { BarChart3, BookOpen, Radar, Scale, Terminal, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { assinarEstado, estadoAtual } from '@/lib/dados';
 
@@ -9,6 +9,7 @@ const REPO = 'https://github.com/machadouglas/analise-gastos-campanha';
 const navegacao = [
   { nome: 'Radar', href: '/', icone: Radar },
   { nome: 'Explorar', href: '/explorar', icone: BarChart3 },
+  { nome: 'Comparar', href: '/comparar', icone: Scale },
   { nome: 'Conecte sua IA no radar', href: '/consultar', icone: Terminal },
   // a tese do site é o método — a metodologia merece porta de entrada no topo
   { nome: 'Metodologia', href: '/metodologia', icone: BookOpen },
@@ -53,11 +54,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </span>
             </span>
           </Link>
-          <div className="flex shrink-0 items-center gap-0.5 sm:gap-4">
+          <div className="flex shrink-0 items-center gap-0.5 sm:gap-1 lg:gap-3">
             {navegacao.map((item) => (
               <Link
                 key={item.href}
                 to={item.href}
+                aria-label={item.nome}
+                title={item.nome}
                 className={cn(
                   'flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium transition-colors sm:px-3',
                   pathname === item.href
@@ -66,7 +69,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 )}
               >
                 <item.icone className="h-4 w-4" />
-                <span className="hidden sm:inline">{item.nome}</span>
+                {/* rótulo só a partir de lg: com cinco itens, entre 640 e ~1000px os
+                    textos invadiam a marca */}
+                <span className="hidden lg:inline">{item.nome}</span>
               </Link>
             ))}
           </div>
