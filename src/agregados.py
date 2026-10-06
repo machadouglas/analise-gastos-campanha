@@ -268,6 +268,20 @@ def _indicadores(con) -> None:
         "FROM candidatos GROUP BY 1) urna USING (SQ_CANDIDATO)"
     )
 
+    # votos (carga.carregar_votos). O denominador do custo por voto é o 1º
+    # turno: todo candidato o disputou, então a régua é a mesma para o grupo
+    # inteiro — o 2º turno soma gasto de mais três semanas para dois candidatos
+    # por disputa e fica em votos_2t, sem entrar na conta. NULL sem a tabela
+    # (ainda não baixada) ou sem o candidato nela (não chegou à urna); zero voto
+    # também dá custo NULL, e o zero fica à vista em `votos`.
+    votos = (
+        "LEFT JOIN votos USING (SQ_CANDIDATO)"
+        if _tem(con, "votos")
+        else "LEFT JOIN (SELECT NULL AS SQ_CANDIDATO, CAST(NULL AS BIGINT) AS votos_1t, "
+             "CAST(NULL AS BIGINT) AS votos_2t, CAST(NULL AS VARCHAR) AS resultado) votos "
+             "USING (SQ_CANDIDATO)"
+    )
+
     con.execute(f"""
         CREATE OR REPLACE TABLE indicadores AS
         WITH cand AS (
@@ -341,7 +355,24 @@ def _indicadores(con) -> None:
                ROUND(100.0 * COALESCE(pf.valor_pessoa_fisica, 0) / NULLIF(tot.total_contratado, 0), 1) AS pct_pessoa_fisica,
                COALESCE(rep.grupos_valor_repetido, 0) AS grupos_valor_repetido,
                COALESCE(removidas.valor_removido, 0) AS valor_removido,
-               COALESCE(recem.n, 0) AS fornecedores_recem_abertos
+               COALESCE(recem.n, 0) AS fornecedores_recem_abertos,
+               votos.votos_1t AS votos, votos.votos_2t, votos.resultado,
+               -- 4 casas: com 2, R$ 1 declarado ÷ 2.280 votos virava 0,00 — "voto de
+               -- graça" que não existe; quem exibe arredonda (e diz "< R$ 0,01")
+               ROUND(COALESCE(tot.total_contratado, 0) / NULLIF(votos.votos_1t, 0), 4) AS custo_por_voto,
+               -- as parcelas repartem o GASTO por voto na proporção da receita
+               -- (público, próprio, terceiros somam o custo): dividir a receita
+               -- pelos votos dava "público por voto" maior que o custo total em
+               -- quem arrecadou mais do que gastou — certo e ilegível. Assume
+               -- dinheiro fungível (não há como saber qual real pagou qual nota).
+               -- NULL sem receita declarada: a composição é desconhecida.
+               ROUND(COALESCE(tot.total_contratado, 0) * rec.fundos_publicos / NULLIF(rec.total_receitas, 0)
+                     / NULLIF(votos.votos_1t, 0), 4) AS custo_publico_por_voto,
+               ROUND(COALESCE(tot.total_contratado, 0) * rec.recursos_proprios / NULLIF(rec.total_receitas, 0)
+                     / NULLIF(votos.votos_1t, 0), 4) AS custo_proprio_por_voto,
+               ROUND(COALESCE(tot.total_contratado, 0)
+                     * (rec.total_receitas - rec.fundos_publicos - rec.recursos_proprios)
+                     / NULLIF(rec.total_receitas, 0) / NULLIF(votos.votos_1t, 0), 4) AS custo_terceiros_por_voto
         FROM cand
         LEFT JOIN tot USING (SQ_CANDIDATO)
         LEFT JOIN rec USING (SQ_CANDIDATO)
@@ -355,6 +386,7 @@ def _indicadores(con) -> None:
         {bens}
         {consultados}
         {recem}
+        {votos}
     """)
     n = con.execute("SELECT COUNT(*) FROM indicadores").fetchone()[0]
     print(f"[agregado] indicadores: {n} candidatos")
@@ -370,6 +402,9 @@ METRICAS_COMPARACAO = [
     ("pct_sem_nota", "pct_sem_nota", "total_contratado > 0"),
     ("pct_pessoa_fisica", "pct_pessoa_fisica", "total_contratado > 0"),
     ("pct_fundos_publicos", "pct_fundos_publicos", "total_receitas > 0"),
+    # só quem tem voto: NULL (sem totalização, fora da urna, zero voto) não entra
+    ("custo_por_voto", "custo_por_voto", "custo_por_voto IS NOT NULL"),
+    ("votos", "votos", "votos IS NOT NULL"),
 ]
 
 

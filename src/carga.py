@@ -1,6 +1,7 @@
 """Extração dos zips do TSE e carga em um banco DuckDB local."""
 
 import codecs
+import io
 import shutil
 import zipfile
 from pathlib import Path
@@ -19,6 +20,18 @@ TABELAS = {
     "candidatos": "consulta_cand_{ano}_BRASIL.csv",  # consolidado (há também _BR e um por UF)
     "bens": "bem_candidato_{ano}_BRASIL.csv",  # patrimônio declarado no registro
 }
+
+# Votação nominal (votacao_candidato_munzona): uma linha por candidato × município
+# × zona × turno. O zip de uma eleição geral passa de 600 MB e o consolidado
+# _BRASIL, sozinho, de 4 GB descompactado — por isso ele NÃO passa por
+# extrair_zips nem vira tabela bruta: carregar_votos lê só o consolidado, de
+# dentro do zip, agrega por candidato e apaga o CSV.
+ZIP_VOTACAO = "votacao_candidato_munzona_{ano}.zip"
+CSV_VOTACAO = "votacao_candidato_munzona_{ano}_BRASIL.csv"
+# o consolidado NÃO traz a eleição presidencial: ela vive no membro _BR (abrangência
+# nacional, com o voto do exterior), publicado à parte — e vazio enquanto o TSE não
+# totaliza o país. Lido sempre, só para candidatos que o consolidado não tem.
+CSV_VOTACAO_BR = "votacao_candidato_munzona_{ano}_BR.csv"
 
 # views tipadas: (view, tabela, coluna de valor, coluna de data, coluna da contraparte)
 # O SPCE emite linhas-placeholder (prestação sem movimento: contraparte '-1'/'#NULO'
@@ -78,6 +91,8 @@ def extrair_zips(ano: int) -> Path:
     destino = origem / "extraido"
     destino.mkdir(parents=True, exist_ok=True)
     for zp in origem.glob("*.zip"):
+        if zp.name == ZIP_VOTACAO.format(ano=ano):
+            continue  # gigante: carregar_votos lê só o consolidado, sob demanda
         with zipfile.ZipFile(zp) as z:
             # nunca extrair membro que resolva fora do destino (zip malicioso com ../)
             for m in z.namelist():
@@ -118,10 +133,17 @@ def transcodificar_para_utf8(origem: Path, destino: Path) -> Path:
     a carga. `newline=''` preserva o fim de linha do TSE tal como está. Um BOM UTF-8
     no início (o DuckDB o descartava ao ler direto) é descartado também, senão viraria
     'ï»¿' colado no nome da primeira coluna."""
+    with open(origem, "rb") as bruto:
+        return _gravar_como_utf8(bruto, destino)
+
+
+def _gravar_como_utf8(bruto, destino: Path) -> Path:
+    """O miolo de transcodificar_para_utf8 sobre um fluxo binário qualquer — o
+    arquivo extraído ou o membro lido direto de dentro do zip."""
     destino.parent.mkdir(parents=True, exist_ok=True)
     parcial = destino.with_suffix(destino.suffix + ".part")
-    with open(origem, encoding=ENCODING_TSE, errors=_TRATAMENTO_BYTE_INDEFINIDO,
-              newline="") as entrada, \
+    with io.TextIOWrapper(bruto, encoding=ENCODING_TSE, errors=_TRATAMENTO_BYTE_INDEFINIDO,
+                          newline="") as entrada, \
          open(parcial, "w", encoding="utf-8", newline="") as saida:
         primeiro = entrada.read(1 << 20)
         saida.write(primeiro.removeprefix(_BOM_UTF8_LIDO_COMO_CP1252))
@@ -161,8 +183,96 @@ def carregar(ano: int) -> None:
         n = con.execute(f"SELECT count(*) FROM {tabela}").fetchone()[0]
         print(f"[carregado] {tabela}: {n} linhas")
 
+    try:
+        carregar_votos(con, ano)
+    except RuntimeError as e:
+        # voto é dado complementar: um zip de votação quebrado não pode barrar a
+        # carga da prestação de contas. A tabela `votos` anterior fica como está.
+        print(f"[erro] votos: {e} — tabela anterior mantida")
+
     criar_views(con)
     con.close()
+
+
+# marcadores de nulo do TSE no arquivo de votação (candidato sem totalização)
+_NULOS_VOTACAO = "'#NULO#', '#NULO', '#NE', '#NE#'"
+
+
+def carregar_votos(con, ano: int) -> None:
+    """Carrega a tabela `votos`: UMA linha por candidato, com os votos nominais
+    somados de todos os municípios e zonas, por turno.
+
+    - `votos_1t`/`votos_2t`: QT_VOTOS_NOMINAIS — todo voto digitado no número do
+      candidato. `votos_2t` é NULL para quem não disputou o 2º turno.
+    - `votos_validos_1t`/`votos_validos_2t`: QT_VOTOS_NOMINAIS_VALIDOS — os que
+      contaram na totalização (candidatura indeferida tem nominais e zero válidos).
+    - `resultado`: DS_SIT_TOT_TURNO do ÚLTIMO turno disputado (ELEITO, ELEITO POR
+      QP, SUPLENTE, NÃO ELEITO, 2º TURNO...).
+
+    Antes da totalização o TSE publica o zip só com o cabeçalho: a tabela nasce
+    vazia, e é isso que ela deve dizer."""
+    zp = DIR_RAW / str(ano) / ZIP_VOTACAO.format(ano=ano)
+    if not zp.exists():
+        print(f"[aviso] {zp.name} não baixado — votos não carregados")
+        return
+    membros = [CSV_VOTACAO.format(ano=ano), CSV_VOTACAO_BR.format(ano=ano)]
+    pasta = DIR_RAW / str(ano) / "extraido" / "utf8"
+    utf8 = [pasta / m for m in membros]
+
+    def agregado(csv: Path) -> str:
+        return f"""
+            SELECT SQ_CANDIDATO,
+                   TRY_CAST(NR_TURNO AS INTEGER) AS turno,
+                   CAST(SUM(TRY_CAST(QT_VOTOS_NOMINAIS AS BIGINT)) AS BIGINT) AS votos,
+                   CAST(SUM(TRY_CAST(QT_VOTOS_NOMINAIS_VALIDOS AS BIGINT)) AS BIGINT) AS validos,
+                   MAX(CASE WHEN DS_SIT_TOT_TURNO NOT IN ({_NULOS_VOTACAO})
+                            THEN DS_SIT_TOT_TURNO END) AS situacao
+            FROM read_csv('{csv.as_posix()}', delim=';', quote='"', header=true,
+                          encoding='utf-8', all_varchar=true)
+            WHERE SQ_CANDIDATO IS NOT NULL
+            GROUP BY 1, 2"""
+
+    try:
+        with zipfile.ZipFile(zp) as z:
+            for membro, destino in zip(membros, utf8, strict=True):
+                with z.open(membro) as bruto:
+                    _gravar_como_utf8(bruto, destino)
+        # cada arquivo agregado uma vez (o consolidado tem 4 GB); o _BR entra
+        # só com quem o consolidado não tem — se um dia o TSE o incluir lá,
+        # nada dobra
+        con.execute(f"CREATE OR REPLACE TEMP TABLE votos_consolidado AS {agregado(utf8[0])}")
+        con.execute(f"""
+            CREATE OR REPLACE TEMP TABLE votos_nacional AS
+            SELECT * FROM ({agregado(utf8[1])})
+            WHERE SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM votos_consolidado)""")
+        con.execute("""
+            CREATE OR REPLACE TABLE votos AS
+            WITH por_turno AS (
+                SELECT * FROM votos_consolidado UNION ALL SELECT * FROM votos_nacional)
+            SELECT SQ_CANDIDATO,
+                   MAX(votos) FILTER (WHERE turno = 1) AS votos_1t,
+                   MAX(validos) FILTER (WHERE turno = 1) AS votos_validos_1t,
+                   MAX(votos) FILTER (WHERE turno = 2) AS votos_2t,
+                   MAX(validos) FILTER (WHERE turno = 2) AS votos_validos_2t,
+                   ARG_MAX(situacao, turno) AS resultado
+            FROM por_turno
+            GROUP BY 1
+        """)
+        con.execute("DROP TABLE votos_consolidado")
+        con.execute("DROP TABLE votos_nacional")
+    except (zipfile.BadZipFile, KeyError, duckdb.Error) as e:
+        raise RuntimeError(f"falha ao carregar votos ({zp.name}): {e}") from e
+    finally:
+        # 4 GB+ numa eleição geral: os CSVs só servem para esta agregação
+        for arquivo in utf8:
+            arquivo.unlink(missing_ok=True)
+            arquivo.with_suffix(arquivo.suffix + ".part").unlink(missing_ok=True)
+    n, com_voto = con.execute(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE votos_1t > 0) FROM votos").fetchone()
+    if n:
+        print(f"[carregado] votos: {n} candidatos ({com_voto} com voto no 1º turno)")
+    else:
+        print("[carregado] votos: 0 candidatos — o TSE ainda não publicou a totalização")
 
 
 def criar_views(con) -> None:

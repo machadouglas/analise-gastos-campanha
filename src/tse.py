@@ -18,6 +18,9 @@ CONJUNTOS = {
     "candidatos": f"{CDN}/consulta_cand/consulta_cand_{{ano}}.zip",
     "bens": f"{CDN}/bem_candidato/bem_candidato_{{ano}}.zip",
     "cnpj_campanha": f"{CDN}/prestacao_contas/CNPJ_campanha_{{ano}}.zip",
+    # votos por candidato × município × zona (600+ MB numa eleição geral; só o
+    # cabeçalho até o TSE totalizar) — carga.carregar_votos agrega por candidato
+    "votacao": f"{CDN}/votacao_candidato_munzona/votacao_candidato_munzona_{{ano}}.zip",
 }
 
 
@@ -42,7 +45,7 @@ def baixar_conjunto(
         cabecalhos["If-Modified-Since"] = marca.read_text(encoding="utf-8").strip()
     print(f"[baixando] {url}")
     inicio = time.time()
-    r = requests.get(url, impersonate="chrome", timeout=600, stream=True, headers=cabecalhos)
+    r = requests.get(url, impersonate="chrome", timeout=1800, stream=True, headers=cabecalhos)
     if r.status_code == 304:
         r.close()
         print(f"[ok] {destino.name}: TSE ainda serve a mesma versão (304) — download pulado")

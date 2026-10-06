@@ -186,6 +186,113 @@ def _serie_nacional(con) -> list[dict]:
     """)
 
 
+# partido só entra no ranking da Home com candidaturas suficientes: a média de
+# 3 candidatos é a conta de 3 pessoas, não a de uma sigla
+MIN_CANDIDATOS_CUSTO_PARTIDO = 10
+
+
+def sql_custo_por_voto_partido(where: str, por_cargo: bool = False, nacional: bool = False) -> str:
+    """Custo por voto AGREGADO de um recorte de `indicadores` (o partido, ou o
+    partido por cargo): soma do contratado ÷ soma dos votos do 1º turno, só entre
+    quem tem voto. Não é a média dos custos individuais — um candidato de 10
+    votos e R$ 10 mil não pesa o mesmo que um de 1 milhão de votos. As parcelas
+    (pública, própria, terceiros) são a soma das fatias individuais ÷ votos, só
+    entre quem declarou receita (senão a composição é desconhecida). A ficha do
+    partido (site/src/pages/partido.tsx) e o MCP rodam o MESMO SQL."""
+    # `nacional`: o mesmo agregado sem dimensão nenhuma (o custo do país)
+    dimensoes = [] if nacional else ["SG_PARTIDO"] + (["DS_CARGO"] if por_cargo else [])
+    cargo = "DS_CARGO AS cargo, " if por_cargo and not nacional else ""
+    grupo = f"GROUP BY {', '.join(dimensoes)}" if dimensoes else ""
+    partido = "SG_PARTIDO, " if not nacional else ""
+    return f"""
+        SELECT {partido}{cargo}
+               COUNT(*) AS candidatos,
+               COUNT(*) FILTER (WHERE resultado LIKE 'ELEITO%') AS eleitos,
+               SUM(votos) AS votos,
+               ROUND(SUM(total_contratado), 2) AS contratado,
+               ROUND(SUM(total_contratado) / SUM(votos), 2) AS custo_por_voto,
+               ROUND(SUM(custo_publico_por_voto * votos)
+                     / NULLIF(SUM(votos) FILTER (WHERE custo_publico_por_voto IS NOT NULL), 0), 2)
+                 AS custo_publico_por_voto,
+               ROUND(SUM(custo_proprio_por_voto * votos)
+                     / NULLIF(SUM(votos) FILTER (WHERE custo_proprio_por_voto IS NOT NULL), 0), 2)
+                 AS custo_proprio_por_voto,
+               ROUND(SUM(custo_terceiros_por_voto * votos)
+                     / NULLIF(SUM(votos) FILTER (WHERE custo_terceiros_por_voto IS NOT NULL), 0), 2)
+                 AS custo_terceiros_por_voto
+        FROM indicadores
+        WHERE {where} AND votos > 0 AND custo_por_voto IS NOT NULL
+        {grupo} ORDER BY custo_por_voto DESC
+    """
+
+
+# quantos candidatos cada lista da Home leva POR CARGO: a Home tem abas por
+# cargo e mostra os primeiros de cada uma sem bootar motor nenhum
+POR_CARGO_NA_HOME = 8
+
+# as listas de candidato da Home: (chave, filtro, ordem) sobre `indicadores`
+LISTAS_CUSTO_POR_VOTO = [
+    ("eleitos_mais_caros", "i.resultado LIKE 'ELEITO%'", "i.custo_por_voto DESC"),
+    # a história mais forte depois da urna: dinheiro que não virou mandato —
+    # quem ainda disputa o 2º turno fica de fora até a conta fechar
+    ("gastaram_sem_eleger", "i.resultado NOT LIKE 'ELEITO%' AND i.resultado NOT LIKE '%TURNO%'",
+     "i.total_contratado DESC"),
+    ("maiores_gastos", "1=1", "i.total_contratado DESC"),
+]
+
+
+def _custo_por_voto(con) -> dict:
+    """O bloco da Home: o custo nacional (soma ÷ soma), o ranking de partidos
+    pelo custo agregado (com piso de candidaturas) e quatro listas de candidatos
+    com os primeiros de CADA cargo (a Home filtra por aba sem consultar nada).
+    Vazio enquanto o TSE não totaliza."""
+    vazio = {"nacional": None, "partidos": [], **{k: [] for k, _, _ in LISTAS_CUSTO_POR_VOTO}}
+    if not _existe(con, "indicadores") or not _existe(con, "votos"):
+        return vazio
+    nacional = _registros(con, sql_custo_por_voto_partido("1=1", nacional=True))
+    if not nacional or not nacional[0]["votos"]:
+        return vazio
+    partidos = _registros(con, f"""
+        SELECT * FROM ({sql_custo_por_voto_partido("1=1")})
+        WHERE candidatos >= {MIN_CANDIDATOS_CUSTO_PARTIDO}
+        ORDER BY custo_por_voto DESC
+    """)
+    foto = ("LEFT JOIN (SELECT SQ_CANDIDATO, ANY_VALUE(CD_ELEICAO) AS cd_eleicao, "
+            "ANY_VALUE(SG_UE) AS sg_ue FROM candidatos GROUP BY 1) c USING (SQ_CANDIDATO)")
+    listas = {
+        chave: _registros(con, f"""
+            SELECT i.SQ_CANDIDATO, i.NM_CANDIDATO, i.NM_URNA_CANDIDATO, i.SG_PARTIDO, i.DS_CARGO,
+                   i.SG_UF, c.cd_eleicao, c.sg_ue, i.resultado, i.votos,
+                   i.total_contratado AS contratado, i.custo_por_voto, i.custo_publico_por_voto
+            FROM indicadores i {foto}
+            WHERE i.custo_por_voto IS NOT NULL AND {filtro}
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY i.DS_CARGO ORDER BY {ordem}) <= {POR_CARGO_NA_HOME}
+            ORDER BY {ordem}
+        """)
+        for chave, filtro, ordem in LISTAS_CUSTO_POR_VOTO
+    }
+    return {"nacional": nacional[0], "partidos": partidos, **listas}
+
+
+def _votacao(con) -> dict:
+    """Estado da totalização publicada: quantos candidatos têm voto, quantos
+    foram ao 2º turno e se a presidencial (membro _BR do zip, que chega
+    depois) já entrou. `totalizada` False = o TSE ainda serve o zip vazio."""
+    if not _existe(con, "votos"):
+        return {"totalizada": False, "candidatos_com_votos": 0, "votos_1t": 0,
+                "candidatos_2o_turno": 0, "presidencial_totalizada": False}
+    linha = _registros(con, """
+        SELECT COUNT(*) FILTER (WHERE votos_1t > 0) AS candidatos_com_votos,
+               COALESCE(SUM(votos_1t), 0) AS votos_1t,
+               COUNT(votos_2t) AS candidatos_2o_turno,
+               COUNT(*) FILTER (WHERE SQ_CANDIDATO IN (
+                   SELECT SQ_CANDIDATO FROM candidatos WHERE UPPER(DS_CARGO) = 'PRESIDENTE'))
+                 > 0 AS presidencial_totalizada
+        FROM votos
+    """)[0]
+    return {"totalizada": linha["candidatos_com_votos"] > 0, **linha}
+
+
 def gerar(con) -> dict:
     # o resumo.json é público como os parquet: CPFs saem pseudonimizados (pf-…)
     pseudo_fornecedor = privacidade.sql_pseudonimo("NR_CPF_CNPJ_FORNECEDOR", privacidade.sal())
@@ -318,4 +425,6 @@ def gerar(con) -> dict:
         "fora_da_curva": _fora_da_curva(con),
         "serie_nacional": _serie_nacional(con),
         "cota_fefc": _cota_fefc(con),
+        "votacao": _votacao(con),
+        "custo_por_voto": _custo_por_voto(con),
     }

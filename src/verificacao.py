@@ -307,6 +307,58 @@ def verificar(con) -> list[str]:
         checar("fundos públicos <= receitas por candidato", fundos_estourados == 0,
                f"{fundos_estourados} candidatos com fundo maior que a receita")
 
+    # --- votos: a tabela vazia é o estado normal até o TSE totalizar (aviso);
+    # com dado, a agregação por candidato tem de fechar com o scorecard
+    if _existe(con, "votos"):
+        n, duplicados, incoerentes = con.execute("""
+            SELECT COUNT(*), COUNT(*) - COUNT(DISTINCT SQ_CANDIDATO),
+                   COUNT(*) FILTER (WHERE votos_1t < 0 OR votos_2t < 0
+                                       OR votos_validos_1t > votos_1t
+                                       OR votos_validos_2t > votos_2t)
+            FROM votos
+        """).fetchone()
+        avisar("votos: totalização publicada pelo TSE", n > 0, f"{n} candidatos")
+        # a presidencial vem num membro à parte (_BR) e chega depois das demais:
+        # sem ela, o custo por voto do cargo mais caro do país fica em branco
+        if n:
+            presidenciais = con.execute("""
+                SELECT COUNT(*) FROM votos
+                WHERE SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM candidatos
+                                       WHERE UPPER(DS_CARGO) = 'PRESIDENTE')
+            """).fetchone()[0]
+            avisar("votos: eleição presidencial totalizada (membro _BR do zip)",
+                   presidenciais > 0, f"{presidenciais} candidatos a presidente com votos")
+        checar("votos: uma linha por candidato", duplicados == 0, f"{duplicados} repetidos")
+        checar("votos: válidos <= nominais e nada negativo", incoerentes == 0,
+               f"{incoerentes} candidatos incoerentes")
+        if _existe(con, "indicadores"):
+            ind_votos, fonte_votos = con.execute("""
+                SELECT (SELECT COALESCE(SUM(votos), 0) FROM indicadores),
+                       (SELECT COALESCE(SUM(votos_1t), 0) FROM votos
+                        WHERE SQ_CANDIDATO IN (SELECT SQ_CANDIDATO FROM indicadores))
+            """).fetchone()
+            checar("indicadores votos == tabela votos", ind_votos == fonte_votos,
+                   f"indicadores={ind_votos} fonte={fonte_votos}")
+            # as três parcelas são fatias do custo: têm de fechar com ele
+            # (arredondamento de três parcelas: até 2 centavos)
+            abertas = con.execute("""
+                SELECT COUNT(*) FROM indicadores
+                WHERE custo_publico_por_voto IS NOT NULL
+                  AND ABS(custo_publico_por_voto + custo_proprio_por_voto + custo_terceiros_por_voto
+                          - custo_por_voto) > 0.02
+            """).fetchone()[0]
+            checar("parcelas do custo por voto somam o custo", abertas == 0,
+                   f"{abertas} candidatos com parcelas que não fecham")
+            # votaram em quem o registro de candidaturas não conhece: chave
+            # trocada entre os arquivos (o custo por voto sairia vazio em silêncio)
+            if n:
+                orfaos = con.execute("""
+                    SELECT COUNT(*) FROM votos
+                    WHERE SQ_CANDIDATO NOT IN (SELECT SQ_CANDIDATO FROM candidatos)
+                """).fetchone()[0]
+                checar("votos: candidatos existem no registro", orfaos <= 0.01 * n,
+                       f"{orfaos} de {n} sem registro em candidatos")
+
     if _existe(con, "indicadores") and _existe(con, "norma_documento"):
         # a régua do sem-documento-fiscal vive em analises.py e é aplicada dentro
         # de uma CTE de indicadores: se as duas divergirem (alguém edita uma e

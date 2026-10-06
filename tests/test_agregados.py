@@ -9,7 +9,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src import agregados  # noqa: E402
-from tests.conftest import extrair_dia, inserir_bem, inserir_pagamento  # noqa: E402
+from tests.conftest import (  # noqa: E402
+    extrair_dia,
+    inserir_bem,
+    inserir_pagamento,
+    inserir_votos,
+)
 
 
 def test_serie_diaria_reconstroi_o_declarado_em_cada_dia(banco):
@@ -537,3 +542,69 @@ def test_rede_doacao_originaria_liga_ao_candidato_sem_fanout(banco):
         WHERE tipo = 'doacao_originaria'
     """).fetchall()
     assert linhas == [("EMPRESARIO ORIGINARIO", "FULANO", 2500.0)]
+
+
+def _campanha_com_fundo_e_recurso_proprio(banco):
+    """R$ 6.000 contratados; R$ 4.000 de Fundo Especial e R$ 1.000 do próprio bolso."""
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "6000,00"}],
+                receitas=[
+                    {"SQ_RECEITA": "1", "VR_RECEITA": "4000,00",
+                     "DS_FONTE_RECEITA": "FUNDO ESPECIAL",
+                     "DS_ORIGEM_RECEITA": "Recursos de partido político"},
+                    {"SQ_RECEITA": "2", "VR_RECEITA": "1000,00",
+                     "DS_ORIGEM_RECEITA": "Recursos próprios"},
+                ])
+
+
+def test_custo_por_voto_reparte_o_gasto_na_proporcao_da_receita(banco):
+    # R$ 6.000 ÷ 2.000 votos = R$ 3,00; a receita é 80% fundo e 20% próprio,
+    # então R$ 2,40 + R$ 0,60 + R$ 0,00 — e nunca "fundo ÷ votos" (seria R$ 2,00,
+    # que num candidato que arrecada mais do que gasta passa do custo total)
+    _campanha_com_fundo_e_recurso_proprio(banco)
+    inserir_votos(banco, votos_1t=2000, resultado="ELEITO POR QP")
+    agregados.materializar(banco)
+    assert banco.execute("""
+        SELECT votos, votos_2t, resultado, custo_por_voto, custo_publico_por_voto,
+               custo_proprio_por_voto, custo_terceiros_por_voto
+        FROM indicadores
+    """).fetchone() == (2000, None, "ELEITO POR QP", 3.0, 2.4, 0.6, 0.0)
+
+
+def test_parcelas_do_custo_por_voto_sem_receita_ficam_nulas(banco):
+    # gasto sem nenhuma receita declarada: o custo existe, a composição não
+    extrair_dia(banco, "20/08/2026",
+                despesas=[{"SQ_DESPESA": "1", "VR_DESPESA_CONTRATADA": "6000,00"}])
+    inserir_votos(banco, votos_1t=2000)
+    agregados.materializar(banco)
+    assert banco.execute("""
+        SELECT custo_por_voto, custo_publico_por_voto, custo_terceiros_por_voto FROM indicadores
+    """).fetchone() == (3.0, None, None)
+
+
+def test_custo_por_voto_usa_o_primeiro_turno_mesmo_com_segundo(banco):
+    # o 2º turno fica à vista em votos_2t, mas a régua é a que todos disputaram
+    _campanha_com_fundo_e_recurso_proprio(banco)
+    inserir_votos(banco, votos_1t=3000, votos_2t=6000, resultado="ELEITO")
+    agregados.materializar(banco)
+    assert banco.execute(
+        "SELECT votos, votos_2t, custo_por_voto FROM indicadores"
+    ).fetchone() == (3000, 6000, 2.0)
+
+
+def test_custo_por_voto_e_nulo_sem_voto_e_sem_totalizacao(banco):
+    _campanha_com_fundo_e_recurso_proprio(banco)
+    # sem a tabela (zip não baixado): tudo NULL, e o scorecard sai mesmo assim
+    agregados.materializar(banco)
+    assert banco.execute(
+        "SELECT votos, resultado, custo_por_voto FROM indicadores").fetchone() == (None, None, None)
+    # zero voto: o zero aparece, o custo não vira divisão por zero
+    inserir_votos(banco, votos_1t=0)
+    agregados.materializar(banco)
+    assert banco.execute(
+        "SELECT votos, custo_por_voto, custo_publico_por_voto FROM indicadores"
+    ).fetchone() == (0, None, None)
+    # candidato fora do arquivo de votação (não chegou à urna): NULL, não zero
+    banco.execute("UPDATE votos SET SQ_CANDIDATO = '999999'")
+    agregados.materializar(banco)
+    assert banco.execute("SELECT votos FROM indicadores").fetchone() == (None,)

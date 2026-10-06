@@ -164,6 +164,14 @@ def test_ficha_do_partido_e_visoes(banco):
     p = _rodar(servidor.ficha_partido("xyz"))
     assert p["partido"] == "XYZ" and p["totais"]["candidatos_com_movimento"] > 0
     assert p["maiores_candidatos"]
+    # custo por voto AGREGADO da sigla: soma do contratado ÷ soma dos votos
+    agregado = p["custo_por_voto"]["partido"]
+    assert agregado["custo_por_voto"] == pytest.approx(
+        agregado["contratado"] / agregado["votos"], abs=0.01)
+    assert p["custo_por_voto"]["por_cargo"][0]["cargo"] == "Deputado Estadual"
+    v = _rodar(servidor.visao_geral())
+    assert v["votacao"]["totalizada"]
+    assert v["custo_por_voto_nacional"]["custo_por_voto"] > 0
 
     c = _rodar(servidor.fornecedores_compartilhados(uf="XX"))
     assert any(f["fornecedor_id"] == CNPJ_FORNECEDOR for f in c["fornecedores"])
@@ -183,6 +191,37 @@ def test_ficha_do_partido_e_visoes(banco):
     assert g["categorias"] and g["categorias"][0]["total"] > 0
     s = _rodar(servidor.sem_nota())
     assert isinstance(s["candidatos"], list)
+
+
+def test_custo_por_voto_vem_das_colunas_do_backend(banco):
+    """A ferramenta lê custo_por_voto de `indicadores` (src/agregados.py) — o
+    mesmo número da ficha do site — e nunca refaz a divisão."""
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    r = _rodar(servidor.custo_por_voto(uf="XX"))
+    assert r["candidatos"] and r["ressalvas"] and "1º TURNO" in r["ressalvas"][0]
+    por_sq = {c["sq_candidato"]: c for c in r["candidatos"]}
+    # cand 2: 400 votos no 1º turno, 900 no 2º; o custo usa os 400
+    c2 = por_sq["160002"]
+    assert (c2["votos_1t"], c2["votos_2t"], c2["resultado"]) == (400, 900, "NÃO ELEITO")
+    assert c2["custo_por_voto"] == pytest.approx(c2["contratado"] / 400, abs=1e-4)
+    # parcelas = custo repartido na proporção da receita (2.000 fundo, 300
+    # próprios, 1.200 terceiros em 3.500) — e fecham com o custo
+    assert c2["custo_publico_por_voto"] == pytest.approx(c2["custo_por_voto"] * 2000 / 3500, abs=0.01)
+    assert c2["custo_proprio_por_voto"] == pytest.approx(c2["custo_por_voto"] * 300 / 3500, abs=0.01)
+    assert (c2["custo_publico_por_voto"] + c2["custo_proprio_por_voto"]
+            + c2["custo_terceiros_por_voto"]) == pytest.approx(c2["custo_por_voto"], abs=0.02)
+    # quem não chegou à urna não tem custo — e por isso não aparece
+    assert "160004" not in por_sq
+    # ordem crescente e só eleitos
+    menor = _rodar(servidor.custo_por_voto(uf="XX", ordem="menor_custo"))["candidatos"]
+    assert [c["custo_por_voto"] for c in menor] == sorted(c["custo_por_voto"] for c in menor)
+    eleitos = _rodar(servidor.custo_por_voto(so_eleitos=True))["candidatos"]
+    assert eleitos and all(c["resultado"].startswith("ELEITO") for c in eleitos)
+    with pytest.raises(ToolError):
+        _rodar(servidor.custo_por_voto(ordem="aleatoria"))
+    v = _rodar(servidor.visao_geral())["votacao"]
+    assert v["totalizada"] and v["candidatos_com_votos"] == 4 and v["candidatos_2o_turno"] == 1
 
 
 def test_buscar_fornecedor_acha_pelos_dois_papeis(banco):

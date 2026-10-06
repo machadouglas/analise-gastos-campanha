@@ -115,6 +115,27 @@ def test_cota_fefc_e_a_tabela_que_o_site_espera():
         assert f"'{cor}'" in partido_tsx
 
 
+def test_custo_por_voto_do_partido_e_o_mesmo_sql_no_site():
+    """O custo agregado da sigla (soma ÷ soma, parcelas só entre quem tem
+    receita) vive em resumo.sql_custo_por_voto_partido; a ficha do partido
+    repete o texto em TS. Comparar os dois normalizados impede que um lado
+    vire média de custos individuais sem o outro perceber."""
+    from src import resumo
+
+    partido_tsx = (RAIZ / "site" / "src" / "pages" / "partido.tsx").read_text(encoding="utf-8")
+    corpo_ts = partido_tsx[partido_tsx.index("function sqlCustoPorVoto"):partido_tsx.index("function linhaCusto")]
+    py = resumo.sql_custo_por_voto_partido("W", por_cargo=True)
+
+    def miolo(texto: str) -> str:
+        # do COUNT(*) AS candidatos até o fim da projeção: a parte que carrega a régua
+        ini = texto.index("COUNT(*) AS candidatos")
+        fim = texto.index("FROM indicadores")
+        return re.sub(r"\s+", " ", texto[ini:fim]).strip()
+
+    assert miolo(corpo_ts) == miolo(py)
+    assert "votos > 0 AND custo_por_voto IS NOT NULL" in corpo_ts
+
+
 def test_norma_documento_e_a_tabela_que_o_site_espera():
     """O site registra `norma_documento` no boot e lê a coluna exige_documento;
     o backend precisa publicar exatamente esse nome de tabela e de coluna."""
