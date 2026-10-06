@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { urlFotoCandidato } from '@/lib/foto';
 import { cn } from '@/lib/utils';
 
 /** Foto oficial do candidato, direto do serviço público de divulgação de
- *  candidaturas do TSE (hotlink — nada é copiado nem armazenado por nós).
- *  Se o TSE não responder (ou faltarem os metadados), caem as iniciais. */
+ *  candidaturas do TSE (hotlink — nada é copiado nem armazenado por nós; o
+ *  endereço sai de `urlFotoCandidato`). Se o TSE não responder (ou faltarem os
+ *  metadados), caem as iniciais. */
 export function FotoCandidato({
   cdEleicao,
   sq,
@@ -18,10 +20,7 @@ export function FotoCandidato({
   className?: string;
 }) {
   const [erro, setErro] = useState(false);
-  const url =
-    cdEleicao && sq && sgUe
-      ? `https://divulgacandcontas.tse.jus.br/divulga/rest/arquivo/img/${cdEleicao}/${sq}/${sgUe}`
-      : null;
+  const url = urlFotoCandidato(cdEleicao, sq, sgUe);
 
   if (!url || erro) {
     const partes = nome.trim().split(/\s+/);

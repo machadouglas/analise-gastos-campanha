@@ -29,6 +29,7 @@ import { brl, brlCentavos, num, celula, cnpjCpf, dataBR, temFichaFornecedor, url
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
 import { FotoCandidato } from '@/components/app/foto';
+import { urlFotoCandidato } from '@/lib/foto';
 import { SecaoCustoPorVoto, type VotosCandidato } from '@/components/app/custo-por-voto';
 
 interface Perfil {
@@ -846,9 +847,7 @@ export function Candidato() {
         contratado: p.contratado,
         pctPublico: p.pctFundosPublicos,
         flags: p.flags,
-        fotoUrl: p.cdEleicao && sq && p.sgUe
-          ? `https://divulgacandcontas.tse.jus.br/divulga/rest/arquivo/img/${p.cdEleicao}/${sq}/${p.sgUe}`
-          : null,
+        fotoUrl: urlFotoCandidato(p.cdEleicao, sq, p.sgUe),
         url: `${window.location.host}/candidato/${sq}`,
       });
       if (!blob) return;
