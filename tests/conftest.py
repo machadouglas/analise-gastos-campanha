@@ -123,6 +123,20 @@ def inserir_bem(con, valor="50000,00", sq_candidato="160001", tipo="Casa"):
     )
 
 
+def inserir_votos(con, sq_candidato="160001", votos_1t=1000, votos_validos_1t=None,
+                  votos_2t=None, votos_validos_2t=None, resultado="NÃO ELEITO"):
+    """Uma linha na tabela `votos`, no formato que carga.carregar_votos produz."""
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS votos (SQ_CANDIDATO VARCHAR, votos_1t BIGINT,
+            votos_validos_1t BIGINT, votos_2t BIGINT, votos_validos_2t BIGINT,
+            resultado VARCHAR)
+    """)
+    con.execute("INSERT INTO votos VALUES (?, ?, ?, ?, ?, ?)", [
+        sq_candidato, votos_1t,
+        votos_1t if votos_validos_1t is None else votos_validos_1t,
+        votos_2t, votos_2t if votos_validos_2t is None else votos_validos_2t, resultado])
+
+
 def extrair_dia(con, data, despesas=(), receitas=()):
     """Simula a extração de um dia: recria as tabelas brutas e versiona.
     `despesas`/`receitas` são listas de dicts de ajustes sobre os padrões."""

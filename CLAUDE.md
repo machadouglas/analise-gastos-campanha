@@ -43,6 +43,10 @@ Tabelas brutas (todas as colunas VARCHAR, nomes originais do TSE):
 - `candidatos` — registro de candidaturas (consulta_cand): SQ_CANDIDATO, NR_CANDIDATO, NM_CANDIDATO, NM_URNA_CANDIDATO, cargo, partido, coligação, situação do registro.
 - `bens` — patrimônio declarado no registro (bem_candidato): SQ_CANDIDATO, DS_TIPO_BEM_CANDIDATO, DS_BEM_CANDIDATO, VR_BEM_CANDIDATO.
 
+Votos (`carga.carregar_votos`, do conjunto `votacao` = `votacao_candidato_munzona_{ano}.zip`) — a única tabela de origem TSE que **não** é bruta nem VARCHAR:
+
+- `votos` — uma linha por `SQ_CANDIDATO`: `votos_1t`/`votos_2t` (QT_VOTOS_NOMINAIS somado de todos os municípios e zonas; `votos_2t` NULL para quem não foi ao 2º turno), `votos_validos_1t`/`votos_validos_2t` (QT_VOTOS_NOMINAIS_VALIDOS — candidatura indeferida tem nominais e zero válidos) e `resultado` (DS_SIT_TOT_TURNO do último turno disputado). O arquivo do TSE é por candidato × município × zona: o zip de uma eleição geral passa de 600 MB e o consolidado `_BRASIL` de 4 GB — por isso ele fica fora do `extrair_zips`, é lido de dentro do zip, agregado e apagado. Até a totalização o TSE publica o zip **só com o cabeçalho**: a tabela existe vazia e `verificar` avisa (não barra). Zip quebrado não derruba a carga da prestação — a tabela anterior é mantida e o log diz `[erro] votos`.
+
 Views tipadas (use nas análises — valores `VR` são DOUBLE, datas `DT` são DATE):
 
 - `v_despesas` (de despesas_contratadas), `v_despesas_pagas`, `v_receitas`, `v_bens` — mesmas colunas + `VR` e `DT` convertidos.
@@ -65,8 +69,8 @@ Tabelas materializadas (`src/agregados.py`, recriadas a cada `carregar` e export
 - `extracoes` (`src/historico.py`, alimentada pelo `versionar`; **não é exportada** — `scripts/previa-local.py` a reconstrói das janelas do histórico) — registro de cada dia de extração já visto (alimenta a série).
 - `serie_diaria` — por dia de extração × candidato: total_contratado, total_receitas, itens_despesa (reconstruída das janelas do histórico — "como estava declarado naquele dia"); metadados do candidato vêm de despesas OU receitas.
 - `benchmark_precos` — distribuição de preços (p25/mediana/p75/p95) **por nota** (soma dos itens de mesma SQ_DESPESA; `-1` conta linha a linha) por DS_ORIGEM_DESPESA × UF (e `SG_UF='BR-TODAS'` nacional); mínimo 5 notas.
-- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): `NM_URNA_CANDIDATO` (do registro; NULL sem o parquet/coluna — é o nome principal do site), totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados).
-- `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos. Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
+- `indicadores` — scorecard por candidato (base: quem tem despesa OU receita): `NM_URNA_CANDIDATO` (do registro; NULL sem o parquet/coluna — é o nome principal do site), totais, total_pago/pct_pago, razao_gasto_receita, fundos_publicos/pct_fundos_publicos (por DS_FONTE_RECEITA), recursos_proprios, total_bens, pct_maior_fornecedor, fornecedores_cnpj/fornecedores_consultados (cobertura do enriquecimento), valor_sem_nota/pct_sem_nota, valor_pessoa_fisica/pct_pessoa_fisica, grupos_valor_repetido (3+ notas de mesmo valor **no mesmo fornecedor**), valor_removido, fornecedores_recem_abertos (abertura >= out do ano anterior à eleição, derivado dos dados), e o **custo por voto**: `votos` (= `votos_1t`), `votos_2t`, `resultado`, `custo_por_voto` (total_contratado ÷ votos), `custo_publico_por_voto`, `custo_proprio_por_voto` e `custo_terceiros_por_voto` (o custo por voto **repartido na proporção da receita** — fundos públicos por fonte, recursos próprios por origem, o resto é terceiros; as três somam o custo e `verificar` confere). O denominador é sempre o **1º turno** — o único que todo candidato disputou; o gasto do 2º turno entra no numerador de quem foi a ele, e o texto que citar o número tem de dizer isso. A repartição assume dinheiro **fungível** (não há como saber qual real pagou qual nota); a versão anterior dividia a receita pelos votos e dava "público por voto" maior que o custo total em quem arrecadou mais do que gastou — certo e ilegível (05/10/2026). NULL sem receita declarada (composição desconhecida). Guardados com **4 casas**: com 2, R$ 1 declarado ÷ 2.280 votos virava "R$ 0,00" — quem exibe arredonda (`custoVoto()` em `format.ts` mostra "< R$ 0,01"). Não há ranking de "voto mais barato" (site nem MCP): R$ 1 declarado ÷ milhares de votos não diz nada, e R$ 0 contratado com receita declarada é despesa ainda não lançada. NULL sem totalização, sem o candidato no arquivo de votação (não chegou à urna) ou com zero voto. A eleição **presidencial** não está no consolidado `_BRASIL`: vem no membro `_BR` do mesmo zip (que o TSE publica vazio até totalizar o país — em 05/10/2026 as demais já estavam totalizadas e ele não), e `carregar_votos` o lê sempre, só para quem o consolidado não tem; `verificar` avisa enquanto nenhum presidenciável tem voto. `resumo.votacao` registra o estado (`totalizada`, `presidencial_totalizada`, candidatos com voto e no 2º turno).
+- `benchmark_indicadores` — distribuição de cada métrica de `indicadores` por grupo de comparação DS_CARGO × SG_UF (e 'BR-TODAS'); mínimo 20 candidatos (inclui `custo_por_voto` e `votos`, só entre quem tem voto — a régua da ferramenta `custo_por_voto` do MCP; a ficha do site calcula a faixa direto de `indicadores`). Alimenta o "fora da curva" (sinal = acima do p95 do grupo; a razão gasto÷arrecadado só é sinal acima de `MARGEM_GASTO_ACIMA` = 1,1× — estourar por poucos por cento é descompasso de calendário) do site e do `resumo.json`.
 - `norma_documento` — por DS_ORIGEM_DESPESA: quanto do valor é declarado com documento fiscal (só entre fornecedores PJ) e `exige_documento` (a categoria tem nota como norma). É a régua do indicador `valor_sem_nota`: sem ela, marcar "sem nota" pegava metade do dinheiro do país, porque em impulsionamento/honorários/militância quase ninguém emite nota. Categoria com menos de 30 notas (itens agrupados por SQ_DESPESA; `-1` conta linha a linha) cai na lista fixa de `analises.py` (que é sempre o piso).
 - `benchmark_categorias` — distribuição do TOTAL gasto por candidato em cada DS_ORIGEM_DESPESA, por grupo cargo×UF (e 'BR-TODAS'); só entre quem gasta na categoria, mínimo 20. Alimenta o "fora da curva por tipo de gasto" do Explorar (`?visao=fora-da-curva&categoria=`).
 - `cota_fefc` — Fundo Especial que **chegou a candidato**, por partido × cargo × gênero × cor/raça (`genero`/`cor_raca` normalizados em MAIÚSCULAS — a prestação vem 'Feminino', o registro 'FEMININO'): `candidatos_fefc`, `fefc`, e `candidaturas` (registros do consulta_cand no mesmo recorte, inclusive quem não recebeu nada; NULL quando o recorte não existe no registro). Réguas legais: mínimo de 30% do FEFC para mulheres (EC 117/2022) e proporcionalidade às candidaturas negras — `COR_RACA_NEGRA` = pretas + pardas (Res. TSE 23.607, art. 17). Alimenta a ficha `/partido/:sigla` e `resumo.cota_fefc`. **É termômetro, não a conta oficial**: a lei mede o total aplicado pelo partido (inclui gasto direto do diretório) e a prestação está aberta — a Metodologia diz isso, e todo texto que citar o número tem de dizer também.
@@ -126,7 +130,7 @@ SELECT * FROM 'https://github.com/machadouglas/analise-gastos-campanha/releases/
 WHERE NR_CANDIDATO = '12345'
 ```
 
-Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — é o que o site e o MCP leem; ninguém deriva do histórico), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`), `despesas_alteradas.parquet`, `receitas_alteradas.parquet` (antes/depois pronto das `v_alteradas_pares_*`), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `bens.parquet`, `norma_documento.parquet`, `cota_fefc.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
+Arquivos: `despesas.parquet`, `receitas.parquet` (com versionamento), `despesas_atual.parquet`, `receitas_atual.parquet` (só a extração mais recente, sem placeholders e com a coluna `valor` pronta — é o que o site e o MCP leem; ninguém deriva do histórico), `despesas_removidas.parquet`, `receitas_removidas.parquet` (resultado pronto das `v_removidas_*`), `despesas_alteradas.parquet`, `receitas_alteradas.parquet` (antes/depois pronto das `v_alteradas_pares_*`), `despesas_pagas.parquet`, `receitas_doador_originario.parquet`, `candidatos.parquet` (sem CPF/e-mail/título), `votos.parquet`, `bens.parquet`, `norma_documento.parquet`, `cota_fefc.parquet`. CPFs saem pseudonimizados (`pf-…`); o `resumo.json` leva `arquivos` (md5 por parquet — cache-buster por arquivo do site) e a publicação só sobe o que mudou.
 
 ## Site público (`site/`)
 
@@ -135,10 +139,24 @@ SPA Vite + React + Tailwind v4. Se existir uma pasta local de padrão visual
 `00-INDEX.md` dela antes de mexer no front; sem ela, siga o estilo do código
 existente (tema único papel/creme, acentos navy, lucide-react, componentes em
 `site/src/components/ui`). Páginas: Radar (lê `resumo.json` do release —
-inclui `serie_nacional` para os sparklines dos cartões; a Home NÃO carrega DuckDB-WASM),
-Explorar (visões prontas via `?visao=` — ranking, fora-da-curva (com `&sinal=` para filtrar a métrica; sem
-categoria vira lista de cards com foto e chips), removidas, removidas-receitas, compartilhados,
-sem-nota, pessoa-fisica — combináveis com os filtros; mapa de tiles por UF clicável) e Consultar
+inclui `serie_nacional` para os sparklines dos cartões e `custo_por_voto` — `nacional` (soma ÷
+soma do país), `partidos` (custo AGREGADO por sigla, `resumo.sql_custo_por_voto_partido`, piso de
+`MIN_CANDIDATOS_CUSTO_PARTIDO`) e quatro listas de candidatos com os `POR_CARGO_NA_HOME` primeiros
+de CADA cargo (`LISTAS_CUSTO_POR_VOTO`: eleitos mais caros, quem mais gastou sem se eleger, quem mais
+contratou) e o gráfico de barras empilhadas por partido (custo por voto repartido em público,
+bolso dos candidatos e terceiros) — a Home filtra por aba de cargo sem consultar nada. Com
+totalização, a Home gira em torno do custo: abertura com o custo nacional, cartões de custo e
+dinheiro público por voto, a seção de custo em primeiro, fora da curva reduzido a 3, e sem
+"maiores despesas do dia", "declarações removidas", "fornecedores compartilhados" e "quem mais
+contratou" (05/10/2026 — tudo isso continua no Explorar e nas fichas); sem totalização, a Home
+anterior segue. A Home NÃO carrega DuckDB-WASM),
+Explorar (visões prontas via `?visao=` — ranking, custo-por-voto (com `&ordem=` mais-caro |
+gastou-sem-eleger | eleitos-mais-caros — `ORDENS_CUSTO` em `consultas.ts`; a tabela lê
+as colunas prontas de `indicadores`, os cartões trazem o custo AGREGADO do recorte via
+`sqlCustoDoRecorte`, e "gastou sem se eleger" exclui quem ainda disputa o 2º turno), fora-da-curva
+(com `&sinal=` para filtrar a métrica; sem categoria vira lista de cards com foto e chips),
+removidas, removidas-receitas, compartilhados, sem-nota, pessoa-fisica — combináveis com os
+filtros; mapa de tiles por UF clicável) e Consultar
 (MCP-first: URL do servidor, clientes, a lista de ferramentas — `FERRAMENTAS_MCP` em
 `lib/mcp.ts`, conferida contra `servidor.py` pelo teste de sincronia — e uma conversa
 simulada, `components/app/conversa-mcp.tsx`, em que a IA chama as ferramentas com os
@@ -147,7 +165,9 @@ o prompt copiável para a IA pessoal gerar SQL — `site/src/lib/prompt.ts`; man
 prompt sincronizado com o schema — e o console DuckDB-WASM, com as consultas prontas de
 `lib/exemplos.ts` reduzidas ao que traz resultado forte ou que nenhuma outra página responde). Fichas
 `/candidato/:sq` (composição da receita, sankey do fluxo, beeswarm do grupo, grafo de conexões,
-cartão de compartilhamento em PNG via `lib/cartao.ts`), `/partido/:sigla` e `/fornecedor/:id`
+cartão de compartilhamento em PNG via `lib/cartao.ts`), `/partido/:sigla` (inclui o custo por voto agregado da sigla, no total e por cargo — o
+MESMO SQL de `resumo.sql_custo_por_voto_partido`, conferido por `test_custo_por_voto_do_partido_e_o_mesmo_sql_no_site`)
+e `/fornecedor/:id`
 (id = NR_CPF_CNPJ_FORNECEDOR; linke só ids com `temFichaFornecedor`) consomem os Parquet
 agregados (indicadores, serie_diaria, benchmark_precos, rede, fornecedores) com degradação
 graciosa se algum ainda não foi publicado.
@@ -238,7 +258,9 @@ md5 do `resumo.json` a cada 5 min, troca atômica do banco). Ferramentas em
 fichas consomem), fichas de candidato/fornecedor/partido, `fora_da_curva`,
 `notas_fora_do_preco`, `candidatos_conectados`, `declaracoes_removidas`,
 `novidades` (o que ENTROU, por `dt_primeira_extracao` — o contrário das
-removidas), `fornecedores_compartilhados`, `fornecedores_por_cadastro` (cruza
+removidas), `custo_por_voto` (gasto ÷ votos do 1º turno com as parcelas pública
+e própria, resultado e mediana/p95 do grupo; `visao_geral.votacao` diz se a
+totalização — e a presidencial, que chega depois — já entrou), `fornecedores_compartilhados`, `fornecedores_por_cadastro` (cruza
 com a tabela `fornecedores` e devolve a COBERTURA do enriquecimento junto: sem o
 denominador, "poucas empresas baixadas" se confunde com "poucas empresas
 verificadas"), `sem_nota`, `gastos_por_categoria`, `visao_geral` e `sql` livre. Toda resposta traz `versao_dado` (data da

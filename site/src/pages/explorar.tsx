@@ -13,14 +13,20 @@ import {
   type ItemBarra, type PontoDispersao, type PontoLinha,
 } from '@/components/app/graficos';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
-import { brl, num, celula, cnpjCpf, nomeCandidato, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, brlCentavos, custoVoto, num, celula, cnpjCpf, nomeCandidato, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 import { metrica } from '@/lib/metricas';
 import {
-  FILTROS_VAZIOS, SINAIS_FILTRO, eVisaoReceitas, eVisaoRemocao,
-  sqlBuscaCandidatos, sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlTabelaDaVisao,
+  FILTROS_VAZIOS, ORDEM_CUSTO_PADRAO, ORDENS_CUSTO, SINAIS_FILTRO, eVisaoReceitas, eVisaoRemocao,
+  sqlBuscaCandidatos, sqlCustoDoRecorte, sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlTabelaDaVisao,
   whereDaVisao,
-  type Filtros, type SinalFiltro, type Visao,
+  type Filtros, type OrdemCusto, type SinalFiltro, type Visao,
 } from '@/lib/consultas';
+
+const ROTULOS_ORDEM: Record<OrdemCusto, string> = {
+  'mais-caro': 'Voto mais caro',
+  'gastou-sem-eleger': 'Mais gastou sem se eleger',
+  'eleitos-mais-caros': 'Eleitos com o voto mais caro',
+};
 
 const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
@@ -31,6 +37,12 @@ const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [
     id: 'atual',
     rotulo: 'Todos os gastos',
     descricao: 'Estado atual das despesas declaradas ao TSE.',
+  },
+  {
+    id: 'custo-por-voto',
+    rotulo: 'Custo por voto',
+    descricao:
+      'Quanto cada candidato declarou ter contratado por voto recebido no 1º turno — a única régua que todo candidato disputou. Os cartões somam o recorte (contratado ÷ votos de todos os candidatos filtrados); a tabela lista um por um, com o resultado da urna e quanto do custo veio de dinheiro público. Custo alto não é irregularidade: é o tamanho da campanha diante do resultado. Quem não chegou à urna ou teve zero voto não entra.',
   },
   {
     id: 'ranking',
@@ -115,13 +127,23 @@ interface CandidatoFora {
   sinais: { metrica: string; valor: number; p95: number }[];
 }
 
+interface CustoRecorte {
+  candidatos: number;
+  eleitos: number;
+  votos: number;
+  contratado: number;
+  custoPorVoto: number | null;
+  custoPublicoPorVoto: number | null;
+}
+
 interface Dados {
   kpis: { contratado: number; candidatos: number; fornecedores: number; itens: number };
+  /** KPIs próprios da visão custo-por-voto (null nas demais) */
+  custo: CustoRecorte | null;
   encontrados: CandidatoEncontrado[];
   /** registros de candidatura que batem com a busca mas ainda sem movimento */
   registrados: CandidatoEncontrado[];
   categorias: ItemBarra[];
-  candidatos: ItemBarra[];
   porDia: PontoLinha[];
   mapa: ValorUF[];
   dispersao: PontoDispersao[] | null;
@@ -175,6 +197,10 @@ export function Explorar() {
     SINAIS_FILTRO.some((s) => s === sinalParam) ? (sinalParam as SinalFiltro) : '',
   );
   const [categoria, setCategoria] = useState(params.get('categoria') ?? '');
+  const ordemParam = params.get('ordem');
+  const [ordem, setOrdem] = useState<OrdemCusto>(
+    ORDENS_CUSTO.some((o) => o === ordemParam) ? (ordemParam as OrdemCusto) : ORDEM_CUSTO_PADRAO,
+  );
   const [categorias, setCategorias] = useState<string[]>([]);
 
   useEffect(() => {
@@ -201,11 +227,11 @@ export function Explorar() {
       .catch(() => {});
   }, []);
 
-  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao, s: SinalFiltro, cat: string) => {
+  const consultar = useCallback(async (f: Filtros, pag: number, v: Visao, s: SinalFiltro, cat: string, o: OrdemCusto) => {
     setCarregando(true);
     setErro(null);
     try {
-      const { base, where: w } = whereDaVisao(v, f, s, cat);
+      const { base, where: w } = whereDaVisao(v, f, s, cat, o);
       const buscando = v === 'atual' && Boolean(f.candidato.trim());
       // uma consulta só, sobre o REGISTRO (que tem o nome de urna) somado aos
       // indicadores (que têm os totais) — buscar em despesas_atual escondia
@@ -227,7 +253,7 @@ export function Explorar() {
       });
       const comMovimento = achados.linhas.filter((l) => l[9]).map(candidatura);
       const semMovimento = achados.linhas.filter((l) => !l[9]).map(candidatura);
-      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA);
+      const tabelaSQL = sqlTabelaDaVisao(v, base, w, f, cat, pag, POR_PAGINA, o);
       const painel = sqlPainel(base, w, v);
       const consultarForaDaCurva = async (): Promise<CandidatoFora[]> => {
         const r = await executarSQL(sqlForaDaCurvaCards(f, s, pag, POR_PAGINA));
@@ -251,18 +277,27 @@ export function Explorar() {
         }));
       };
       const eCards = v === 'fora-da-curva' && !cat;
-      const [kpis, categorias, candidatos, porDia, mapa, tabela, dispersao, foraDaCurva] = await Promise.all([
+      const [kpis, categorias, porDia, mapa, tabela, dispersao, foraDaCurva, custo] = await Promise.all([
         executarSQL(painel.kpis),
         executarSQL(painel.categorias),
-        executarSQL(painel.candidatos),
         executarSQL(painel.porDia),
         executarSQL(painel.mapa),
         eCards ? Promise.resolve({ colunas: [] as string[], linhas: [] as unknown[][] }) : executarSQL(tabelaSQL),
         v === 'atual' ? consultarDispersao(f) : Promise.resolve(null),
         eCards ? consultarForaDaCurva() : Promise.resolve(null),
+        v === 'custo-por-voto' ? executarSQL(sqlCustoDoRecorte(f, o)) : Promise.resolve(null),
       ]);
       const [contratado, nCand, nForn, itens] = kpis.linhas[0] ?? [0, 0, 0, 0];
+      const c = custo?.linhas[0];
       setDados({
+        custo: c
+          ? {
+              candidatos: Number(c[0] ?? 0), eleitos: Number(c[1] ?? 0), votos: Number(c[2] ?? 0),
+              contratado: Number(c[3] ?? 0),
+              custoPorVoto: c[4] == null ? null : Number(c[4]),
+              custoPublicoPorVoto: c[5] == null ? null : Number(c[5]),
+            }
+          : null,
         encontrados: comMovimento,
         registrados: semMovimento,
         kpis: {
@@ -272,7 +307,6 @@ export function Explorar() {
           itens: Number(itens ?? 0),
         },
         categorias: categorias.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
-        candidatos: candidatos.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[1]) })),
         porDia: porDia.linhas.map((l) => ({ rotulo: String(l[0]), valor: Number(l[2]) })),
         mapa: mapa.linhas.map((l) => ({ uf: String(l[0]), valor: Number(l[1] ?? 0) })),
         dispersao,
@@ -289,8 +323,8 @@ export function Explorar() {
 
   useEffect(() => {
     const foraDaCurva = visao === 'fora-da-curva';
-    void consultar(filtros, pagina, visao, foraDaCurva ? sinal : '', foraDaCurva ? categoria : '');
-  }, [filtros, pagina, visao, sinal, categoria, consultar]);
+    void consultar(filtros, pagina, visao, foraDaCurva ? sinal : '', foraDaCurva ? categoria : '', ordem);
+  }, [filtros, pagina, visao, sinal, categoria, ordem, consultar]);
 
   function mudar(parcial: Partial<Filtros>) {
     setPagina(0);
@@ -312,8 +346,14 @@ export function Explorar() {
     setFiltros(FILTROS_VAZIOS);
   }
 
-  // micro-barras da coluna monetária principal: proporção contra o maior da página
-  const idxBarra = dados ? dados.colunas.findIndex((c) => c === 'Valor' || c === 'Total') : -1;
+  // micro-barras da coluna principal: proporção contra o maior da página (na
+  // visão de custo, a barra acompanha a ordenação — custo ou gasto bruto)
+  const colunaBarra = visao === 'custo-por-voto'
+    ? (ordem === 'gastou-sem-eleger' ? 'Contratado' : 'Custo por voto')
+    : null;
+  const idxBarra = dados
+    ? dados.colunas.findIndex((c) => (colunaBarra ? c === colunaBarra : c === 'Valor' || c === 'Total'))
+    : -1;
   const maxBarra = dados && idxBarra >= 0
     ? Math.max(...dados.linhas.map((l) => Number(l[idxBarra] ?? 0)), 0)
     : 0;
@@ -353,6 +393,31 @@ export function Explorar() {
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           {VISOES.find((v) => v.id === visao)?.descricao}
         </p>
+        {visao === 'custo-por-voto' && (
+          <div className="mt-3 flex flex-wrap items-center gap-2" role="tablist" aria-label="Ordenar por">
+            <span className="w-full text-xs font-semibold uppercase tracking-widest text-muted-foreground sm:w-auto">
+              Ver:
+            </span>
+            {ORDENS_CUSTO.map((o) => (
+              <button
+                key={o}
+                role="tab"
+                aria-selected={ordem === o}
+                onClick={() => {
+                  setPagina(0);
+                  setOrdem(o);
+                }}
+                className={
+                  ordem === o
+                    ? 'rounded-full bg-[#B45309] px-3 py-1 text-xs font-semibold text-white shadow-sm'
+                    : 'rounded-full border border-[#B45309]/30 bg-card px-3 py-1 text-xs text-muted-foreground shadow-sm transition-colors hover:border-[#B45309]/60 hover:text-foreground'
+                }
+              >
+                {ROTULOS_ORDEM[o]}
+              </button>
+            ))}
+          </div>
+        )}
         {visao === 'fora-da-curva' && (
           <div className="mt-3 flex flex-wrap items-center gap-2" role="tablist" aria-label="Fora da curva em">
             <span className="w-full text-xs font-semibold uppercase tracking-widest text-muted-foreground sm:w-auto">
@@ -549,7 +614,21 @@ export function Explorar() {
             </Card>
           )}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {[
+              {(dados.custo ? [
+                // visão de custo: o agregado do recorte (soma ÷ soma), não a
+                // média dos custos individuais — um candidato de 1 milhão de
+                // votos pesa mais do que um de 10
+                {
+                  rotulo: 'Custo por voto do recorte',
+                  valor: dados.custo.custoPorVoto == null ? '—' : brlCentavos.format(dados.custo.custoPorVoto),
+                },
+                {
+                  rotulo: 'Dinheiro público por voto',
+                  valor: dados.custo.custoPublicoPorVoto == null ? '—' : brlCentavos.format(dados.custo.custoPublicoPorVoto),
+                },
+                { rotulo: 'Candidatos com voto', valor: `${num.format(dados.custo.candidatos)} · ${num.format(dados.custo.eleitos)} eleitos` },
+                { rotulo: 'Votos ÷ contratado', valor: `${num.format(dados.custo.votos)} · ${brl.format(dados.custo.contratado)}` },
+              ] : [
                 // os rótulos acompanham a visão: em "removidas" os números são
                 // o que SAIU da declaração, não o que está contratado hoje
                 {
@@ -567,7 +646,7 @@ export function Explorar() {
                     ? 'Itens removidos' : 'Itens declarados',
                   valor: num.format(dados.kpis.itens),
                 },
-              ].map((k) => (
+              ]).map((k) => (
                 <Card key={k.rotulo}>
                   <CardContent className="p-5 sm:p-5">
                     <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{k.rotulo}</p>
@@ -577,35 +656,17 @@ export function Explorar() {
               ))}
             </div>
 
-            <div className="mt-6 grid gap-6 lg:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">
-                    {eVisaoReceitas(visao) ? 'De onde vinha o dinheiro' : 'Para onde vai o dinheiro'}
-                  </CardTitle>
-                  <CardDescription>
-                    {eVisaoReceitas(visao)
-                      ? 'Origens das receitas removidas, pelo valor.'
-                      : 'Categorias de gasto, pelo total contratado.'}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent><BarrasHorizontais dados={dados.categorias} /></CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">
-                    {eVisaoRemocao(visao)
-                      ? 'Candidatos com mais valor removido'
-                      : 'Quem mais contratou'}
-                  </CardTitle>
-                  <CardDescription>
-                    {eVisaoRemocao(visao)
-                      ? 'Os dez candidatos com mais valor removido no recorte.'
-                      : 'Os dez candidatos com maior despesa no recorte.'}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent><BarrasHorizontais dados={dados.candidatos} /></CardContent>
-              </Card>
+            {/* recolhido ao abrir: a tabela é o que responde a pergunta da visão;
+                o gráfico de "quem mais contratou" saiu — a tabela já ordena por isso */}
+            <div className="mt-6">
+              <SecaoRecolhivel
+                titulo={eVisaoReceitas(visao) ? 'De onde vinha o dinheiro' : 'Para onde vai o dinheiro'}
+                descricao={eVisaoReceitas(visao)
+                  ? 'Origens das receitas removidas, pelo valor.'
+                  : 'Categorias de gasto, pelo total contratado.'}
+              >
+                <BarrasHorizontais dados={dados.categorias} />
+              </SecaoRecolhivel>
             </div>
 
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
@@ -676,6 +737,8 @@ export function Explorar() {
               <p className="text-sm text-muted-foreground">
                 {visao === 'ranking'
                   ? 'Candidatos do recorte, quem mais gastou primeiro'
+                  : visao === 'custo-por-voto'
+                  ? `Candidatos do recorte com voto no 1º turno — ${ROTULOS_ORDEM[ordem].toLowerCase()} primeiro (os gráficos acima somam os gastos deles)`
                   : visao === 'compartilhados'
                   ? 'Fornecedores compartilhados do recorte, maiores primeiro'
                   : visao === 'removidas'
@@ -786,7 +849,7 @@ export function Explorar() {
             ) : (
             <Tabela colunas={dados.colunas.filter((c) => !c.startsWith('_')).map((c) => ({
               titulo: c,
-              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Neste tipo de gasto', 'p95 do grupo', 'Itens', 'Fornecedores'].includes(c),
+              numerica: ['Valor', 'Total', 'Candidatos', 'Partidos', 'Contratado', 'Arrecadado', 'Neste tipo de gasto', 'p95 do grupo', 'Itens', 'Fornecedores', 'Votos', 'Custo por voto', 'Público por voto', 'Próprio por voto'].includes(c),
             }))}>
               {dados.linhas.map((l, i) => (
                 <tr key={i} className="hover:bg-muted/40">
@@ -800,7 +863,21 @@ export function Explorar() {
                         </CelulaNum>
                       );
                     if (col === 'Contratado')
-                      return <CelulaNum key={j}>{brl.format(Number(v ?? 0))}</CelulaNum>;
+                      return (
+                        <CelulaNum key={j} frac={colunaBarra === col && maxBarra > 0 ? Number(v ?? 0) / maxBarra : undefined}>
+                          {brl.format(Number(v ?? 0))}
+                        </CelulaNum>
+                      );
+                    if (col === 'Custo por voto')
+                      return (
+                        <CelulaNum key={j} frac={colunaBarra === col && maxBarra > 0 ? Number(v ?? 0) / maxBarra : undefined}>
+                          {custoVoto(v == null ? null : Number(v))}
+                        </CelulaNum>
+                      );
+                    if (col === 'Público por voto' || col === 'Próprio por voto')
+                      return <CelulaNum key={j}>{custoVoto(v == null ? null : Number(v))}</CelulaNum>;
+                    if (col === 'Votos')
+                      return <CelulaNum key={j}>{num.format(Number(v ?? 0))}</CelulaNum>;
                     if (col === 'Arrecadado')
                       return <CelulaNum key={j}>{v == null ? '—' : brl.format(Number(v))}</CelulaNum>;
                     // as duas colunas são totais em R$ da tabela por categoria; `sinal`

@@ -5,7 +5,7 @@
  * quem só declarou receita. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
-import { brl } from '@/lib/format';
+import { brl, brlCentavos } from '@/lib/format';
 import { limparDuckDBFalso, responder, tabelasDisponiveis, type RotaFalsa } from '@/test/duckdb-falso';
 import { renderizarRota } from '@/test/render';
 
@@ -99,6 +99,59 @@ describe('explorar · busca por candidato', () => {
     // quem tem movimento fica na tabela, não entre os registrados
     expect(screen.getByRole('link', { name: /BELTRANO FICTÍCIO/ })).toBeInTheDocument();
     expect(within(screen.getByRole('table')).queryByText(/BELTRANO/)).not.toBeInTheDocument();
+  });
+});
+
+/** A tabela do custo é a única que projeta "Custo por voto"; os KPIs do
+ *  recorte, a única com `AS custo_por_voto` sobre indicadores sem nomes_urna. */
+const CUSTO_TABELA: RotaFalsa = [
+  'AS "Custo por voto"',
+  {
+    colunas: ['_sq', '_cnpj', 'Candidato', 'Partido/UF', 'Cargo', 'Resultado', 'Votos',
+              'Contratado', 'Custo por voto', 'Público por voto', 'Próprio por voto'],
+    linhas: [
+      ['900000000001', '', 'ANA FICTÍCIA DE SOUZA', 'PXX/PR', 'Deputada Federal', 'eleito por qp',
+       120000, 2400000, 20, 16.5, 0.5],
+      ['900000000002', '', 'BRUNO EXEMPLO', 'PYY/PR', 'Deputado Estadual', 'não eleito',
+       800, 12000, 15, null, null],
+    ],
+  },
+];
+const CUSTO_RECORTE: RotaFalsa = [
+  'AS custo_por_voto', { linhas: [[2, 1, 120800, 2412000, 19.97, 16.4]] },
+];
+
+describe('explorar · visão "Custo por voto"', () => {
+  async function montarCusto(url: string) {
+    responder([PARTIDOS, CUSTO_TABELA, CUSTO_RECORTE, KPIS]);
+    renderizarRota(<Explorar />, { caminho: '/explorar', url });
+    await screen.findByText('ANA FICTÍCIA DE SOUZA');
+    return screen.getByRole('table');
+  }
+
+  it('mostra o custo agregado do recorte nos cartões e um candidato por linha', async () => {
+    const tabela = await montarCusto('/explorar?visao=custo-por-voto');
+
+    expect(screen.getByText('Custo por voto do recorte').parentElement).toHaveTextContent(/R\$\s19,97/);
+    expect(screen.getByText('Candidatos com voto').parentElement).toHaveTextContent('2 · 1 eleitos');
+    expect(within(tabela).getAllByRole('columnheader').map((c) => c.textContent)).toEqual([
+      'Candidato', 'Partido/UF', 'Cargo', 'Resultado', 'Votos', 'Contratado',
+      'Custo por voto', 'Público por voto', 'Próprio por voto',
+    ]);
+    const linhas = within(tabela).getAllByRole('row').slice(1);
+    expect(within(linhas[1]).getAllByRole('cell').map((c) => c.textContent)).toEqual([
+      'BRUNO EXEMPLO', 'PYY/PR', 'Deputado Estadual', 'não eleito', '800', brl.format(12000),
+      brlCentavos.format(15), '—', '—',
+    ]);
+    expect(within(linhas[0]).getByRole('link', { name: 'ANA FICTÍCIA DE SOUZA' })).toHaveAttribute(
+      'href', '/candidato/900000000001');
+  });
+
+  it('a ordenação vem da URL e aparece selecionada', async () => {
+    await montarCusto('/explorar?visao=custo-por-voto&ordem=gastou-sem-eleger');
+
+    expect(screen.getByRole('tab', { name: 'Mais gastou sem se eleger' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Voto mais caro' })).toHaveAttribute('aria-selected', 'false');
   });
 });
 

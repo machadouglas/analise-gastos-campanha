@@ -4,7 +4,7 @@ import {
   CONDICAO_DOCUMENTO_NAO_FISCAL, CONDICAO_DOCUMENTO_NUMERADO, CONDICAO_NOTA_SEM_NUMERO,
   FILTROS_VAZIOS, MINIMO_NOTAS_VALOR_REPETIDO, ORIGEM_FINANCIAMENTO_COLETIVO, SINAIS_FILTRO, condicaoSemNota,
   condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlDocumentoDaNota, sqlNotasDoCandidato,
-  sqlPainel, sqlBuscaCandidatos, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
+  sqlPainel, sqlBuscaCandidatos, sqlCustoDoRecorte, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
 } from './consultas';
 
 const f = (parcial: Partial<typeof FILTROS_VAZIOS>) => ({ ...FILTROS_VAZIOS, ...parcial });
@@ -131,6 +131,35 @@ describe('whereDaVisao', () => {
     const { where } = whereDaVisao('fora-da-curva', FILTROS_VAZIOS, '', "Locação/cessão d'água");
     expect(where).toContain('benchmark_categorias');
     expect(where).toContain("d''água");
+  });
+});
+
+describe('custo-por-voto', () => {
+  it('a visão recorta os gastos dos candidatos com custo, e a ordem filtra o resultado', () => {
+    const { base, where } = whereDaVisao('custo-por-voto', FILTROS_VAZIOS, '', '', 'gastou-sem-eleger');
+    expect(base).toBe('despesas_atual');
+    expect(where).toContain('i.custo_por_voto IS NOT NULL');
+    expect(where).toContain("i.resultado NOT LIKE 'ELEITO%'");
+  });
+
+  it('a tabela lê as colunas prontas de indicadores, sem recalcular o custo', () => {
+    const { base, where } = whereDaVisao('custo-por-voto', f({ uf: 'PR', cargo: 'Senador' }), '', '');
+    const sql = sqlTabelaDaVisao('custo-por-voto', base, where, f({ uf: 'PR', cargo: 'Senador' }), '', 0, 50, 'mais-caro');
+    expect(sql).toContain('i.custo_por_voto AS "Custo por voto"');
+    expect(sql).toContain('i.custo_publico_por_voto AS "Público por voto"');
+    expect(sql).not.toMatch(/total_contratado\s*\/\s*/); // nunca divide aqui
+    expect(sql).toContain("i.SG_UF = 'PR'");
+    expect(sql).toContain("i.DS_CARGO ILIKE 'Senador'");
+    expect(sql).toContain('ORDER BY i.custo_por_voto DESC');
+    expect(sqlTabelaDaVisao('custo-por-voto', base, where, FILTROS_VAZIOS, '', 0, 50, 'eleitos-mais-caros'))
+      .toContain("i.resultado LIKE 'ELEITO%'");
+  });
+
+  it('o KPI do recorte é soma ÷ soma (agregado), não média de custos', () => {
+    const sql = sqlCustoDoRecorte(f({ partido: 'PXX' }), 'mais-caro');
+    expect(sql).toContain('SUM(i.total_contratado) / NULLIF(SUM(i.votos), 0)');
+    expect(sql).not.toContain('AVG(');
+    expect(sql).toContain("i.SG_PARTIDO = 'PXX'");
   });
 });
 

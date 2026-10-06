@@ -29,6 +29,7 @@ EXPORTS = {
     "despesas_pagas.parquet": "v_despesas_pagas",
     "receitas_doador_originario.parquet": "receitas_doador_originario",
     "candidatos.parquet": "candidatos",
+    "votos.parquet": "votos",  # votos nominais por candidato e turno + resultado
     "bens.parquet": "v_bens",  # patrimônio declarado — conteúdo da ficha sem movimento
     "serie_diaria.parquet": "serie_diaria",
     "benchmark_precos.parquet": "benchmark_precos",
@@ -155,6 +156,14 @@ CONSULTAS_FINGERPRINT = {
     "candidatos": "SELECT COUNT(*) FROM candidatos",
     "bens": "SELECT COUNT(*) FROM bens",
     "despesas_pagas": "SELECT COUNT(*) FROM despesas_pagas",
+    # o resultado entra junto: uma decisão judicial muda ELEITO/NÃO ELEITO sem
+    # mexer num voto
+    "votos": """
+        SELECT COUNT(*), SUM(votos_1t), SUM(votos_validos_1t), SUM(votos_2t),
+               SUM(votos_validos_2t),
+               md5(COALESCE(STRING_AGG(SQ_CANDIDATO || '|' || COALESCE(resultado, ''),
+                                       ';' ORDER BY SQ_CANDIDATO), ''))
+        FROM votos""",
     "fornecedores": """
         SELECT COUNT(*), md5(COALESCE(STRING_AGG(
             cnpj || '|' || COALESCE(razao_social, '') || '|' || COALESCE(situacao, '')

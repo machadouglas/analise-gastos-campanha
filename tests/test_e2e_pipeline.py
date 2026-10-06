@@ -49,6 +49,32 @@ COLS_ORIGINARIO = ["SQ_PRESTADOR_CONTAS", "NR_CPF_CNPJ_DOADOR_ORIGINARIO",
 COLS_BENS = ["SQ_CANDIDATO", "SG_UF", "DS_TIPO_BEM_CANDIDATO",
              "DS_BEM_CANDIDATO", "VR_BEM_CANDIDATO", "DT_ULT_ATUAL_BEM_CANDIDATO"]
 
+# subconjunto do cabeçalho real de votacao_candidato_munzona (a carga lê por nome)
+COLS_VOTACAO = ["DT_GERACAO", "NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA",
+                "DS_CARGO", "SQ_CANDIDATO", "QT_VOTOS_NOMINAIS",
+                "QT_VOTOS_NOMINAIS_VALIDOS", "DS_SIT_TOT_TURNO"]
+
+
+def _votacao_do_dia(dia: str) -> list[dict]:
+    """Votos como o TSE entrega: uma linha por candidato × município × zona × turno."""
+    def linha(i, turno, municipio, zona, votos, validos, situacao):
+        return {"DT_GERACAO": dia, "NR_TURNO": str(turno), "SG_UF": "XX",
+                "CD_MUNICIPIO": municipio, "NR_ZONA": zona, "DS_CARGO": "Deputado Estadual",
+                "SQ_CANDIDATO": _cand(i)["SQ_CANDIDATO"], "QT_VOTOS_NOMINAIS": str(votos),
+                "QT_VOTOS_NOMINAIS_VALIDOS": str(validos), "DS_SIT_TOT_TURNO": situacao}
+    return [
+        # candidato 1: três zonas em dois municípios somam 1.000 votos
+        linha(1, 1, "100", "1", 600, 600, "ELEITO POR MÉDIA"),
+        linha(1, 1, "100", "2", 300, 300, "ELEITO POR MÉDIA"),
+        linha(1, 1, "200", "1", 100, 100, "ELEITO POR MÉDIA"),
+        # candidato 2: foi ao 2º turno — o resultado é o do último turno
+        linha(2, 1, "100", "1", 400, 400, "2º TURNO"),
+        linha(2, 2, "100", "1", 900, 900, "NÃO ELEITO"),
+        # candidato 3: candidatura indeferida — voto digitado, nenhum válido
+        linha(3, 1, "100", "1", 50, 0, "#NULO#"),
+    ]
+
+
 # valores que provam o parse: acento, cedilha e ';' DENTRO de campo com aspas
 # ’ (0x92) só existe no Windows-1252 — o `encoding='latin-1'` do DuckDB recusava o
 # arquivo inteiro por um byte desses (rotina de 12/09/2026)
@@ -155,6 +181,10 @@ def _publicar_zip_do_dia(dir_raw: Path, dia: str, com_removida: bool,
          "DS_COR_RACA": "PARDA" if i % 3 == 0 else "BRANCA"}
         for i in range(1, 1051)
     ]
+    # o candidato presidencial do membro _BR (sem movimento financeiro)
+    candidatos.append({**candidatos[0], "SQ_CANDIDATO": "169999", "NR_CANDIDATO": "99",
+                       "NM_CANDIDATO": "CANDIDATO PRESIDENCIAL", "NM_URNA_CANDIDATO": "PRESIDENCIAL",
+                       "DS_CARGO": "Presidente", "SG_UF": "BR", "SG_UE": "BR"})
     pagas = [
         {"DT_GERACAO": dia, "SQ_PRESTADOR_CONTAS": _cand(i)["SQ_PRESTADOR_CONTAS"],
          "SG_UF": "XX", "VR_PAGTO_DESPESA": "150,00", "DT_PAGTO_DESPESA": "16/08/2026"}
@@ -191,6 +221,21 @@ def _publicar_zip_do_dia(dir_raw: Path, dia: str, com_removida: bool,
     with zipfile.ZipFile(destino / "prestacao_de_contas.zip", "w") as z:
         for nome, conteudo in arquivos.items():
             z.writestr(nome, conteudo)
+    # a votação vem em zip próprio, com um CSV por UF além do consolidado — a
+    # carga tem de ler só o _BRASIL (somar os dois dobraria todo voto)
+    votacao = _csv_cp1252(COLS_VOTACAO, _votacao_do_dia(dia))
+    with zipfile.ZipFile(destino / carga.ZIP_VOTACAO.format(ano=ANO), "w") as z:
+        z.writestr(carga.CSV_VOTACAO.format(ano=ANO), votacao)
+        z.writestr(f"votacao_candidato_munzona_{ANO}_XX.csv", votacao)
+        # a presidencial vem no membro _BR, que o TSE publica vazio até totalizar
+        # o país; aqui traz um candidato que o consolidado não tem e um repetido,
+        # que não pode dobrar
+        z.writestr(carga.CSV_VOTACAO_BR.format(ano=ANO), _csv_cp1252(COLS_VOTACAO, [
+            {**_votacao_do_dia(dia)[0], "SQ_CANDIDATO": "169999", "DS_CARGO": "Presidente",
+             "QT_VOTOS_NOMINAIS": "5000", "QT_VOTOS_NOMINAIS_VALIDOS": "5000",
+             "DS_SIT_TOT_TURNO": "2º TURNO"},
+            _votacao_do_dia(dia)[0],
+        ]))
 
 
 @pytest.fixture
@@ -232,6 +277,16 @@ def test_pipeline_completo_do_csv_do_tse_ate_as_consultas_do_site(pipeline):
         "SELECT DS_DESPESA FROM despesas_contratadas WHERE SQ_DESPESA = '502'"
     ).fetchone()[0]
     assert desc == DESCRICAO_ACENTUADA
+
+    # --- votos: somados por candidato e turno, direto do zip — o CSV gigante
+    # não fica no disco nem passa pelo extrair_zips
+    assert con.execute("SELECT * FROM votos ORDER BY SQ_CANDIDATO").fetchall() == [
+        ("160001", 1000, 1000, None, None, "ELEITO POR MÉDIA"),
+        ("160002", 400, 400, 900, 900, "NÃO ELEITO"),
+        ("160003", 50, 0, None, None, None),
+        ("169999", 5000, 5000, None, None, "2º TURNO"),
+    ]
+    assert not list((carga.DIR_RAW / str(ANO)).rglob("votacao_candidato_munzona*.csv*"))
 
     # --- agregados + as MESMAS checagens que barram a publicação na rotina
     agregados.materializar(con)
@@ -286,6 +341,24 @@ def test_pipeline_completo_do_csv_do_tse_ate_as_consultas_do_site(pipeline):
     assert site.execute(
         "SELECT campo_alterado, valor_antes, valor_depois, sucessores FROM despesas_alteradas"
     ).fetchall() == [("valor", pytest.approx(100.0), pytest.approx(150.0), 1)]
+
+    # o custo por voto chega pronto, sobre o 1º turno; sem voto não há custo
+    custos = site.execute("""
+        SELECT i.SQ_CANDIDATO, i.votos, i.votos_2t, i.resultado,
+               i.custo_por_voto = ROUND(i.total_contratado / v.votos_1t, 4),
+               i.custo_publico_por_voto, i.custo_proprio_por_voto, i.custo_terceiros_por_voto
+        FROM indicadores i LEFT JOIN votos v USING (SQ_CANDIDATO)
+        WHERE i.SQ_CANDIDATO IN ('160002', '160004') ORDER BY 1
+    """).fetchall()
+    # cand 2: R$ 1.750 contratados ÷ 400 votos; receita de 3.500 = 2.000 fundo +
+    # 300 próprios + 1.200 terceiros → o custo repartido nessa proporção
+    custo = 1750 / 400
+    assert custos == [
+        ("160002", 400, 900, "NÃO ELEITO", True,
+         pytest.approx(custo * 2000 / 3500, abs=0.01), pytest.approx(custo * 300 / 3500, abs=0.01),
+         pytest.approx(custo * 1200 / 3500, abs=0.01)),
+        ("160004", None, None, None, None, None, None, None),
+    ]
 
     # --- cada consulta pronta do console executa sobre os parquets publicados
     # (é o dado MASCARADO — a régua das flags precisa sobreviver ao pf-/h-)

@@ -25,10 +25,11 @@ import {
   CONDICAO_DOACAO_DIRETA, MARGEM_GASTO_ACIMA, SITUACAO_NAO_ENCONTRADA, escSQL, sqlCorrigidas,
   sqlNotasDoCandidato, JOIN_NOMES_URNA, nomeExibicao, sqlContrapartesInfraestrutura,
 } from '@/lib/consultas';
-import { brl, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor, nomeCandidato } from '@/lib/format';
+import { brl, brlCentavos, num, celula, cnpjCpf, dataBR, temFichaFornecedor, urlFornecedor, nomeCandidato } from '@/lib/format';
 import { METRICAS, metrica } from '@/lib/metricas';
 import { gerarCartaoCandidato } from '@/lib/cartao';
 import { FotoCandidato } from '@/components/app/foto';
+import { SecaoCustoPorVoto, type VotosCandidato } from '@/components/app/custo-por-voto';
 
 interface Perfil {
   /** nome de exibição: o de urna, com fallback no civil */
@@ -52,6 +53,8 @@ interface Perfil {
   cnpjs: number;
   cnpjsConsultados: number;
   flags: string[];
+  /** null = sem totalização publicada, ou candidato fora do arquivo de votação */
+  votacao: VotosCandidato | null;
 }
 
 interface Bem {
@@ -198,6 +201,8 @@ interface DadosCandidato {
   corrigidasReceitas: Corrigida[];
   faixas: FaixaPreco[];
   comparacao: FaixaPreco[];
+  /** custo por voto na distribuição do grupo; null sem voto ou sem grupo */
+  custoPorVoto: FaixaPreco | null;
   receitas: unknown[][];
   colunasReceitas: string[];
   removidas: unknown[][];
@@ -206,6 +211,9 @@ interface DadosCandidato {
 }
 
 const esc = escSQL;
+const opcional = (v: unknown): number | null => (v == null ? null : Number(v));
+/** Espelha MIN_GRUPO_COMPARACAO de src/agregados.py. */
+const MIN_GRUPO_COMPARACAO = 20;
 
 /** Ficha mínima de quem se registrou mas não declarou nenhuma despesa/receita:
  *  72% das candidaturas no início da campanha. A ausência de movimento é, em
@@ -307,6 +315,39 @@ async function amostraGrupo(cargo: string, uf: string | null): Promise<Record<st
   } catch {
     return {};
   }
+}
+
+/** Onde o custo por voto do candidato cai entre os do mesmo cargo: na UF e,
+ *  se o grupo local for pequeno, no país. Sai de `indicadores` direto — a
+ *  métrica não tem linha em benchmark_indicadores. */
+async function faixaCustoPorVoto(perfil: Perfil): Promise<FaixaPreco | null> {
+  const valor = perfil.votacao?.custoPorVoto;
+  if (valor == null) return null;
+  for (const uf of [perfil.uf, null]) {
+    const onde = `DS_CARGO = '${esc(perfil.cargo)}' AND custo_por_voto IS NOT NULL` +
+      (uf ? ` AND SG_UF = '${esc(uf)}'` : '');
+    const [resumo, amostra] = await Promise.all([
+      executarSQL(`
+        SELECT COUNT(*) AS candidatos, QUANTILE_CONT(custo_por_voto, 0.25),
+               MEDIAN(custo_por_voto), QUANTILE_CONT(custo_por_voto, 0.75),
+               QUANTILE_CONT(custo_por_voto, 0.95)
+        FROM indicadores WHERE ${onde}`),
+      executarSQL(`
+        SELECT custo_por_voto FROM indicadores WHERE ${onde}
+        USING SAMPLE 200 ROWS (reservoir, 42)`),
+    ]);
+    const l = resumo.linhas[0];
+    const n = Number(l?.[0] ?? 0);
+    if (n < MIN_GRUPO_COMPARACAO) continue;
+    return {
+      categoria: `Custo por voto · grupo: ${n} candidatos a ${perfil.cargo}${uf ? ` · ${uf}` : ' (BR)'}`,
+      p25: Number(l[1]), mediana: Number(l[2]), p75: Number(l[3]), p95: Number(l[4]),
+      notas: [{ valor, descricao: perfil.nome }],
+      grupo: amostra.linhas.map((a) => Number(a[0])),
+      formatar: (v) => brlCentavos.format(v),
+    };
+  }
+  return null;
 }
 
 async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
@@ -471,7 +512,17 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     cnpjs: Number(linha.fornecedores_cnpj ?? 0),
     cnpjsConsultados: Number(linha.fornecedores_consultados ?? 0),
     flags,
+    votacao: linha.votos == null ? null : {
+      votos: Number(linha.votos),
+      votos2t: opcional(linha.votos_2t),
+      resultado: linha.resultado == null ? null : String(linha.resultado),
+      custoPorVoto: opcional(linha.custo_por_voto),
+      custoPublicoPorVoto: opcional(linha.custo_publico_por_voto),
+      custoProprioPorVoto: opcional(linha.custo_proprio_por_voto),
+      custoTerceirosPorVoto: opcional(linha.custo_terceiros_por_voto),
+    },
   };
+  const custoPorVoto = await faixaCustoPorVoto(perfil).catch(() => null);
 
   // faixa típica de cada indicador no grupo de comparação (mesmo cargo, mesma
   // UF; nacional quando o grupo local é pequeno) — responde "isso é muito?"
@@ -646,6 +697,7 @@ async function carregarCandidato(sq: string): Promise<DadosCandidato | null> {
     corrigidasReceitas: montarCorrigidas(corrigidasRec.linhas),
     faixas: [...faixasPorCategoria.values()].slice(0, 8),
     comparacao,
+    custoPorVoto,
     colunasReceitas: receitas.colunas,
     receitas: receitas.linhas,
     removidas: removidas.linhas,
@@ -876,6 +928,10 @@ export function Candidato() {
           </Card>
         ))}
       </div>
+
+      {p.votacao && (
+        <SecaoCustoPorVoto dados={p.votacao} contratado={p.contratado} faixa={dados.custoPorVoto} />
+      )}
 
       {(p.receitas ?? 0) > 0 && (
         <Secao

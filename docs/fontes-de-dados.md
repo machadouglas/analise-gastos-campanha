@@ -24,6 +24,11 @@ Contém, por UF e consolidado (`_BRASIL`):
 ### Bens declarados
 `{CDN}/bem_candidato/bem_candidato_{ano}.zip` — bens declarados por candidato (tipo, descrição, valor). Carregado na tabela `bens` (o indicador `total_bens` cruza patrimônio com recursos próprios injetados na campanha).
 
+### Votação nominal
+`{CDN}/votacao_candidato_munzona/votacao_candidato_munzona_{ano}.zip` — votos de cada candidato por município e zona, nos dois turnos (`QT_VOTOS_NOMINAIS`, `QT_VOTOS_NOMINAIS_VALIDOS`, `DS_SIT_TOT_TURNO`), ligados pelo mesmo `SQ_CANDIDATO`. Carregado na tabela `votos` (uma linha por candidato) e usado no custo por voto de `indicadores`.
+
+> Pegadinhas: o zip traz um CSV por UF, um `_BR` (presidente) e o consolidado `_BRASIL` — somar mais de um dobra os votos. Numa eleição geral são 600+ MB compactados e o `_BRASIL` passa de 4 GB (zip64). Antes da totalização o arquivo existe **só com o cabeçalho**. O TSE regenera o zip todo dia (inclusive o de anos anteriores), então o download condicional da rotina o rebaixa diariamente.
+
 ### CNPJ de campanha
 `{CDN}/prestacao_contas/CNPJ_campanha_{ano}.zip` — CNPJs de campanha abertos por candidatos/partidos.
 
@@ -46,6 +51,5 @@ Alternativas: https://minhareceita.org (mesmos dados), arquivos completos da Rec
 ## 4. Cruzamentos úteis (não implementados ainda)
 
 - **Sanções**: CEIS/CNEP/CEPIM via API do Portal da Transparência (https://api.portaldatransparencia.gov.br — requer cadastro de e-mail para chave gratuita): fornecedores punidos recebendo de campanha.
-- **Resultados eleitorais** (TSE, `votacao_candidato_munzona_{ano}.zip`): custo por voto.
 - **Contratos públicos municipais** (portais de transparência municipais / PNCP https://pncp.gov.br): fornecedor de campanha que depois ganha contrato da prefeitura — sinal clássico de retribuição.
 - **Emendas parlamentares** (Portal da Transparência): para parlamentares candidatos à reeleição.

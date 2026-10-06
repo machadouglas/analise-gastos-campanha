@@ -75,3 +75,13 @@ describe('nomeCandidato', () => {
     expect(nomeCandidato('fulano de tal', 'FULANO DE TAL')).toEqual({ principal: 'fulano de tal', civil: null });
   });
 });
+
+describe('custoVoto', () => {
+  it('mostra centavos, e "< R$ 0,01" em vez de um falso zero', async () => {
+    const { custoVoto, brlCentavos } = await import('./format');
+    expect(custoVoto(2.5)).toBe(brlCentavos.format(2.5));
+    expect(custoVoto(0.004)).toBe(`< ${brlCentavos.format(0.01)}`);
+    expect(custoVoto(0)).toBe(brlCentavos.format(0));
+    expect(custoVoto(null)).toBe('—');
+  });
+});

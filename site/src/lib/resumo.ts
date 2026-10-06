@@ -101,6 +101,46 @@ export interface CotaPartido {
   pct_candidaturas_negras: number | null;
 }
 
+/** Custo por voto agregado de um partido (espelho de
+ *  sql_custo_por_voto_partido em src/resumo.py): soma do contratado ÷ soma dos
+ *  votos do 1º turno das candidaturas da sigla com voto. */
+export interface CustoPartido {
+  SG_PARTIDO: string;
+  candidatos: number;
+  eleitos: number;
+  votos: number;
+  contratado: number;
+  custo_por_voto: number;
+  custo_publico_por_voto: number | null;
+  custo_proprio_por_voto: number | null;
+  custo_terceiros_por_voto: number | null;
+}
+
+/** Uma linha das listas de candidatos do bloco custo_por_voto do resumo. */
+export interface CustoCandidato {
+  SQ_CANDIDATO: string;
+  NM_CANDIDATO: string;
+  NM_URNA_CANDIDATO?: string | null;
+  SG_PARTIDO: string;
+  DS_CARGO: string;
+  SG_UF: string;
+  cd_eleicao?: string | null;
+  sg_ue?: string | null;
+  resultado: string;
+  votos: number;
+  contratado: number;
+  custo_por_voto: number;
+  custo_publico_por_voto: number | null;
+}
+
+export interface Votacao {
+  totalizada: boolean;
+  candidatos_com_votos: number;
+  votos_1t: number;
+  candidatos_2o_turno: number;
+  presidencial_totalizada: boolean;
+}
+
 export interface Resumo {
   gerado_em: string;
   /** carimbo por publicação (resumos antigos podem não trazer) */
@@ -121,6 +161,18 @@ export interface Resumo {
   serie_nacional?: PontoSerieNacional[];
   /** FEFC por partido × gênero/cor (resumos antigos não trazem) */
   cota_fefc?: CotaPartido[];
+  /** estado da totalização dos votos (resumos antigos não trazem) */
+  votacao?: Votacao;
+  /** o bloco do custo por voto (vazio enquanto o TSE não totaliza): o custo
+   *  nacional agregado, os partidos e quatro listas de candidatos com os
+   *  primeiros de cada cargo (espelho de _custo_por_voto em src/resumo.py) */
+  custo_por_voto?: {
+    nacional: Omit<CustoPartido, 'SG_PARTIDO'> | null;
+    partidos: CustoPartido[];
+    eleitos_mais_caros: CustoCandidato[];
+    gastaram_sem_eleger: CustoCandidato[];
+    maiores_gastos: CustoCandidato[];
+  };
 }
 
 let promessa: Promise<Resumo | null> | null = null;

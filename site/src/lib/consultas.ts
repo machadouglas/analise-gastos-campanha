@@ -32,7 +32,54 @@ export type Visao =
   | 'removidas-receitas'
   | 'compartilhados'
   | 'sem-nota'
-  | 'pessoa-fisica';
+  | 'pessoa-fisica'
+  | 'custo-por-voto';
+
+/** Ordenações da visão custo-por-voto. Os valores são os da URL (?ordem=). */
+export const ORDENS_CUSTO = ['mais-caro', 'gastou-sem-eleger', 'eleitos-mais-caros'] as const;
+export type OrdemCusto = (typeof ORDENS_CUSTO)[number];
+export const ORDEM_CUSTO_PADRAO: OrdemCusto = 'mais-caro';
+
+/** Recorte de candidatos de cada ordenação (sobre `indicadores`, prefixo i.) e
+ *  a ordem da tabela. "gastou sem se eleger" corta quem NÃO se elegeu e ordena
+ *  pelo gasto bruto — a história é o dinheiro que não virou mandato. */
+export function recorteDaOrdem(ordem: OrdemCusto): { filtro: string; ordenacao: string } {
+  switch (ordem) {
+    case 'gastou-sem-eleger':
+      // quem ainda disputa o 2º turno não "gastou sem se eleger" (mesma régua do resumo.py)
+      return {
+        filtro: "i.resultado NOT LIKE 'ELEITO%' AND i.resultado NOT LIKE '%TURNO%'",
+        ordenacao: 'i.total_contratado DESC',
+      };
+    case 'eleitos-mais-caros':
+      return { filtro: "i.resultado LIKE 'ELEITO%'", ordenacao: 'i.custo_por_voto DESC' };
+    default:
+      return { filtro: '1=1', ordenacao: 'i.custo_por_voto DESC' };
+  }
+}
+
+/** Os candidatos da visão custo-por-voto no recorte: só quem tem custo
+ *  (votos > 0 e totalização publicada), com o filtro da ordenação. */
+export function sqlCandidatosDoCusto(f: Filtros, ordem: OrdemCusto): string {
+  return `SELECT i.SQ_CANDIDATO FROM indicadores i WHERE ${whereIndicadores(f)}` +
+    ` AND i.custo_por_voto IS NOT NULL AND ${recorteDaOrdem(ordem).filtro}`;
+}
+
+/** KPIs da visão custo-por-voto: o custo AGREGADO do recorte (soma do contratado
+ *  ÷ soma dos votos — a mesma régua de resumo.sql_custo_por_voto_partido), a
+ *  parcela pública, candidatos, votos e eleitos. */
+export function sqlCustoDoRecorte(f: Filtros, ordem: OrdemCusto): string {
+  return `SELECT COUNT(*) AS candidatos,
+                 COUNT(*) FILTER (WHERE i.resultado LIKE 'ELEITO%') AS eleitos,
+                 SUM(i.votos) AS votos,
+                 ROUND(SUM(i.total_contratado), 2) AS contratado,
+                 ROUND(SUM(i.total_contratado) / NULLIF(SUM(i.votos), 0), 2) AS custo_por_voto,
+                 ROUND(SUM(i.custo_publico_por_voto * i.votos)
+                       / NULLIF(SUM(i.votos) FILTER (WHERE i.custo_publico_por_voto IS NOT NULL), 0), 2)
+                   AS custo_publico_por_voto
+          FROM indicadores i
+          WHERE i.SQ_CANDIDATO IN (${sqlCandidatosDoCusto(f, ordem)})`;
+}
 
 /** A visão de receitas removidas anda sobre a tabela de receitas — a contraparte
  *  é o doador e a categoria é a origem da receita, não a do gasto. */
@@ -393,7 +440,16 @@ export function whereDaVisao(
   f: Filtros,
   sinal: SinalFiltro,
   categoria: string,
+  ordem: OrdemCusto = ORDEM_CUSTO_PADRAO,
 ): { base: string; where: string } {
+  // painel e gráficos mostram os gastos DOS candidatos da visão (como no
+  // fora-da-curva); a tabela, por candidato, vem de sqlTabelaDaVisao
+  if (visao === 'custo-por-voto') {
+    return {
+      base: 'despesas_atual',
+      where: `${montarWhere(f)} AND SQ_CANDIDATO IN (${sqlCandidatosDoCusto(f, ordem)})`,
+    };
+  }
   if (visao === 'removidas-receitas') {
     return { base: 'receitas_removidas', where: montarWhere(f, true) };
   }
@@ -486,8 +542,28 @@ export function sqlTabelaDaVisao(
   cat: string,
   pag: number,
   porPagina: number,
+  ordem: OrdemCusto = ORDEM_CUSTO_PADRAO,
 ): string {
   const paginacao = `LIMIT ${porPagina} OFFSET ${pag * porPagina}`;
+  if (v === 'custo-por-voto') {
+    // as colunas de custo vêm prontas de indicadores (src/agregados.py): o
+    // denominador é o 1º turno e as parcelas repartem o custo na proporção
+    // da receita — nada é recalculado aqui
+    const { filtro, ordenacao } = recorteDaOrdem(ordem);
+    return `SELECT i.SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
+                    ${nomeExibicao('i.')} AS "Candidato",
+                    i.SG_PARTIDO || '/' || i.SG_UF AS "Partido/UF",
+                    i.DS_CARGO AS "Cargo",
+                    LOWER(i.resultado) AS "Resultado",
+                    i.votos AS "Votos",
+                    ROUND(i.total_contratado, 2) AS "Contratado",
+                    i.custo_por_voto AS "Custo por voto",
+                    i.custo_publico_por_voto AS "Público por voto",
+                    i.custo_proprio_por_voto AS "Próprio por voto"
+             FROM indicadores i ${JOIN_NOMES_URNA}
+             WHERE ${whereIndicadores(f)} AND i.custo_por_voto IS NOT NULL AND ${filtro}
+             ORDER BY ${ordenacao} ${paginacao}`;
+  }
   if (v === 'removidas-receitas')
     return `SELECT SQ_CANDIDATO AS "_sq", '' AS "_cnpj",
                     DT_RECEITA AS "Data", ${nomeExibicao()} AS "Candidato",

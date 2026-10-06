@@ -6,7 +6,7 @@ import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
 import { escSQL, JOIN_NOMES_URNA, nomeExibicao } from '@/lib/consultas';
-import { brl, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
+import { brl, brlCentavos, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 /** Mínimo constitucional do FEFC para candidaturas femininas (EC 117/2022). */
 export const PISO_FEFC_FEMININO = 30;
@@ -27,11 +27,61 @@ interface CotaPartido {
   baseRegistro: boolean;
 }
 
+/** Custo por voto agregado (espelho de sql_custo_por_voto_partido em
+ *  src/resumo.py): soma do contratado ÷ soma dos votos do 1º turno das
+ *  candidaturas com voto — nunca a média dos custos individuais. */
+interface CustoVoto {
+  cargo: string | null;
+  candidatos: number;
+  eleitos: number;
+  votos: number;
+  contratado: number;
+  custoPorVoto: number;
+  custoPublicoPorVoto: number | null;
+  custoProprioPorVoto: number | null;
+  custoTerceirosPorVoto: number | null;
+}
+
+/** Mesmo texto SQL do backend (src/resumo.py), com DS_CARGO opcional. */
+function sqlCustoPorVoto(w: string, porCargo: boolean): string {
+  return `
+    SELECT ${porCargo ? 'DS_CARGO' : 'NULL'} AS cargo,
+           COUNT(*) AS candidatos,
+           COUNT(*) FILTER (WHERE resultado LIKE 'ELEITO%') AS eleitos,
+           SUM(votos) AS votos,
+           ROUND(SUM(total_contratado), 2) AS contratado,
+           ROUND(SUM(total_contratado) / SUM(votos), 2) AS custo_por_voto,
+           ROUND(SUM(custo_publico_por_voto * votos)
+                 / NULLIF(SUM(votos) FILTER (WHERE custo_publico_por_voto IS NOT NULL), 0), 2)
+             AS custo_publico_por_voto,
+           ROUND(SUM(custo_proprio_por_voto * votos)
+                 / NULLIF(SUM(votos) FILTER (WHERE custo_proprio_por_voto IS NOT NULL), 0), 2)
+             AS custo_proprio_por_voto,
+           ROUND(SUM(custo_terceiros_por_voto * votos)
+                 / NULLIF(SUM(votos) FILTER (WHERE custo_terceiros_por_voto IS NOT NULL), 0), 2)
+             AS custo_terceiros_por_voto
+    FROM indicadores
+    WHERE ${w} AND votos > 0 AND custo_por_voto IS NOT NULL
+    GROUP BY ALL ORDER BY custo_por_voto DESC`;
+}
+
+function linhaCusto(l: unknown[]): CustoVoto {
+  const n = (v: unknown) => (v == null ? null : Number(v));
+  return {
+    cargo: l[0] == null ? null : String(l[0]),
+    candidatos: Number(l[1]), eleitos: Number(l[2]), votos: Number(l[3]),
+    contratado: Number(l[4]), custoPorVoto: Number(l[5]),
+    custoPublicoPorVoto: n(l[6]), custoProprioPorVoto: n(l[7]), custoTerceirosPorVoto: n(l[8]),
+  };
+}
+
 interface DadosPartido {
   nome: string;
   kpis: { candidatos: number; contratado: number; receitas: number; fornecedores: number };
   composicao: { publico: number; proprios: number; total: number };
   cota: CotaPartido | null;
+  /** null = nenhuma candidatura da sigla com voto totalizado */
+  custoVoto: { total: CustoVoto; porCargo: CustoVoto[] } | null;
   serieRotulos: string[];
   series: Serie[];
   origens: ItemBarra[];
@@ -50,7 +100,7 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
   // as oito consultas são independentes; juntas, o pipeline de leitura dos
   // parquet não fica serializado atrás de cada round-trip
   const negros = COR_RACA_NEGRA.map((c) => `'${c}'`).join(', ');
-  const [kpis, rec, comp, serie, origens, doadores, compartilhados, candidatos, cota] = await Promise.all([
+  const [kpis, rec, comp, serie, origens, doadores, compartilhados, candidatos, cota, custo, custoCargo] = await Promise.all([
     // candidatos = quem movimentou QUALQUER coisa (despesa OU receita): partido
     // que só arrecadou também tem ficha. Sentinelas '-1'/'#NULO' fora do KPI de
     // fornecedores — "sem contraparte" não é um fornecedor a mais.
@@ -126,6 +176,11 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
                COALESCE(reg, cf), reg IS NOT NULL
         FROM p`)
       : Promise.resolve({ linhas: [] as unknown[][] }),
+    // as colunas de voto chegam a indicadores depois da totalização; antes
+    // disso a consulta não devolve linha e a seção não aparece. catch: parquet
+    // antigo sem as colunas (janela entre deploy e rotina) não derruba a ficha
+    executarSQL(sqlCustoPorVoto(w, false)).catch(() => ({ linhas: [] as unknown[][] })),
+    executarSQL(sqlCustoPorVoto(w, true)).catch(() => ({ linhas: [] as unknown[][] })),
   ]);
   const [nCand, contratado, nForn] = kpis.linhas[0] ?? [0, 0, 0];
   if (!Number(nCand)) return null;
@@ -158,6 +213,9 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
       total: Number(comp.linhas[0]?.[2] ?? 0),
     },
     cota: cotaPartido,
+    custoVoto: custo.linhas[0] && Number(custo.linhas[0][3] ?? 0) > 0
+      ? { total: linhaCusto(custo.linhas[0]), porCargo: custoCargo.linhas.map(linhaCusto) }
+      : null,
     serieRotulos: serie.linhas.map((l) => String(l[0])),
     series: [
       { nome: 'Contratado', valores: serie.linhas.map((l) => Number(l[1] ?? 0)) },
@@ -307,6 +365,71 @@ export function Partido() {
                 },
               ]}
             />
+          </CardContent>
+        </Card>
+      )}
+
+      {dados.custoVoto && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Custo por voto</CardTitle>
+            <CardDescription>
+              Soma do que as candidaturas da sigla declararam ter contratado dividida pela soma dos votos
+              que receberam no 1º turno ({num.format(dados.custoVoto.total.candidatos)} candidaturas com voto,{' '}
+              {num.format(dados.custoVoto.total.eleitos)} eleitas). É o custo agregado — um candidato de
+              muitos votos pesa mais que um de poucos. As parcelas repartem o custo na proporção da receita
+              (dinheiro público, bolso dos candidatos, doações de terceiros).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
+              <p className="text-4xl font-bold tracking-tight text-[#10244A] sm:text-5xl">
+                {brlCentavos.format(dados.custoVoto.total.custoPorVoto)}
+                <span className="ml-2 text-base font-medium text-muted-foreground">por voto</span>
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {brl.format(dados.custoVoto.total.contratado)} contratados ÷ {num.format(dados.custoVoto.total.votos)} votos
+              </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              {([
+                ['Dinheiro público', dados.custoVoto.total.custoPublicoPorVoto, '#264E9B'],
+                ['Bolso dos candidatos', dados.custoVoto.total.custoProprioPorVoto, '#B45309'],
+                ['Doações de terceiros', dados.custoVoto.total.custoTerceirosPorVoto, '#6e6a60'],
+              ] as [string, number | null, string][]).map(([rotulo, valor, cor]) => (
+                <div key={rotulo} className="rounded-lg border bg-background p-4" style={{ borderLeftColor: cor, borderLeftWidth: 4 }}>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{rotulo}</p>
+                  <p className="mt-1 text-2xl font-bold tracking-tight text-[#10244A]">
+                    {valor == null ? '—' : brlCentavos.format(valor)}
+                  </p>
+                </div>
+              ))}
+            </div>
+            {dados.custoVoto.porCargo.length > 1 && (
+              <Tabela
+                colunas={[
+                  { titulo: 'Cargo' },
+                  { titulo: 'Candidatos', numerica: true },
+                  { titulo: 'Eleitos', numerica: true },
+                  { titulo: 'Votos', numerica: true },
+                  { titulo: 'Contratado', numerica: true },
+                  { titulo: 'Custo por voto', numerica: true },
+                  { titulo: 'Público por voto', numerica: true },
+                ]}
+              >
+                {dados.custoVoto.porCargo.map((c) => (
+                  <tr key={c.cargo ?? ''}>
+                    <td>{c.cargo}</td>
+                    <CelulaNum>{num.format(c.candidatos)}</CelulaNum>
+                    <CelulaNum>{num.format(c.eleitos)}</CelulaNum>
+                    <CelulaNum>{num.format(c.votos)}</CelulaNum>
+                    <CelulaNum>{brl.format(c.contratado)}</CelulaNum>
+                    <CelulaNum frac={c.custoPorVoto / dados.custoVoto!.porCargo[0].custoPorVoto}>{brlCentavos.format(c.custoPorVoto)}</CelulaNum>
+                    <CelulaNum>{c.custoPublicoPorVoto == null ? '—' : brlCentavos.format(c.custoPublicoPorVoto)}</CelulaNum>
+                  </tr>
+                ))}
+              </Tabela>
+            )}
           </CardContent>
         </Card>
       )}

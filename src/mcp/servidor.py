@@ -239,6 +239,8 @@ async def ficha_candidato(sq_candidato: str) -> dict[str, Any]:
             "(descompasso de calendário não conta).",
             "Estar acima do p95 é, por construção, a situação de 5% do grupo — é posição "
             "na distribuição, não classificação de irregularidade.",
+            "votos, resultado e custo_por_voto (em indicadores) usam o voto nominal do 1º "
+            "turno; NULL = eleição ainda não totalizada, candidato fora da urna ou zero voto.",
         ],
     })
 
@@ -296,13 +298,15 @@ async def ficha_fornecedor(id: str) -> dict[str, Any]:  # noqa: A002 — nome da
 async def ficha_partido(sigla: str, uf: str | None = None) -> dict[str, Any]:
     """A ficha de um partido (sigla, opcionalmente numa UF): totais, dinheiro
     público, doadores originários, fornecedores compartilhados entre candidatos
-    do partido, maiores candidatos e a cota do Fundo Eleitoral por gênero e
-    cor/raça (termômetro: mede só o que chegou a candidato)."""
+    do partido, maiores candidatos, a cota do Fundo Eleitoral por gênero e
+    cor/raça (termômetro: mede só o que chegou a candidato) e o custo por voto
+    agregado da sigla, no total e por cargo."""
     sigla = (sigla or "").strip()
     if not sigla or len(sigla) > 30:
         raise ToolError("informe a sigla do partido")
     sqls = consultas.sql_ficha_partido(sigla, uf)
-    tabelas_de = {"doadores_originarios": ("rede",), "cota_fefc": ("cota_fefc",)}
+    tabelas_de = {"doadores_originarios": ("rede",), "cota_fefc": ("cota_fefc",),
+                  "custo_por_voto": ("indicadores",), "custo_por_voto_por_cargo": ("indicadores",)}
     try:
         chaves = list(sqls)
         resultados = await asyncio.gather(
@@ -323,10 +327,18 @@ async def ficha_partido(sigla: str, uf: str | None = None) -> dict[str, Any]:
         "fornecedores_compartilhados": r["fornecedores_compartilhados"] or [],
         "maiores_candidatos": r["candidatos"] or [],
         "cota_fefc": cota,
+        "custo_por_voto": {
+            "partido": (r["custo_por_voto"] or [None])[0],
+            "por_cargo": r["custo_por_voto_por_cargo"] or [],
+        },
         "ressalvas": [
             "cota_fefc é termômetro, não a conta oficial: a lei mede o total aplicado pelo "
             "partido (inclui gasto direto do diretório) e a prestação está aberta. Piso legal: "
             "30% para mulheres; proporcional às candidaturas negras (pretas + pardas).",
+            "custo_por_voto do partido é AGREGADO (soma do contratado ÷ soma dos votos do 1º "
+            "turno entre as candidaturas da sigla com voto), não a média dos custos "
+            "individuais; as parcelas repartem esse custo na proporção da receita. NULL = "
+            "nenhuma candidatura da sigla com voto totalizado.",
         ],
     })
 
@@ -455,6 +467,51 @@ async def sem_nota(uf: str | None = None, cargo: str | None = None,
     })
 
 
+RESSALVAS_CUSTO_POR_VOTO = [
+    "O denominador é o voto nominal do 1º TURNO — o único que todo candidato disputou. "
+    "Quem foi ao 2º turno tem o gasto das semanas extras no numerador; votos_2t fica "
+    "ao lado para quem preferir outra régua.",
+    "custo_publico_por_voto, custo_proprio_por_voto e custo_terceiros_por_voto repartem o "
+    "custo por voto na proporção da receita declarada (Fundo Eleitoral + Fundo Partidário; "
+    "bolso do candidato; doações de terceiros) — somam o custo total. Assume dinheiro "
+    "fungível: não há como saber qual real pagou qual nota. NULL sem receita declarada.",
+    "Candidato sem linha (custo NULL) não chegou à urna, teve zero voto ou pertence a uma "
+    "eleição ainda não totalizada — a presidencial vem num arquivo à parte e chega depois.",
+    "Custo alto ou baixo é o tamanho da campanha diante do resultado, não irregularidade: "
+    "compare com a mediana e o p95 do grupo (mesmo cargo e UF) que vêm na linha.",
+]
+
+
+@mcp.tool(annotations=SOMENTE_LEITURA)
+async def custo_por_voto(uf: str | None = None, cargo: str | None = None,
+                         partido: str | None = None, ordem: str = "maior_custo",
+                         so_eleitos: bool = False, limite: int = 30) -> dict[str, Any]:
+    """Quanto cada candidato declarou ter contratado por voto recebido no 1º
+    turno, com a parcela de dinheiro público e de recursos próprios por voto,
+    o resultado (eleito, suplente, não eleito, 2º turno) e a mediana e o p95
+    do grupo de comparação (mesmo cargo e UF) ao lado. `ordem`: maior_custo
+    (padrão), menor_custo, mais_votos ou maior_gasto; `so_eleitos` restringe a
+    quem foi eleito. Para correlações livres (custo × partido, × fundo, × bens),
+    as mesmas colunas estão em `indicadores` e `votos` pela ferramenta sql.
+
+    Mede a razão entre dois fatos declarados/apurados; não classifica nada."""
+    if ordem not in consultas.ORDENS_CUSTO_POR_VOTO:
+        raise ToolError(f"ordem deve ser uma de: {', '.join(consultas.ORDENS_CUSTO_POR_VOTO)}")
+    sql = consultas.sql_custo_por_voto(
+        uf, cargo, partido, ordem, bool(so_eleitos), min(max(int(limite), 1), 200))
+    try:
+        linhas = await _linhas(sql, ("indicadores",))
+    except Exception as e:  # noqa: BLE001
+        raise _erro_de_consulta(e) from None
+    return _resposta({
+        "candidatos": linhas or [], "n": len(linhas or []),
+        "o_que_esta_medido": "total contratado ÷ votos nominais do 1º turno (custo_por_voto), "
+                             "repartido na proporção da receita em parcela pública, própria e "
+                             "de terceiros",
+        "ressalvas": RESSALVAS_CUSTO_POR_VOTO,
+    })
+
+
 @mcp.tool(annotations=SOMENTE_LEITURA)
 async def gastos_por_categoria(uf: str | None = None, cargo: str | None = None,
                                partido: str | None = None, categoria: str | None = None,
@@ -487,6 +544,8 @@ async def visao_geral() -> dict[str, Any]:
         "serie_nacional_ultimos_dias": (r.get("serie_nacional") or [])[-7:],
         "maiores_candidatos": (r.get("top_candidatos") or [])[:10],
         "fora_da_curva_destaques": (r.get("fora_da_curva") or [])[:10],
+        "votacao": r.get("votacao"),
+        "custo_por_voto_nacional": (r.get("custo_por_voto") or {}).get("nacional"),
         "tabelas_disponiveis": banco.tabelas,
     })
 

@@ -52,6 +52,9 @@ ARQUIVOS = [
     "despesas", "receitas", "despesas_pagas", "receitas_doador_originario",
     "candidatos", "bens", "fornecedores",
 ]
+# tabela nova que o release pode ainda não ter (janela entre deploy e rotina):
+# sem ela a prévia segue, e os indicadores que dependem dela saem NULL
+OPCIONAIS = ["votos"]
 
 
 def baixar(atualizar: bool) -> None:
@@ -65,6 +68,15 @@ def baixar(atualizar: bool) -> None:
             continue
         print(f"[baixando] {nome}.parquet")
         publicado.baixar_arquivo(f"{nome}.parquet", alvo, BASE)
+    for nome in OPCIONAIS:
+        alvo = CACHE / f"{nome}.parquet"
+        if alvo.exists() and not atualizar:
+            continue
+        try:
+            publicado.baixar_arquivo(f"{nome}.parquet", alvo, BASE)
+            print(f"[baixado] {nome}.parquet")
+        except OSError as e:
+            print(f"[aviso] {nome}.parquet ainda não está no release ({e}) — seguindo sem")
 
 
 def montar(con) -> None:
@@ -96,7 +108,8 @@ def montar(con) -> None:
         n = con.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
         print(f"[montado] {tabela}: {n} linhas brutas")
 
-    for nome in ARQUIVOS[2:]:
+    presentes = [n for n in OPCIONAIS if (CACHE / f"{n}.parquet").exists()]
+    for nome in ARQUIVOS[2:] + presentes:
         con.execute(f"CREATE TABLE {nome} AS SELECT * FROM '{(CACHE / (nome + '.parquet')).as_posix()}'")
 
     # a série diária precisa de todos os dias de extração já vistos

@@ -54,6 +54,7 @@ export const FERRAMENTAS_MCP: FerramentaMCP[] = [
   { nome: 'fornecedores_por_cadastro', descricao: 'Fornecedores cruzados com o cadastro da Receita: situação, abertura, porte.' },
   { nome: 'fornecedores_compartilhados', descricao: 'Fornecedores que atendem vários candidatos no recorte.' },
   { nome: 'sem_nota', descricao: 'Quem mais gasta sem documento fiscal onde a nota é a norma.' },
+  { nome: 'custo_por_voto', descricao: 'Gasto declarado por voto do 1º turno, com dinheiro público e próprio por voto, resultado e a régua do grupo.' },
   { nome: 'gastos_por_categoria', descricao: 'Total por tipo de despesa, com a mediana nacional do preço por nota.' },
   { nome: 'sql', descricao: 'Consulta livre em SQL (DuckDB), só leitura, sobre todas as tabelas publicadas.' },
 ];

@@ -475,6 +475,8 @@ SELECT d.SQ_CANDIDATO AS sq_candidato, ANY_VALUE(d.NM_CANDIDATO) AS candidato,
 FROM despesas_atual d LEFT JOIN r USING (SQ_CANDIDATO)
 WHERE d.{w} GROUP BY 1 ORDER BY contratado DESC LIMIT 50""",
         "cota_fefc": resumo.sql_cota_por_partido(w),
+        "custo_por_voto": resumo.sql_custo_por_voto_partido(w),
+        "custo_por_voto_por_cargo": resumo.sql_custo_por_voto_partido(w, por_cargo=True),
     }
 
 
@@ -558,6 +560,43 @@ LEFT JOIN benchmark_indicadores bbr
   ON bbr.DS_CARGO = i.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = 'pct_sem_nota'
 WHERE {w} AND i.valor_sem_nota > 0
 ORDER BY i.valor_sem_nota DESC LIMIT {int(limite)}"""
+
+
+ORDENS_CUSTO_POR_VOTO = {
+    "maior_custo": "i.custo_por_voto DESC",
+    "menor_custo": "i.custo_por_voto ASC",
+    "mais_votos": "i.votos DESC",
+    "maior_gasto": "i.total_contratado DESC",
+}
+
+
+def sql_custo_por_voto(uf: str | None, cargo: str | None, partido: str | None,
+                       ordem: str, so_eleitos: bool, limite: int) -> str:
+    """Custo por voto de cada candidato no recorte, com a distribuição do grupo
+    (cargo×UF; nacional quando o grupo local é pequeno) ao lado. Lê as colunas
+    que src/agregados.py já calculou — o denominador é o 1º turno — e nunca
+    refaz a divisão aqui."""
+    w = where_recorte(uf, cargo, partido, prefixo="i.")
+    eleitos = " AND i.resultado LIKE 'ELEITO%'" if so_eleitos else ""
+    return f"""
+SELECT i.SQ_CANDIDATO AS sq_candidato, i.NM_CANDIDATO AS candidato,
+       i.NM_URNA_CANDIDATO AS nome_urna, i.SG_PARTIDO AS partido, i.SG_UF AS uf,
+       i.DS_CARGO AS cargo, i.resultado, i.votos AS votos_1t, i.votos_2t,
+       ROUND(i.total_contratado, 2) AS contratado, ROUND(i.total_receitas, 2) AS arrecadado,
+       ROUND(i.fundos_publicos, 2) AS fundos_publicos, ROUND(i.recursos_proprios, 2) AS recursos_proprios,
+       i.custo_por_voto, i.custo_publico_por_voto, i.custo_proprio_por_voto,
+       i.custo_terceiros_por_voto,
+       COALESCE(buf.mediana, bbr.mediana) AS mediana_do_grupo,
+       COALESCE(buf.p95, bbr.p95) AS p95_do_grupo,
+       COALESCE(buf.candidatos, bbr.candidatos) AS grupo_n,
+       CASE WHEN buf.p95 IS NOT NULL THEN i.SG_UF ELSE 'BR-TODAS' END AS grupo_ambito
+FROM indicadores i
+LEFT JOIN benchmark_indicadores buf
+  ON buf.DS_CARGO = i.DS_CARGO AND buf.SG_UF = i.SG_UF AND buf.metrica = 'custo_por_voto'
+LEFT JOIN benchmark_indicadores bbr
+  ON bbr.DS_CARGO = i.DS_CARGO AND bbr.SG_UF = 'BR-TODAS' AND bbr.metrica = 'custo_por_voto'
+WHERE {w} AND i.custo_por_voto IS NOT NULL{eleitos}
+ORDER BY {ORDENS_CUSTO_POR_VOTO[ordem]} LIMIT {int(limite)}"""
 
 
 def sql_gastos_por_categoria(uf: str | None, cargo: str | None, partido: str | None,

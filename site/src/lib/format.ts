@@ -18,6 +18,15 @@ export const brlCentavos = new Intl.NumberFormat('pt-BR', {
 
 export const num = new Intl.NumberFormat('pt-BR');
 
+/** Custo por voto para exibição: centavos, e "< R$ 0,01" quando o gasto é tão
+ *  pequeno diante dos votos que arredondaria para zero — "R$ 0,00" afirmaria um
+ *  voto de graça que não existe. */
+export function custoVoto(v: number | null | undefined): string {
+  if (v == null) return '—';
+  if (v > 0 && v < 0.01) return `< ${brlCentavos.format(0.01)}`;
+  return brlCentavos.format(v);
+}
+
 export function dataBR(iso: string | null | undefined): string {
   if (!iso) return '';
   return iso.split('-').reverse().join('/');

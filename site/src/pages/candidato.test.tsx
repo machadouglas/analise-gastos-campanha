@@ -3,7 +3,7 @@
  * aberta em" viria vazia — igual a "ainda não consultado" — e por isso a página
  * carrega uma coluna oculta `_situacao` que NUNCA pode ser renderizada. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { limparDuckDBFalso, responder, tabelasDisponiveis, type RotaFalsa } from '@/test/duckdb-falso';
 import { renderizarRota } from '@/test/render';
@@ -151,5 +151,57 @@ describe('ficha do candidato · notas escondidas na linha do fornecedor', () => 
     await userEvent.click(semNotas);
     // nada de linha de detalhe vazia abaixo dela
     expect(semNotas.nextElementSibling).toBeNull();
+  });
+});
+
+/* Custo por voto: as colunas chegam em `indicadores` só depois que o TSE
+ * totaliza. Antes disso (ou para quem não chegou à urna) `votos` é NULL e a
+ * seção não existe — "R$ 0,00 por voto" seria uma afirmação falsa. */
+describe('ficha do candidato · custo por voto', () => {
+  function comVotos(extras: Record<string, unknown>) {
+    const [trecho, resposta] = INDICADORES;
+    const colunas = [...resposta.colunas!, ...Object.keys(extras)];
+    cleanup();
+    responder([
+      // a distribuição do grupo também lê `indicadores`: sem grupo neste cenário
+      ['custo_por_voto IS NOT NULL', { linhas: [] }],
+      [trecho, { colunas, linhas: [[...resposta.linhas[0], ...Object.values(extras)]] }],
+      NOTAS, FORNECEDORES,
+    ]);
+    renderizarRota(<Candidato />, { caminho: '/candidato/:sq', url: `/candidato/${SQ}` });
+  }
+
+  it('sem totalização a seção não aparece', async () => {
+    await screen.findByText('Contratado');
+    expect(screen.queryByText('Custo por voto')).not.toBeInTheDocument();
+  });
+
+  it('mostra o custo sobre o 1º turno, as duas parcelas e o resultado', async () => {
+    comVotos({
+      votos: 12000, votos_2t: null, resultado: 'ELEITO POR QP',
+      custo_por_voto: 3.5, custo_publico_por_voto: 2, custo_proprio_por_voto: 0.5,
+      custo_terceiros_por_voto: 1,
+    });
+    const secao = (await screen.findByText('Custo por voto')).closest('div.rounded-xl') as HTMLElement;
+
+    expect(within(secao).getByText(/R\$\s3,50/)).toBeInTheDocument();
+    expect(within(secao).getByText(/R\$\s42\.000 contratados ÷ 12\.000 votos/)).toBeInTheDocument();
+    expect(within(secao).getByText(/R\$\s2,00/)).toBeInTheDocument();
+    expect(within(secao).getByText(/R\$\s0,50/)).toBeInTheDocument();
+    expect(within(secao).getByText(/R\$\s1,00/)).toBeInTheDocument();
+    expect(within(secao).getByText('eleito por qp')).toBeInTheDocument();
+    expect(within(secao).getByText(/12\.000 votos no 1º turno/)).toBeInTheDocument();
+  });
+
+  it('zero voto não vira divisão: o custo fica em branco e o zero à vista', async () => {
+    comVotos({
+      votos: 0, votos_2t: null, resultado: 'NÃO ELEITO',
+      custo_por_voto: null, custo_publico_por_voto: null, custo_proprio_por_voto: null,
+      custo_terceiros_por_voto: null,
+    });
+    const secao = (await screen.findByText('Custo por voto')).closest('div.rounded-xl') as HTMLElement;
+
+    expect(within(secao).getByText(/nenhum voto nominal no 1º turno/)).toBeInTheDocument();
+    expect(within(secao).queryByText(/R\$\s0,00/)).not.toBeInTheDocument();
   });
 });

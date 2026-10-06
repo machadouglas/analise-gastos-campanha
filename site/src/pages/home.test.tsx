@@ -1,11 +1,11 @@
-/* Home: três coisas que só tinham verificação no olho — a seção de declarações
- * removidas, que some por completo quando não há remoção; a linha de cartões,
+/* Home: três coisas que só tinham verificação no olho — a seção de custo por
+ * voto, que some por completo enquanto o TSE não totaliza; a linha de cartões,
  * onde o cartão sem sparkline precisa manter altura e padding dos vizinhos; e o
  * chip do fora da curva, que precisa afirmar o fato em vez de largar um par
  * "métrica: número" para o leitor interpretar. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import type { CandidatoForaDaCurva, DespesaResumo, Resumo } from '@/lib/resumo';
+import type { CandidatoForaDaCurva, CustoCandidato, DespesaResumo, Resumo } from '@/lib/resumo';
 import { renderizarRota } from '@/test/render';
 
 const { carregarResumoFalso } = vi.hoisted(() => ({ carregarResumoFalso: vi.fn() }));
@@ -92,34 +92,79 @@ beforeEach(() => {
   carregarResumoFalso.mockReset();
 });
 
-describe('home · declarações removidas', () => {
-  it('a seção aparece quando há remoção', async () => {
-    montar(BASE);
+const ELEITA: CustoCandidato = {
+  SQ_CANDIDATO: '900000000003', NM_CANDIDATO: 'DANIEL FICTÍCIO', NM_URNA_CANDIDATO: 'DANI',
+  SG_PARTIDO: 'PXX', DS_CARGO: 'Deputado Federal', SG_UF: 'PR', resultado: 'ELEITO POR QP',
+  votos: 40_000, contratado: 3_000_000, custo_por_voto: 75, custo_publico_por_voto: 60,
+};
+const NAO_ELEITO: CustoCandidato = {
+  ...ELEITA, SQ_CANDIDATO: '900000000004', NM_CANDIDATO: 'ELIAS FICTÍCIO', NM_URNA_CANDIDATO: 'ELIAS',
+  DS_CARGO: 'Governador', resultado: 'NÃO ELEITO', votos: 500_000, contratado: 9_000_000, custo_por_voto: 18,
+};
 
-    expect(await screen.findByText('Declarações removidas')).toBeInTheDocument();
-    expect(screen.getByText(/Despesas removidas: 12/)).toBeInTheDocument();
-    expect(screen.getByText(/Receitas removidas: 3/)).toBeInTheDocument();
-    expect(screen.getByText('Impressão de santinhos')).toBeInTheDocument();
-    expect(screen.getByText('Recursos de pessoas físicas')).toBeInTheDocument();
+const COM_VOTOS: Resumo = {
+  ...BASE,
+  custo_por_voto: {
+    nacional: {
+      candidatos: 16_600, eleitos: 1_646, votos: 500_000_000, contratado: 4_000_000_000,
+      custo_por_voto: 8, custo_publico_por_voto: 6, custo_proprio_por_voto: 0.5, custo_terceiros_por_voto: 1.5,
+    },
+    partidos: [{
+      SG_PARTIDO: 'PXX', candidatos: 120, eleitos: 9, votos: 2_000_000, contratado: 50_000_000,
+      custo_por_voto: 25, custo_publico_por_voto: 20.5, custo_proprio_por_voto: 1,
+      custo_terceiros_por_voto: 3.5,
+    }],
+    eleitos_mais_caros: [ELEITA],
+    gastaram_sem_eleger: [NAO_ELEITO],
+    maiores_gastos: [NAO_ELEITO, ELEITA],
+  },
+};
+
+describe('home · custo por voto', () => {
+  it('com votos, a abertura e os cartões giram em torno do custo', async () => {
+    montar(COM_VOTOS);
+
+    expect(await screen.findByText('Quanto custou cada voto?')).toBeInTheDocument();
+    expect(screen.getByText('Custo por voto no país').parentElement).toHaveTextContent(/R\$\s8,00/);
+    expect(screen.getByText('Dinheiro público por voto').parentElement).toHaveTextContent(/R\$\s6,00/);
+    expect(screen.getByText('Dinheiro público por voto').parentElement).toHaveTextContent('75% do custo');
+    // o que saiu da Home: candidaturas registradas, maiores despesas, removidas,
+    // compartilhados e o ranking de gasto bruto (virou lista do custo)
+    expect(screen.queryByText('Candidaturas registradas')).not.toBeInTheDocument();
+    expect(screen.queryByText('Declarações removidas')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Maiores despesas/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Fornecedores de múltiplos candidatos')).not.toBeInTheDocument();
+    expect(screen.queryByText('Quem mais contratou até agora')).not.toBeInTheDocument();
   });
 
-  it('some por completo quando não há nenhuma remoção', async () => {
-    montar({
-      ...BASE,
-      despesas_removidas: [],
-      receitas_removidas: [],
-      mudancas: {
-        despesas_removidas_qtd: 0,
-        despesas_removidas_valor: 0,
-        receitas_removidas_qtd: 0,
-        receitas_removidas_valor: 0,
-      },
-    });
+  it('as quatro listas e o ranking de partidos aparecem, e a aba por cargo filtra', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    montar(COM_VOTOS);
+
+    expect(await screen.findByText('Quanto custou cada voto')).toBeInTheDocument();
+    expect(screen.getByText('Mais gastaram sem se eleger')).toBeInTheDocument();
+    expect(screen.getByText('Quem mais contratou')).toBeInTheDocument();
+    expect(screen.getAllByText('ELIAS').length).toBeGreaterThan(0);
+    // o gráfico por partido: barra empilhada com as três fatias nomeadas
+    expect(screen.getByText(/R\$\s25,00/)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /PXX: R\$\s25,00 por voto/ })).toHaveAccessibleName(
+      /Dinheiro público R\$\s20,50, Bolso dos candidatos R\$\s1,00, Doações de terceiros R\$\s3,50/);
+    expect(screen.getAllByRole('link', { name: 'PXX' })[0]).toHaveAttribute('href', '/partido/PXX');
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Senador' }));
+    expect(screen.queryByText('DANI')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Nenhum candidato neste cargo ainda.').length).toBe(3);
+    expect(screen.getByRole('link', { name: /Explorar o custo por voto/ })).toHaveAttribute(
+      'href', '/explorar?visao=custo-por-voto&cargo=Senador');
+  });
+
+  it('sem totalização, a Home antiga segue: ranking de gasto e sem a seção de custo', async () => {
+    montar(BASE);
 
     // o resto da Home carregou — não é ausência por página vazia
     expect(await screen.findByText('Quem mais contratou até agora')).toBeInTheDocument();
-    expect(screen.queryByText('Declarações removidas')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Despesas removidas/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Quanto custou cada voto')).not.toBeInTheDocument();
+    expect(screen.getByText('Candidaturas registradas')).toBeInTheDocument();
   });
 });
 

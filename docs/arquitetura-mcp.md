@@ -154,6 +154,7 @@ da extração) e `versao_codigo` (commit) em toda resposta.
 | `declaracoes_removidas` | `uf?`, `cargo?`, `sq_candidato?`, `tipo` (despesa/receita) | declarações que saíram do ar de verdade | `despesas_removidas` / `receitas_removidas` |
 | `fornecedores_compartilhados` | `uf?`, `cargo?`, `partido?`, `minimo_candidatos?` | fornecedores atendendo N+ candidatos | `despesas_atual` |
 | `sem_nota` | `uf?`, `cargo?`, `partido?` | quem mais gasta sem documento fiscal onde a nota é a norma, com o p95 do grupo | `indicadores` ⋈ `benchmark_indicadores` |
+| `custo_por_voto` | `uf?`, `cargo?`, `partido?`, `ordem?` (maior_custo/menor_custo/mais_votos/maior_gasto), `so_eleitos?`, `limite?` | gasto por voto do 1º turno, parcelas pública e própria, resultado, mediana e p95 do grupo | `indicadores` ⋈ `benchmark_indicadores` (de `votos`) |
 | `gastos_por_categoria` | `uf?`, `cargo?`, `partido?`, `categoria?` | total por tipo de despesa, com a mediana nacional do preço por nota | `despesas_atual`, `benchmark_precos` |
 | `visao_geral` | — | totais do dia, mudanças desde a última extração, série, destaques | `resumo.json` |
 | `sql` | `consulta` | linhas (máx. 500) ou erro explicativo | banco inteiro, leitura |

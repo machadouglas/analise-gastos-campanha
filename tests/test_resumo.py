@@ -18,7 +18,7 @@ CHAVES = {
     "gerado_em", "publicado_em", "primeira_extracao", "totais", "mudancas",
     "novas_despesas", "despesas_removidas", "receitas_removidas",
     "fornecedores_compartilhados", "top_candidatos", "fora_da_curva",
-    "serie_nacional", "cota_fefc",
+    "serie_nacional", "cota_fefc", "votacao", "custo_por_voto",
 }
 
 

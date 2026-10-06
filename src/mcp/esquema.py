@@ -17,7 +17,8 @@ PREAMBULO = """Você está conectado ao Radar dos Gastos: dados públicos oficia
 
 COMO USAR AS FERRAMENTAS:
 - Comece por buscar_candidato / buscar_fornecedor para achar o código, e por ficha_candidato / ficha_fornecedor / ficha_partido para o retrato completo de alguém — são os mesmos números que o site mostra.
-- fora_da_curva, notas_fora_do_preco, declaracoes_removidas, fornecedores_compartilhados, sem_nota, gastos_por_categoria e candidatos_conectados respondem as perguntas de panorama (por UF, cargo, partido).
+- fora_da_curva, notas_fora_do_preco, declaracoes_removidas, fornecedores_compartilhados, sem_nota, gastos_por_categoria, custo_por_voto e candidatos_conectados respondem as perguntas de panorama (por UF, cargo, partido).
+- custo_por_voto cruza o gasto com o resultado da urna (votos do 1º turno, eleito ou não); visao_geral.votacao diz se a totalização já foi publicada.
 - visao_geral traz os totais do dia e o que mudou desde a última extração.
 - sql é livre (dialeto DuckDB, só leitura, um statement, até 500 linhas) para o que as ferramentas prontas não cobrem. O esquema completo está abaixo e no recurso radar://esquema.
 - Toda resposta traz versao_dado (data da extração retratada) e versao_codigo (versão do pipeline); cite a data ao reportar números.
