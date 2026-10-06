@@ -17,7 +17,7 @@ import { brl, brlCentavos, custoVoto, num, celula, cnpjCpf, nomeCandidato, temFi
 import { metrica } from '@/lib/metricas';
 import {
   FILTROS_VAZIOS, ORDEM_CUSTO_PADRAO, ORDENS_CUSTO, SINAIS_FILTRO, eVisaoReceitas, eVisaoRemocao,
-  sqlBuscaCandidatos, sqlCustoDoRecorte, sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlTabelaDaVisao,
+  CARGOS, UFS, sqlBuscaCandidatos, sqlCustoDoRecorte, sqlDispersao, sqlForaDaCurvaCards, sqlPainel, sqlTabelaDaVisao,
   whereDaVisao,
   type Filtros, type OrdemCusto, type SinalFiltro, type Visao,
 } from '@/lib/consultas';
@@ -28,8 +28,6 @@ const ROTULOS_ORDEM: Record<OrdemCusto, string> = {
   'eleitos-mais-caros': 'Eleitos com o voto mais caro',
 };
 
-const UFS = ['', 'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
-const CARGOS = ['', 'Presidente', 'Governador', 'Senador', 'Deputado Federal', 'Deputado Estadual', 'Deputado Distrital'];
 const POR_PAGINA = 50;
 
 const VISOES: { id: Visao; rotulo: string; descricao: string }[] = [

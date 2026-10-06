@@ -12,6 +12,7 @@ const Explorar = lazy(() => import('@/pages/explorar').then((m) => ({ default: m
 const Candidato = lazy(() => import('@/pages/candidato').then((m) => ({ default: m.Candidato })));
 const Partido = lazy(() => import('@/pages/partido').then((m) => ({ default: m.Partido })));
 const Metodologia = lazy(() => import('@/pages/metodologia').then((m) => ({ default: m.Metodologia })));
+const Comparar = lazy(() => import('@/pages/comparar').then((m) => ({ default: m.Comparar })));
 const Fornecedor = lazy(() => import('@/pages/fornecedor').then((m) => ({ default: m.Fornecedor })));
 
 function Carregando() {
@@ -32,6 +33,7 @@ export function App() {
           <Route path="/candidato/:sq" element={<Candidato />} />
           <Route path="/partido/:sigla" element={<Partido />} />
           <Route path="/fornecedor/:id" element={<Fornecedor />} />
+          <Route path="/comparar" element={<Comparar />} />
           <Route path="/consultar" element={<Consultar />} />
           <Route path="/metodologia" element={<Metodologia />} />
           <Route path="*" element={<Home />} />

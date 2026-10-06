@@ -117,13 +117,14 @@ def test_cota_fefc_e_a_tabela_que_o_site_espera():
 
 def test_custo_por_voto_do_partido_e_o_mesmo_sql_no_site():
     """O custo agregado da sigla (soma ÷ soma, parcelas só entre quem tem
-    receita) vive em resumo.sql_custo_por_voto_partido; a ficha do partido
-    repete o texto em TS. Comparar os dois normalizados impede que um lado
-    vire média de custos individuais sem o outro perceber."""
+    receita) vive em resumo.sql_custo_por_voto_partido; o site repete o texto
+    em TS (sqlCustoPorVotoAgregado, usado pela ficha do partido e pela
+    comparação). Comparar os dois normalizados impede que um lado vire média
+    de custos individuais sem o outro perceber."""
     from src import resumo
 
-    partido_tsx = (RAIZ / "site" / "src" / "pages" / "partido.tsx").read_text(encoding="utf-8")
-    corpo_ts = partido_tsx[partido_tsx.index("function sqlCustoPorVoto"):partido_tsx.index("function linhaCusto")]
+    ini = CONSULTAS_TS.index("export function sqlCustoPorVotoAgregado")
+    corpo_ts = CONSULTAS_TS[ini:CONSULTAS_TS.index("\n}\n", ini)]
     py = resumo.sql_custo_por_voto_partido("W", por_cargo=True)
 
     def miolo(texto: str) -> str:

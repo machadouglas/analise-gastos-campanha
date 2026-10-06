@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { Scale } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabela, CelulaNum } from '@/components/app/tabela';
 import { BarraComposicao, BarrasHorizontais, LinhasComparadas, type ItemBarra, type Serie } from '@/components/app/graficos';
 import { executarSQL, obterConexao, tabelasDisponiveis } from '@/lib/dados';
-import { escSQL, JOIN_NOMES_URNA, nomeExibicao } from '@/lib/consultas';
+import { escSQL, JOIN_NOMES_URNA, nomeExibicao, sqlCustoPorVotoAgregado } from '@/lib/consultas';
 import { brl, brlCentavos, num, celula, cnpjCpf, temFichaFornecedor, urlFornecedor } from '@/lib/format';
 
 /** Mínimo constitucional do FEFC para candidaturas femininas (EC 117/2022). */
@@ -27,9 +28,7 @@ interface CotaPartido {
   baseRegistro: boolean;
 }
 
-/** Custo por voto agregado (espelho de sql_custo_por_voto_partido em
- *  src/resumo.py): soma do contratado ÷ soma dos votos do 1º turno das
- *  candidaturas com voto — nunca a média dos custos individuais. */
+/** Custo por voto agregado — linha de sqlCustoPorVotoAgregado (consultas.ts). */
 interface CustoVoto {
   cargo: string | null;
   candidatos: number;
@@ -40,29 +39,6 @@ interface CustoVoto {
   custoPublicoPorVoto: number | null;
   custoProprioPorVoto: number | null;
   custoTerceirosPorVoto: number | null;
-}
-
-/** Mesmo texto SQL do backend (src/resumo.py), com DS_CARGO opcional. */
-function sqlCustoPorVoto(w: string, porCargo: boolean): string {
-  return `
-    SELECT ${porCargo ? 'DS_CARGO' : 'NULL'} AS cargo,
-           COUNT(*) AS candidatos,
-           COUNT(*) FILTER (WHERE resultado LIKE 'ELEITO%') AS eleitos,
-           SUM(votos) AS votos,
-           ROUND(SUM(total_contratado), 2) AS contratado,
-           ROUND(SUM(total_contratado) / SUM(votos), 2) AS custo_por_voto,
-           ROUND(SUM(custo_publico_por_voto * votos)
-                 / NULLIF(SUM(votos) FILTER (WHERE custo_publico_por_voto IS NOT NULL), 0), 2)
-             AS custo_publico_por_voto,
-           ROUND(SUM(custo_proprio_por_voto * votos)
-                 / NULLIF(SUM(votos) FILTER (WHERE custo_proprio_por_voto IS NOT NULL), 0), 2)
-             AS custo_proprio_por_voto,
-           ROUND(SUM(custo_terceiros_por_voto * votos)
-                 / NULLIF(SUM(votos) FILTER (WHERE custo_terceiros_por_voto IS NOT NULL), 0), 2)
-             AS custo_terceiros_por_voto
-    FROM indicadores
-    WHERE ${w} AND votos > 0 AND custo_por_voto IS NOT NULL
-    GROUP BY ALL ORDER BY custo_por_voto DESC`;
 }
 
 function linhaCusto(l: unknown[]): CustoVoto {
@@ -179,8 +155,8 @@ async function carregarPartido(sigla: string): Promise<DadosPartido | null> {
     // as colunas de voto chegam a indicadores depois da totalização; antes
     // disso a consulta não devolve linha e a seção não aparece. catch: parquet
     // antigo sem as colunas (janela entre deploy e rotina) não derruba a ficha
-    executarSQL(sqlCustoPorVoto(w, false)).catch(() => ({ linhas: [] as unknown[][] })),
-    executarSQL(sqlCustoPorVoto(w, true)).catch(() => ({ linhas: [] as unknown[][] })),
+    executarSQL(sqlCustoPorVotoAgregado(w, null)).catch(() => ({ linhas: [] as unknown[][] })),
+    executarSQL(sqlCustoPorVotoAgregado(w, 'DS_CARGO')).catch(() => ({ linhas: [] as unknown[][] })),
   ]);
   const [nCand, contratado, nForn] = kpis.linhas[0] ?? [0, 0, 0];
   if (!Number(nCand)) return null;
@@ -323,9 +299,18 @@ export function Partido() {
       <div>
         <p className="text-sm font-semibold uppercase tracking-widest text-[#264E9B]">Ficha do partido</p>
         <h1 className="mt-2 text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{dados.nome}</h1>
-        <p className="mt-2 max-w-3xl text-muted-foreground">
-          Consolidado das candidaturas com movimentação declarada nas Eleições 2026.
-        </p>
+        <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+          <p className="max-w-3xl text-muted-foreground">
+            Consolidado das candidaturas com movimentação declarada nas Eleições 2026.
+          </p>
+          <Link
+            to={`/comparar?modo=partidos&p=${encodeURIComponent(dados.nome)}`}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:border-[#264E9B]/40 hover:text-foreground sm:w-auto"
+          >
+            <Scale className="h-4 w-4" />
+            Comparar com outros partidos
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

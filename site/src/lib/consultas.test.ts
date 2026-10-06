@@ -5,6 +5,7 @@ import {
   FILTROS_VAZIOS, MINIMO_NOTAS_VALOR_REPETIDO, ORIGEM_FINANCIAMENTO_COLETIVO, SINAIS_FILTRO, condicaoSemNota,
   condUF, eVisaoRemocao, montarWhere, sqlDispersao, sqlForaDaCurvaCards, sqlDocumentoDaNota, sqlNotasDoCandidato,
   sqlPainel, sqlBuscaCandidatos, sqlCustoDoRecorte, sqlTabelaDaVisao, whereDaVisao, whereIndicadores,
+  sqlCategoriasComparadas, sqlCompararCandidatos, sqlConcorrentes, sqlCustoPorVotoAgregado, wherePartidosComparados,
 } from './consultas';
 
 const f = (parcial: Partial<typeof FILTROS_VAZIOS>) => ({ ...FILTROS_VAZIOS, ...parcial });
@@ -327,5 +328,44 @@ describe('sqlDocumentoDaNota', () => {
     // caso que a red flag 12 marca
     expect(sql).toContain("regexp_matches(COALESCE(NR_DOCUMENTO, ''), '[0-9]')");
     expect(sql).toContain("' nº ' || NR_DOCUMENTO");
+  });
+});
+
+describe('comparação lado a lado', () => {
+  it('candidatos: lê as colunas prontas de indicadores, com nome de urna e foto', () => {
+    const sql = sqlCompararCandidatos(['111', '222']);
+    expect(sql).toContain("i.SQ_CANDIDATO IN ('111', '222')");
+    expect(sql).toContain('FROM indicadores i LEFT JOIN nomes_urna n USING (SQ_CANDIDATO)');
+    // custo por voto e parcelas vêm do backend — nada recalculado no site
+    expect(sql).toContain('i.custo_por_voto, i.custo_publico_por_voto, i.custo_proprio_por_voto, i.custo_terceiros_por_voto');
+    expect(sql).not.toMatch(/total_contratado\s*\/\s*/);
+  });
+
+  it('partidos: sigla, cargo e UF recortam; aspas escapadas', () => {
+    expect(wherePartidosComparados(['PT', 'PL'], '', '')).toBe("SG_PARTIDO IN ('PT', 'PL')");
+    expect(wherePartidosComparados(["P'X"], 'Deputado Federal', 'SP')).toBe(
+      "SG_PARTIDO IN ('P''X') AND DS_CARGO = 'Deputado Federal' AND SG_UF = 'SP'",
+    );
+  });
+
+  it('o custo por voto do partido é o agregado (soma ÷ soma), agrupado pela sigla', () => {
+    const sql = sqlCustoPorVotoAgregado('W', 'SG_PARTIDO');
+    expect(sql).toContain('SELECT SG_PARTIDO AS grupo');
+    expect(sql).toContain('ROUND(SUM(total_contratado) / SUM(votos), 2) AS custo_por_voto');
+    expect(sql).toContain('votos > 0 AND custo_por_voto IS NOT NULL');
+    expect(sqlCustoPorVotoAgregado('W', null)).toContain('SELECT NULL AS grupo');
+  });
+
+  it('concorrentes: mesmo cargo e UF, sem os já escolhidos, mais votados primeiro', () => {
+    const sql = sqlConcorrentes('111', ['222'], 4);
+    expect(sql).toContain("WHERE SQ_CANDIDATO = '111'");
+    expect(sql).toContain("NOT IN ('111', '222')");
+    expect(sql).toContain('ORDER BY i.votos DESC NULLS LAST');
+  });
+
+  it('categorias: placeholder #NULO não vira um tipo de gasto com nome estranho', () => {
+    expect(sqlCategoriasComparadas('SQ_CANDIDATO', 'X')).toContain(
+      "COALESCE(NULLIF(DS_ORIGEM_DESPESA, '#NULO'), 'Não informada')",
+    );
   });
 });
